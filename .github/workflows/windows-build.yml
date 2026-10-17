@@ -1,0 +1,83 @@
+name: Windows portable build
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  windows-portable:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          architecture: x64
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+      - name: Install pinned build dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements-dev.txt
+      - name: Test accounting and permissions
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m pytest -q
+      - name: Build and smoke test frozen Windows app
+        run: python scripts/build.py
+      - name: Package source without business data
+        run: python scripts/package_source.py dist
+      - name: Upload complete portable folder as ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: SeoyoungPOS-Windows-x64-portable
+          path: |
+            dist/SeoyoungPOS-Windows-x64-portable.zip
+            dist/SeoyoungPOS-Windows-x64-portable.zip.sha256
+            dist/SeoyoungPOS-source.zip
+            dist/SeoyoungPOS-source.zip.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+  publish-release:
+    # A manual build keeps its files in Actions only. A deliberate v* tag push
+    # publishes the tested executable and source as browser-downloadable assets.
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: windows-portable
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download tested distribution
+        uses: actions/download-artifact@v4
+        with:
+          name: SeoyoungPOS-Windows-x64-portable
+          path: release-assets
+      - name: Verify downloaded files
+        working-directory: release-assets
+        run: |
+          sha256sum --check SeoyoungPOS-Windows-x64-portable.zip.sha256
+          sha256sum --check SeoyoungPOS-source.zip.sha256
+      - name: Publish Windows download
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+        run: |
+          gh release create "$RELEASE_TAG" \
+            --repo "$RELEASE_REPOSITORY" \
+            --verify-tag \
+            --title "서영 POS $RELEASE_TAG" \
+            --notes-file docs/RELEASE_NOTES.md \
+            release-assets/SeoyoungPOS-Windows-x64-portable.zip \
+            release-assets/SeoyoungPOS-Windows-x64-portable.zip.sha256 \
+            release-assets/SeoyoungPOS-source.zip \
+            release-assets/SeoyoungPOS-source.zip.sha256
