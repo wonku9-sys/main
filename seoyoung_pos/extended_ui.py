@@ -321,7 +321,7 @@ class PurchaseAnalyticsPage(base.Page):
                 "SELECT pay.date,p.name,d.number,pay.amount,pay.memo "
                 "FROM payments pay JOIN documents d ON d.id=pay.document_id "
                 "JOIN partners p ON p.id=d.partner_id "
-                "WHERE d.kind='purchase' AND " + " AND ".join(conditions) +
+                "WHERE d.kind='purchase' AND " + " AND ".join(conditions).replace("d.date BETWEEN ? AND ?", "pay.date BETWEEN ? AND ?") +
                 " ORDER BY pay.date DESC,pay.id DESC", params,
             )
             values = [list(r) for r in rows]
