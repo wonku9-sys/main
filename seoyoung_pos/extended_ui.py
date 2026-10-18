@@ -504,9 +504,7 @@ def install():
             )
             control.setEnabled(service.has_permission("purchases"))
             # Add beside the existing '추가 결제' and '전표 취소' controls.
-            if self.payment_button and self.payment_button.parent() is not None:
-                pass
-            self.layout.insertWidget(self.layout.count()-2, control)
+            self.layout.insertWidget(max(0, self.layout.count()-2), control)
 
     dialogs.DocumentDialog.__init__ = enhanced_detail_init
     base.STYLE += """
