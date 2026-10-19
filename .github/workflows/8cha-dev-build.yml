@@ -1,0 +1,47 @@
+name: Development Windows portable build (8cha)
+
+on:
+  push:
+    branches:
+      - seoyoung-pos-8cha-original-upgrade
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-package:
+    runs-on: windows-2022
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: x64
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+      - name: Install dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements-dev.txt
+      - name: Run full service and GUI test suite
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m pytest -q
+      - name: Build native Windows portable and smoke test executable
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python scripts/build.py
+      - name: Package source files without business data
+        run: python scripts/package_source.py dist
+      - name: Publish downloadable test build
+        uses: actions/upload-artifact@v4
+        with:
+          name: SeoyoungPOS-8cha-development-Windows-x64-portable
+          path: |
+            dist/SeoyoungPOS-Windows-x64-portable.zip
+            dist/SeoyoungPOS-Windows-x64-portable.zip.sha256
+            dist/SeoyoungPOS-source.zip
+          retention-days: 14
+          if-no-files-found: error
