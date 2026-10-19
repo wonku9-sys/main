@@ -17,8 +17,9 @@ from .diary import _seal, _open
 from .currency import money_input
 from .household_categories import HouseholdCategoryMixin
 from .vehicle_management import VehicleManagementMixin,CHECKS
+from .household_planning import HouseholdPlanningMixin
 
-FINANCE_TABLES = {'accounts', 'transfers', 'fixed_costs', 'vehicles', 'vehicle_logs', 'budgets', 'category_rules','vehicle_obligations'}
+FINANCE_TABLES = {'accounts', 'transfers', 'fixed_costs', 'vehicles', 'vehicle_logs', 'budgets', 'category_rules','vehicle_obligations','plans'}
 FINANCE_SCHEMA = ''.join(f'''
 CREATE TABLE IF NOT EXISTS household_{name} (
  id TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES household_vaults(user_id) ON DELETE RESTRICT,
@@ -41,7 +42,7 @@ VEHICLE_TYPES = {'fuel': '주유비', 'insurance': '보험료', 'repair': '정�
                  'tax': '자동차세', 'parking': '주차비', 'toll': '통행료', 'other': '기타 유지비'}
 
 
-class HouseholdFinanceMixin(HouseholdCategoryMixin,VehicleManagementMixin):
+class HouseholdFinanceMixin(HouseholdCategoryMixin,VehicleManagementMixin,HouseholdPlanningMixin):
     def save_household_budget(self,key,month,total):
         import re
         if not re.fullmatch(r'\d{4}-\d{2}',str(month)):raise ValueError('예산 월은 YYYY-MM 형식입니다.')
@@ -140,6 +141,9 @@ class HouseholdFinanceMixin(HouseholdCategoryMixin,VehicleManagementMixin):
                        'opening_date': day(data.get('opening_date')),
                        'opening_balance': money_input(data.get('opening_balance', 0), signed=True),
                        'active': bool(data.get('active', True)), 'memo': text(data.get('memo', ''), '메모', maximum=2000)}
+            content['owner']=text(data.get('owner','본인'),'소유자 별칭',True,100)
+            content['account_type']=data.get('account_type','bank')
+            if content['account_type'] not in {'cash','bank','deposit','card','loan','investment','other'}:raise ValueError('계정 종류를 확인하세요.')
             if identifier:
                 old = next((r for r in self.household_accounts(key) if r['id'] == identifier), None)
                 references = [r['date'] for r in self._household_records(key) if r.get('account_id', '') == identifier]
@@ -188,6 +192,9 @@ class HouseholdFinanceMixin(HouseholdCategoryMixin,VehicleManagementMixin):
                     existing=bool(old and old.get('account_id', '') == data.get('account_id', '')))
         vehicle = str(data.get('vehicle_id') or '')
         result = {'account_id': account, 'vehicle_id': vehicle, 'vehicle_type': '', 'liters': '', 'odometer': ''}
+        result['payee']=text(data.get('payee',(old or {}).get('payee','')),'거래처·사용자',maximum=100)
+        if old and old.get('split_group'):
+            result.update(split_group=old['split_group'],split_original_amount=old['split_original_amount'])
         for name,label,limit in [('vehicle_vendor','주유소·정비업체·보험사',100),('vehicle_detail','정비·교환 부품·보험 내용',2000),('fuel_kind','연료 종류',30)]:
             result[name]=text(data.get(name,''),label,maximum=limit) if vehicle else ''
         result['full_tank']=bool(data.get('full_tank',False)) if vehicle else False

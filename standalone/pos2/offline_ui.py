@@ -36,14 +36,25 @@ class OfflineReportPage(Page):
         self.total = QLabel()
         self.total.setWordWrap(True)
         self.body.addWidget(self.total)
+        if key in SALES_VIEWS:
+            self.comparison=DataGrid(['비교 기준','시작일','종료일','순판매액','매출총이익','선택 기간과 차이','증감률'])
+            self.comparison.setMaximumHeight(190);self.body.addWidget(self.comparison)
+            note=QLabel('비교는 날짜 전체 기준입니다. 오늘의 진행 중 매출과 과거 하루 전체 매출을 비교하며, 전월 말일은 해당 월 마지막 날짜로 보정합니다. 다른 점포·온라인 매출은 포함하지 않습니다.');note.setWordWrap(True);self.body.addWidget(note)
         self.timer = QTimer(self)
-        self.timer.setInterval(10_000)
+        self.timer.setInterval(30_000)
         self.timer.timeout.connect(self.auto_refresh)
         if key == "sales_realtime":
+            self.refresh_interval=QComboBox()
+            for label,value in [('자동갱신 30초',30000),('자동갱신 1분',60000),('자동갱신 2분',120000),('자동갱신 5분',300000),('자동갱신 끄기',0)]:self.refresh_interval.addItem(label,value)
+            row.addWidget(self.refresh_interval);self.refresh_interval.currentIndexChanged.connect(self.interval_changed)
             self.timer.start()
 
+    def interval_changed(self):
+        interval=self.refresh_interval.currentData();self.timer.stop()
+        if interval:self.timer.start(interval)
+
     def auto_refresh(self):
-        if self.isVisible() and self.window.current_page is self:
+        if self.isVisible() and QApplication.activeModalWidget() is None:
             try:
                 self.refresh()
             except (ValueError, PermissionError) as exc:
@@ -64,6 +75,33 @@ class OfflineReportPage(Page):
         self.grid.fill([[r["period"],r["label"],r["unit"],Decimal(r["purchase_qty"]),Decimal(r["sale_qty"]),*[r[k] for k in ("purchase_total","sale_total","cost","profit","taxable_sale_total","exempt_sale_total","vat","commission_fee","payable")]] for r in rows],rows)
         totals = report["totals"]
         self.total.setText(f"순매입 {won(totals['purchase_total'])}원 · 순판매 {won(totals['sale_total'])}원 · 매출총이익 {won(totals['profit'])}원\n{report['basis']} · 수수료 차인지급액은 은행 이체나 결제 완료 금액이 아닙니다.")
+        if self.menu_key in SALES_VIEWS:
+            comparisons=self.store.sales_period_comparison(self.menu_key,iso(self.start),iso(self.end),self.supplier.currentData(),self.category.currentData() or '',self.search.text())
+            self.comparison.fill([[r['name'],r['start'],r['end'],r['sale_total'],r['profit'],r['difference'],str(r['percent_change'])+'%' if r['percent_change'] is not None else '비교액 0원'] for r in comparisons],comparisons)
+
+
+class SalesHistoryPage(Page):
+    def __init__(self,window,status):
+        self.menu_key='sales_held' if status=='draft' else 'sales_cancelled';self.status=status
+        super().__init__(window,'보류내역' if status=='draft' else '취소내역','PDF 판매관리 이력 메뉴 · 보류는 재고·대금에 반영되지 않습니다. 취소된 전표는 삭제하지 않고 이력으로 보관합니다.')
+        row=QHBoxLayout();self.start,self.end=date_field(date.today().replace(day=1)),date_field();self.search=QLineEdit();self.search.setPlaceholderText('전표번호 · 거래처 · 메모')
+        for c in (self.start,QLabel('~'),self.end,self.search):row.addWidget(c)
+        row.addWidget(action('조회',self.refresh));self.body.addLayout(row)
+        self.grid=self.table(['날짜','전표번호','판매처','작성자','금액','메모']);self.grid.cellDoubleClicked.connect(lambda *_:self.detail())
+        self.body.addWidget(action('선택 전표 상세',self.detail));self.total=QLabel();self.body.addWidget(self.total)
+    def refresh(self):
+        rows=self.store.sales_history(self.status,iso(self.start),iso(self.end),self.search.text());self.grid.fill([[r['date'],r['number'],r['partner_name'],r['user_name'],r['total'],r['memo']] for r in rows],rows)
+        self.total.setText(f"{len(rows)}건 · {won(sum(r['total'] for r in rows))}원 · 확정 매출 합계에는 포함하지 않습니다.")
+    def detail(self):
+        row=self.grid.selected()
+        if not row:return
+        try:
+            document=self.store.document(row['id']);d=QDialog(self);d.resize(950,580);d.setWindowTitle('판매 전표 이력 · 읽기 전용');layout=QVBoxLayout(d)
+            layout.addWidget(QLabel(document['number']+' · '+document['date']+' · '+document['partner_name']))
+            grid=DataGrid(['상품명','입력수량','단위','단가','금액']);layout.addWidget(grid,1)
+            grid.fill([[r['product_name'],r['input_qty'],r['unit_name'],r['unit_price'],r['total']] for r in document['lines']])
+            layout.addWidget(action('닫기',d.reject));d.exec();d.deleteLater()
+        except (ValueError,PermissionError) as exc:self.fail(exc)
 
 
 class BasicRecordsPage(Page):
@@ -254,7 +292,9 @@ class SalesFormDialog(FormDialog):
         super().__init__(FORM_VIEWS[key][0],parent or window)
         self.resize(1040,740)
         self.date = date_field((record or {}).get("date"))
-        self.valid = self.field("valid_until","유효기한 (YYYY-MM-DD, 선택)",(record or {}).get("valid_until",""))
+        from .date_input import DateInput
+        self.valid=DateInput((record or {}).get('valid_until',''))
+        self.fields['valid_until']=self.valid;self.form.addRow('유효기간 · 직접 입력 / 달력 선택 (선택)',self.valid)
         self.memo = self.field("memo","메모",(record or {}).get("memo",""))
         self.form.addRow("작성일",self.date)
         self.partner = QComboBox()

@@ -25,10 +25,10 @@ CREATE TABLE IF NOT EXISTS restore_state (
  id INTEGER PRIMARY KEY CHECK(id=1), token TEXT NOT NULL
 );
 INSERT OR IGNORE INTO restore_state(id,token) VALUES(1,'');
-PRAGMA user_version=209;
+PRAGMA user_version=211;
 """
-SUPPORTED_VERSIONS = {200, 201, 202, 203, 204, 205, 206, 207, 208,209}
-SCHEMA_VERSION = 209
+SUPPORTED_VERSIONS = {200, 201, 202, 203, 204, 205, 206, 207, 208,209,210,211}
+SCHEMA_VERSION = 211
 APPLICATION_ID = 1398362162
 
 
@@ -51,12 +51,18 @@ def _expected_objects():
 
 def _validate_database(db):
     if db.execute("PRAGMA application_id").fetchone()[0] != APPLICATION_ID:
-        raise ValueError("서영 POS 새 독립판의 백업 파일이 아닙니다. 기존 프로그램이나 다른 앱의 파일은 복원할 수 없습니다.")
+        raise ValueError("SY POS 독립판의 백업 파일이 아닙니다. 기존 별도 프로그램이나 다른 앱의 파일은 복원할 수 없습니다.")
     version = db.execute("PRAGMA user_version").fetchone()[0]
     if version not in SUPPORTED_VERSIONS:
         raise ValueError("지원하지 않는 백업 버전입니다. 같은 독립판 버전의 백업을 선택하세요.")
     expected = dict(_expected_objects())
     actual = _objects(db)
+    if version<211 and ('table','household_plans') not in actual:expected.pop(('table','household_plans'),None)
+    for table in ('work_log_details','work_log_files'):
+        if version<211 and ('table',table) not in actual:expected.pop(('table',table),None)
+    if version<210 and ('table','stock_adjustments') not in actual:
+        expected={key:value for key,value in expected.items() if not key[1].startswith('stock_adjustments')}
+    if version<210 and ('table','member_contact_types') not in actual:expected.pop(('table','member_contact_types'),None)
     if version<209 and ('table','shared_requests') not in actual:expected.pop(('table','shared_requests'),None)
     if version<209 and ('table','personal_health_receipts') not in actual:expected.pop(('table','personal_health_receipts'),None)
     finance_objects={('table','household_'+name) for name in ('accounts','transfers','fixed_costs','fixed_runs','fixed_alerts','vehicles','vehicle_logs','vehicle_obligations','vehicle_alerts','budgets','category_rules')}|{('table','personal_attachments'),('table','inspiration_history')}
@@ -151,7 +157,7 @@ def _validate_database(db):
         raise ValueError("백업의 매장·포인트 설정이 올바르지 않습니다.") from None
     counts = {table: db.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
               for table in ("users", "products", "partners", "documents", "members", "point_entries")}
-    return {"schema_version": version, "store_name": settings.get("store_name", "서영 POS"), "counts": counts}
+    return {"schema_version": version, "store_name": settings.get("store_name", "SY POS"), "counts": counts}
 
 
 def _copy_database(source, destination, timeout=10):
@@ -242,6 +248,8 @@ class RecoveryMixin:
             safety = Path(self.create_backup(before_restore=True))
             reauthenticate()
             initialize(staged)
+            staged.executescript(LOYALTY_SCHEMA)
+            staged.executescript(OPERATIONS_SCHEMA)
             from types import SimpleNamespace
             upgrade_currency(SimpleNamespace(db=staged, path=None), info["schema_version"])
             staged.executescript(RESTORE_SCHEMA)

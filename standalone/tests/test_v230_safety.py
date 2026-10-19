@@ -64,21 +64,25 @@ def test_network_features_are_opt_in_and_never_use_ip_location(monkeypatch):
     calls=[]
     def mock(url):
         calls.append(url)
-        if "api.met.no" in url:
-            return {"properties":{"timeseries":[{"time":"2026-10-19T00:00:00Z","data":{"instant":{"details":{"air_temperature":17.5}},"next_1_hours":{"summary":{"symbol_code":"clearsky_day"}}}}]}}
+        if "weather.go.kr" in url:
+            from pos2.online_info import kma_grid
+            from datetime import datetime,timezone,timedelta
+            stamp=datetime.now(timezone(timedelta(hours=9))).strftime('%Y%m%d%H%M')
+            x,y=kma_grid(36.8151,127.1139)
+            return f'<wid><header><tm>{stamp}</tm><x>{x}</x><y>{y}</y></header><body><data><day>1</day><hour>24</hour><temp>17.5</temp><sky>1</sky><pty>0</pty></data></body></wid>'.encode()
         assert "timeapi.io" in url
-        return {"dateTime":"2026-10-19T09:00:00","timeZone":"Asia/Seoul"}
-    monkeypatch.setattr("pos2.online_info._json",mock)
+        return b'{"dateTime":"2026-10-19T09:00:00","timeZone":"Asia/Seoul"}'
+    monkeypatch.setattr("pos2.online_info._read",mock)
     assert fetch_online(DEFAULT_ONLINE)=={"disabled":True} and calls==[]
     result=fetch_online(dict(DEFAULT_ONLINE,enabled=True,city="천안",latitude=36.8151,longitude=127.1139))
     assert result["city"]=="천안" and "17.5" in result["weather"]
-    assert len(calls)==2 and "36.8151" in calls[0]
+    assert len(calls)==2 and "gridx=" in calls[0] and 'gridy=' in calls[0]
     assert all("ipapi" not in url and "ipwho" not in url for url in calls)
 
 
 def test_online_failure_falls_back_without_throwing(monkeypatch):
     def unavailable(url):raise OSError("offline")
-    monkeypatch.setattr("pos2.online_info._json",unavailable)
+    monkeypatch.setattr("pos2.online_info._read",unavailable)
     result=fetch_online(dict(DEFAULT_ONLINE,enabled=True))
     assert result["weather_error"] and result["clock_error"]
 

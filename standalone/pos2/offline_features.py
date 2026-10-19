@@ -256,7 +256,11 @@ class OfflineFeaturesMixin:
         if supplier_id:
             where.append("l.supplier_id=?"); args.append(supplier_id)
         if category:
-            where.append("p.category=?"); args.append(text(category))
+            if str(category).startswith('cat:'):
+                try:path=self._category_path(int(str(category)[4:]))
+                except (ValueError,TypeError):raise ValueError('분류를 다시 선택하세요.') from None
+                for column,name in zip(('category','category_mid','category_small'),path):where.append('p.'+column+'=?');args.append(name)
+            else:where.append("p.category=?"); args.append(text(category))
         if search:
             where.append("(p.code LIKE ? OR p.barcode LIKE ? OR l.product_name LIKE ? OR p.specification LIKE ?)")
             args.extend([f"%{text(search)}%"]*4)
@@ -294,7 +298,28 @@ class OfflineFeaturesMixin:
         self.require_menu(key)
         if key not in REPORT_VIEWS and key not in SALES_VIEWS:
             raise ValueError("보고서 종류를 확인하세요.")
-        return {"suppliers":[(r["name"],r["id"]) for r in self.db.execute("SELECT id,name FROM partners WHERE kind='supplier' ORDER BY name,id")],"categories":[(r[0],r[0]) for r in self.db.execute("SELECT DISTINCT category FROM products WHERE category<>'' ORDER BY category")]}
+        return {"suppliers":[(r["name"],r["id"]) for r in self.db.execute("SELECT id,name FROM partners WHERE kind='supplier' ORDER BY name,id")],"categories":[(' / '.join(self._category_path(r['id'])),f"cat:{r['id']}") for r in self.db.execute('SELECT id FROM product_categories ORDER BY name,id')]}
+
+    def sales_history(self,status,start,end,search='',member_id=None,user_id=None):
+        key={'draft':'sales_held','cancelled':'sales_cancelled'}.get(status)
+        if not key:raise ValueError('판매 이력 종류를 확인하세요.')
+        self.require_menu(key)
+        return self.documents('sale',start,end,status=status,search=search,member_id=member_id,user_id=user_id)
+
+    def sales_period_comparison(self,key,start,end,supplier_id=None,category='',search=''):
+        if key not in SALES_VIEWS:raise ValueError('판매조회 메뉴를 확인하세요.')
+        self.require_menu(key);start,end=calendar_date.fromisoformat(day(start)),calendar_date.fromisoformat(day(end))
+        if start>end or start.year<2:raise ValueError('조회 기간을 확인하세요.')
+        from .household_planning import month_shift
+        periods=[('선택 기간',start,end),('전일 대비',start-timedelta(days=1),end-timedelta(days=1)),('전주 대비',start-timedelta(days=7),end-timedelta(days=7)),('전월 대비',month_shift(start,-1),month_shift(end,-1))]
+        rows=[];current=None
+        for title,first,last in periods:
+            total=self.offline_report(key,first.isoformat(),last.isoformat(),supplier_id,category,search)['totals']
+            if current is None:current=total['sale_total']
+            previous=total['sale_total']
+            rows.append(dict(name=title,start=first.isoformat(),end=last.isoformat(),**total,difference=current-previous,
+                             percent_change=(Decimal(current-previous)*100/previous).quantize(Decimal('.01')) if previous else None))
+        return rows
 
     def basic_records(self, key, search=""):
         self.require_menu(key)

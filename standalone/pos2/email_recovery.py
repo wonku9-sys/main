@@ -1,4 +1,4 @@
-"""Email-only reset, verified immutable recipients, bounded one-time codes.
+"""Email-only reset, password-authorized verified recipients, one-time codes.
 
 Diary/household recovery keys are delivered to the owner by email. Only a
 key-wrapped data key is stored locally; administrators are not given escrow keys.
@@ -93,10 +93,12 @@ class EmailDelivery:
     def send(self):
         """Run in a UI worker; it must never access a SQLite connection."""
         try:
-            config=validate_smtp(json.loads(windows_secrets.unprotect(self._config)))
+            try: config=validate_smtp(json.loads(windows_secrets.unprotect(self._config)))
+            except (ValueError,TypeError,KeyError):
+                raise ValueError("발송 설정을 이 Windows 사용자 계정에서 열 수 없습니다. ‘이메일 발송 설정’에서 앱 비밀번호를 다시 저장하세요.") from None
             message=EmailMessage()
             message["From"],message["To"]=config["sender"],self._recipient
-            message["Subject"]="[서영 POS] 이메일 인증 · 암호 재설정 안내"
+            message["Subject"]="[SY POS] 이메일 인증 · 암호 재설정 안내"
             message.set_content(self._body)
             context=ssl.create_default_context()
             if config["mode"]=="ssl":
@@ -108,8 +110,16 @@ class EmailDelivery:
                 if config["mode"]=="starttls":smtp.starttls(context=context);smtp.ehlo()
                 smtp.login(config["username"],config["password"])
                 refused=smtp.send_message(message)
-                if refused:raise ValueError("수신 거부")
-        except (OSError,smtplib.SMTPException,ValueError,TypeError,KeyError):
+                if refused:raise smtplib.SMTPRecipientsRefused(refused)
+        except smtplib.SMTPAuthenticationError:
+            raise ValueError("발송 계정 인증에 실패했습니다. ‘이메일 발송 설정’에서 계정·앱 비밀번호와 메일 서비스의 SMTP 사용 설정을 확인하세요. 기존 암호는 변경되지 않았습니다.") from None
+        except smtplib.SMTPRecipientsRefused:
+            raise ValueError("메일 서비스가 받는 이메일을 거부했습니다. 받는 주소와 발송 계정의 이용 제한을 확인하세요. 기존 암호는 변경되지 않았습니다.") from None
+        except ssl.SSLCertVerificationError:
+            raise ValueError("메일 서버의 보안 인증서를 확인하지 못했습니다. Windows 날짜·시각과 인증서 업데이트를 확인하세요. 보안 연결을 끄지 마세요.") from None
+        except ValueError:
+            raise
+        except (OSError,smtplib.SMTPException,TypeError,KeyError):
             raise ValueError("메일을 발송하지 못했습니다. 인터넷·SMTP 설정·앱 비밀번호를 확인하세요. 기존 암호는 변경되지 않았습니다.") from None
         finally:
             self._body=""
@@ -145,6 +155,8 @@ class EmailRecoveryMixin:
 
     def _email_epoch(self,user,purpose):
         parts=[user["password_hash"],str(user["active"]),self._current_restore_token(),user["code"]]
+        profile=self.db.execute("SELECT email,verified_at FROM recovery_emails WHERE user_id=?",(user["id"],)).fetchone()
+        parts.extend(list(profile) if profile else ["no-recovery-email"])
         if purpose.startswith("diary_"):
             row=self.db.execute("SELECT salt,wrapped_key FROM diary_vaults WHERE user_id=?",(user["id"],)).fetchone()
             parts.extend([bytes(v).hex() for v in row] if row else ["no-vault"])
@@ -172,12 +184,14 @@ class EmailRecoveryMixin:
                 if not user:raise ValueError("계정의 이메일 복구 설정을 확인하세요.")
                 profile=self.db.execute("SELECT email FROM recovery_emails WHERE user_id=?",(user["id"],)).fetchone()
                 if purpose=="bind":
-                    if profile:raise ValueError("최초 인증한 복구 이메일이 이미 등록되어 있습니다. 이 화면에서는 변경할 수 없습니다.")
                     if not password_matches(current_password,user["password_hash"]):raise ValueError("현재 로그인 비밀번호를 확인하세요.")
                     recipient=email_address(email)
+                    if profile and recipient.casefold()==profile[0].casefold():raise ValueError("이미 인증한 복구 이메일입니다. 변경할 새 주소를 입력하세요.")
                 else:
                     if not profile:raise ValueError("계정의 복구 이메일을 먼저 등록·인증하세요.")
                     recipient=profile[0]
+                    if email and not hmac.compare_digest(email_address(email).casefold().encode(),recipient.casefold().encode()):
+                        raise ValueError("아이디와 현재 등록된 복구 이메일 주소를 확인하세요. 다른 주소로는 인증번호를 보낼 수 없습니다.")
                 if purpose.endswith("_reset") and purpose!="login_reset":
                     kind=purpose.removesuffix("_reset")
                     self.require_menu("diary" if kind=="diary" else "household")
@@ -205,11 +219,13 @@ class EmailRecoveryMixin:
                 self.db.execute("UPDATE email_challenges SET consumed=1 WHERE user_id=? AND purpose=?",(user["id"],purpose))
                 self.db.execute("INSERT INTO email_challenges(id,user_id,purpose,email,salt,digest,receipt,epoch,created,expires,recovery_salt,recovery_wrapped) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",(identifier,user["id"],purpose,recipient,salt,sha256(salt+code.encode()).digest(),sha256(receipt.encode()).digest(),self._email_epoch(user,purpose),instant,instant+CODE_TTL,recovery_salt,recovery_wrapped))
                 label={"bind":"복구 이메일 등록","login_reset":"로그인 암호 재설정","diary_reset":"일기장 암호 재설정","household_reset":"가계부 암호 재설정","diary_enable":"일기장 이메일 복구 등록","household_enable":"가계부 이메일 복구 등록"}[purpose]
-                body=f"서영 POS · {label}\n아이디: {user['code']}\n\n일회용 인증번호: {code}\n유효시간: 10분 / 5회 틀리면 무효\n\n프로그램의 이메일 인증 화면에 입력하세요. 인증번호를 확인하기 전에는 기존 암호가 바뀌지 않습니다. 재요청하면 이전 인증번호는 사용할 수 없습니다.\n{extra}\n본인이 요청하지 않았다면 무시하세요. 인증번호나 복구키를 다른 사람에게 전달하지 마세요.\n"
+                body=f"SY POS · {label}\n아이디: {user['code']}\n\n일회용 인증번호: {code}\n유효시간: 10분 / 5회 틀리면 무효\n\n프로그램의 이메일 인증 화면에 입력하세요. 인증번호를 확인하기 전에는 기존 암호가 바뀌지 않습니다. 재요청하면 이전 인증번호는 사용할 수 없습니다.\n{extra}\n본인이 요청하지 않았다면 무시하세요. 인증번호나 복구키를 다른 사람에게 전달하지 마세요.\n"
                 self._audit("email_requested","user",user["id"],{"purpose":purpose})
                 return EmailDelivery(identifier,masked_address(recipient),receipt,config[0],recipient,body)
         finally:
-            if key is not None:key[:]=bytes(len(key));self.lock_diary() if purpose.startswith("diary") else self.lock_household()
+            # Wipe this temporary password-verified key, not an already-open
+            # independent editor's session. Its unsaved work must remain usable.
+            if key is not None:key[:]=bytes(len(key))
 
     def complete_email_delivery(self,identifier,receipt,success):
         with self._tx():
@@ -240,10 +256,14 @@ class EmailRecoveryMixin:
         with self._tx():
             row,error=self._check_email_code(identifier,code,"bind")
             if row:
-                if self.db.execute("SELECT 1 FROM recovery_emails WHERE user_id=?",(row["user_id"],)).fetchone():raise ValueError("복구 이메일이 이미 등록되어 있습니다.")
-                self.db.execute("INSERT INTO recovery_emails(user_id,email,verified_at) VALUES(?,?,?)",(row["user_id"],row["email"],now()))
-                self.db.execute("UPDATE email_challenges SET consumed=1 WHERE id=?",(identifier,))
-                self._audit("email_verified","user",row["user_id"],{})
+                changing=bool(self.db.execute("SELECT 1 FROM recovery_emails WHERE user_id=?",(row["user_id"],)).fetchone())
+                self.db.execute("INSERT INTO recovery_emails(user_id,email,verified_at) VALUES(?,?,?) ON CONFLICT(user_id) DO UPDATE SET email=excluded.email,verified_at=excluded.verified_at",(row["user_id"],row["email"],now()))
+                # Private recovery wrappers authenticate the old recipient in AAD.
+                # They cannot be safely moved without the owner's private key.
+                # Keep all vaults/content intact; require an explicit re-enrolment.
+                if changing:self.db.execute("DELETE FROM email_private_recovery WHERE user_id=?",(row["user_id"],))
+                self.db.execute("UPDATE email_challenges SET consumed=1 WHERE user_id=?",(row["user_id"],))
+                self._audit("email_changed" if changing else "email_verified","user",row["user_id"],{"private_reenrolment_required":changing})
         if error:raise ValueError(error)
 
     def verify_private_email_recovery(self,kind,identifier,code):

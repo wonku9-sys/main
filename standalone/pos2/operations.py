@@ -6,6 +6,8 @@ transaction names, quantities, prices and cost come from the saved line snapshot
 """
 
 import calendar
+import json
+from hashlib import sha256
 from datetime import date
 from decimal import Decimal
 
@@ -13,6 +15,18 @@ from .common import LIMIT, day, money, now, qtext, qty, rounded, text
 
 
 OPERATIONS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS stock_adjustments (
+ id INTEGER PRIMARY KEY, request_key TEXT NOT NULL UNIQUE, signature TEXT NOT NULL,
+ kind TEXT NOT NULL CHECK(kind IN ('opening','waste')),
+ product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE RESTRICT,
+ date TEXT NOT NULL, qty INTEGER NOT NULL CHECK(qty>0),
+ stock_cost INTEGER NOT NULL CHECK(stock_cost>=0), reason TEXT NOT NULL,
+ user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT, created_at TEXT NOT NULL
+);
+CREATE TRIGGER IF NOT EXISTS stock_adjustments_immutable_update BEFORE UPDATE ON stock_adjustments
+ BEGIN SELECT RAISE(ABORT,'확정된 기초재고·폐기 이력은 변경할 수 없습니다.'); END;
+CREATE TRIGGER IF NOT EXISTS stock_adjustments_immutable_delete BEFORE DELETE ON stock_adjustments
+ BEGIN SELECT RAISE(ABORT,'확정된 기초재고·폐기 이력은 삭제할 수 없습니다.'); END;
 CREATE TABLE IF NOT EXISTS inventory_counts (
  id INTEGER PRIMARY KEY, title TEXT NOT NULL, date TEXT NOT NULL,
  status TEXT NOT NULL DEFAULT 'draft' CHECK(status IN ('draft','applied')),
@@ -77,6 +91,86 @@ def _bounded(value, label):
 
 
 class OperationsMixin:
+    def inventory_asset_comparison(self,end):
+        self._require('inventory');self.require_menu('inventory_assets')
+        end=date.fromisoformat(day(end))
+        from datetime import timedelta
+        previous_month=end.replace(day=1)-timedelta(days=1)
+        month=end.replace(year=previous_month.year,month=previous_month.month,day=min(end.day,previous_month.day))
+        week=end-timedelta(days=7);begin=min(month,end-timedelta(days=30))
+        events=[dict(r) for r in self.db.execute('SELECT e.date,p.category,SUM(e.cost_delta) AS cost FROM stock_events e JOIN products p ON p.id=e.product_id WHERE p.tracked=1 AND e.date<=? GROUP BY e.date,p.category ORDER BY e.date',(end.isoformat(),))]
+        categories=sorted({r['category'] for r in events});snapshots={};timeline=[];running={c:0 for c in categories};offset=0
+        current=begin
+        while current<=end:
+            while offset<len(events) and events[offset]['date']<=current.isoformat():
+                row=events[offset];running[row['category']]+=row['cost'];offset+=1
+            snapshots[current]=dict(running);timeline.append({'date':current.isoformat(),'stock_cost':sum(running.values())});current+=timedelta(days=1)
+        records=[]
+        for category in categories:
+            value=snapshots[end][category];old_week=snapshots[week][category];old_month=snapshots[month][category]
+            records.append({'category':category,'stock_cost':value,'week_cost':old_week,'month_cost':old_month,'change_week':value-old_week,'change_month':value-old_month,'week_rate':(Decimal(value-old_week)*100/old_week) if old_week>0 else None,'month_rate':(Decimal(value-old_month)*100/old_month) if old_month>0 else None})
+        return {'rows':records,'timeline':timeline,'week_date':week.isoformat(),'month_date':month.isoformat(),'first_record':events[0]['date'] if events else '', 'totals':{'stock_cost':sum(snapshots[end].values()),'week_cost':sum(snapshots[week].values()),'month_cost':sum(snapshots[month].values())}}
+
+    def inventory_assets(self,start,end):
+        self._require('inventory');self.require_menu('inventory_assets')
+        start,end=day(start),day(end)
+        if start>end:raise ValueError('조회 기간을 확인하세요.')
+        movements={}
+        for row in self.db.execute('SELECT product_id,date,kind,qty_delta,cost_delta FROM stock_events WHERE date<=? ORDER BY date,id',(end,)):
+            bucket=movements.setdefault(row['product_id'],dict(opening_qty=0,opening_cost=0,purchase_qty=0,purchase_return_qty=0,sale_qty=0,sale_return_qty=0,waste_qty=0,adjustment_qty=0,closing_qty=0,stock_cost=0))
+            bucket['closing_qty']+=row['qty_delta'];bucket['stock_cost']+=row['cost_delta']
+            if row['date']<start:
+                bucket['opening_qty']+=row['qty_delta'];bucket['opening_cost']+=row['cost_delta']
+            else:
+                field={'purchase':'purchase_qty','purchase_return':'purchase_return_qty','sale':'sale_qty','sale_return':'sale_return_qty','waste':'waste_qty'}.get(row['kind'],'adjustment_qty')
+                bucket[field]+=abs(row['qty_delta']) if field!='adjustment_qty' else row['qty_delta']
+        records=[]
+        for product in self.db.execute('SELECT p.id,p.code,p.name,p.base_unit,p.category,s.name AS supplier_name FROM products p LEFT JOIN partners s ON s.id=p.supplier_id WHERE p.tracked=1 ORDER BY p.code'):
+            bucket=movements.get(product['id'])
+            if bucket:
+                records.append({**dict(product),**{key:qtext(value) if key.endswith('_qty') else value for key,value in bucket.items()}})
+        return {'rows':records,'totals':{'opening_cost':sum(m['opening_cost'] for m in movements.values()),'stock_cost':sum(m['stock_cost'] for m in movements.values())}}
+
+    def stock_adjustments(self,kind):
+        self._require('inventory');self.require_menu('opening_stock' if kind=='opening' else 'stock_waste')
+        if kind not in {'opening','waste'}:raise ValueError('재고 처리 구분을 확인하세요.')
+        return [{**dict(r),'qty':qtext(r['qty'])} for r in self.db.execute('SELECT a.*,p.code,p.name AS product_name,p.base_unit,u.name AS user_name FROM stock_adjustments a JOIN products p ON p.id=a.product_id JOIN users u ON u.id=a.user_id WHERE a.kind=? ORDER BY a.date DESC,a.id DESC',(kind,))]
+
+    def post_stock_adjustment(self,data,request_key):
+        kind=data.get('kind');menu={'opening':'opening_stock','waste':'stock_waste'}.get(kind)
+        if not menu:raise ValueError('재고 처리 구분을 확인하세요.')
+        request_key=text(request_key,'중복 방지 번호',True,64)
+        if len(request_key)!=32 or any(c not in '0123456789abcdef' for c in request_key):raise ValueError('재고 입력창을 다시 열어 주세요.')
+        event_date=self._not_future(data.get('date'),'재고 처리')
+        count=qty(data.get('qty'));reason=text(data.get('reason'),'처리 사유',True,500)
+        try:product_id=int(data.get('product_id'))
+        except (ValueError,TypeError):raise ValueError('상품을 선택하세요.') from None
+        price=money(data.get('unit_price',0))
+        signature=sha256(json.dumps([kind,event_date,product_id,count,reason,price],ensure_ascii=False).encode()).hexdigest()
+        with self._tx():
+            self._require('inventory');self._require_capability(menu,'create')
+            old=self.db.execute('SELECT * FROM stock_adjustments WHERE request_key=?',(request_key,)).fetchone()
+            if old:
+                if old['signature']!=signature or old['user_id']!=self.actor['id']:raise ValueError('같은 요청 번호로 다른 재고 처리를 할 수 없습니다.')
+                return old['id']
+            self._assert_open(event_date)
+            product=self.db.execute('SELECT * FROM products WHERE id=?',(product_id,)).fetchone()
+            if not product or not product['active'] or not product['tracked']:raise ValueError('유효한 재고관리 상품만 처리할 수 있습니다.')
+            last=self.db.execute('SELECT COUNT(*),MAX(date) FROM stock_events WHERE product_id=?',(product_id,)).fetchone()
+            if kind=='opening':
+                if last[0] or product['stock_qty'] or product['stock_cost']:raise ValueError('재고이동이 없는 상품에만 기초재고를 한 번 등록할 수 있습니다. 이후 수량은 재고실사에서 조정하세요.')
+                cost=rounded(Decimal(price)*count/(1000*product['price_basis']))
+                qty_delta,cost_delta=count,cost
+            else:
+                if count>product['stock_qty']:raise ValueError('폐기 수량이 현재고보다 많습니다.')
+                if last[1] and event_date<last[1]:raise ValueError('마지막 재고이동일 이후 날짜로 폐기하세요.')
+                cost=rounded(Decimal(product['stock_cost'])*count/product['stock_qty'])
+                qty_delta,cost_delta=-count,-cost
+            self._move(product_id,qty_delta,cost_delta,kind,reason,date=event_date)
+            identifier=self.db.execute('INSERT INTO stock_adjustments(request_key,signature,kind,product_id,date,qty,stock_cost,reason,user_id,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)',(request_key,signature,kind,product_id,event_date,count,cost,reason,self.actor['id'],now())).lastrowid
+            self._audit('post',menu,identifier,{'product_id':product_id,'qty':qtext(count),'reason':reason})
+        return identifier
+
     def _init_operations(self):
         self.db.executescript(OPERATIONS_SCHEMA)
 

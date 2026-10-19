@@ -7,7 +7,7 @@ from zipfile import ZIP_DEFLATED, ZipFile
 from pos2 import __version__
 
 ROOT = Path(__file__).resolve().parent
-NAME = f"SeoyoungPOS-Standalone-v{__version__}-source.zip"
+NAME = f"SY-POS-v{__version__}-source.zip"
 
 
 def source_files():
@@ -15,7 +15,9 @@ def source_files():
     files += [ROOT / name for name in ("launch.py", "build_portable.py", "package_source.py", "pyproject.toml", "uv.lock", "setup_cloud.sh")]
     files += list((ROOT / "pos2").rglob("*.py")) + list((ROOT / "tests").rglob("*.py"))
     files += list((ROOT / "third-party-licenses").glob("*.txt"))
-    files += [ROOT / "pos2" / "assets" / name for name in ("NotoSansKR-Regular.ttf", "OFL.txt", "FONT_SOURCE.md")]
+    files += [ROOT / "pos2" / "assets" / name for name in ("NotoSansKR-Regular.ttf", "OFL.txt", "FONT_SOURCE.md", "sy-monogram.png", "SY_LOGO.md")]
+    files += list((ROOT / 'pos2' / 'assets').glob('step-*.svg'))
+    files += [ROOT/'pos2'/'assets'/name for name in ('lottery-machine.jpg','LOTTERY_IMAGE.md')]
     files += [ROOT.parent / ".github" / "workflows" / "standalone-windows.yml"]
     for source in sorted(set(files)):
         if source.is_file() and "__pycache__" not in source.parts:
@@ -33,7 +35,7 @@ def package(output):
             relative = source.relative_to(ROOT.parent)
             if "seoyoung_pos" in relative.parts:
                 raise ValueError("The old application must not enter the new source package.")
-            stream.write(source, Path("SeoyoungPOS-Standalone-source") / relative)
+            stream.write(source, Path("SY-POS-source") / relative)
     with ZipFile(archive) as stream:
         if stream.testzip() is not None:
             raise ValueError("Source ZIP CRC validation failed.")

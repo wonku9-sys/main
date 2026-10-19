@@ -7,6 +7,7 @@ from .common import LIMIT, decimal, now
 
 
 MONEY_COLUMNS = {
+    "stock_adjustments": ("stock_cost",),
     "sales_forms": ("total",),
     "partners": ("opening_balance",),
     "products": ("purchase_price", "sale_price", "stock_cost"),
@@ -26,6 +27,11 @@ MONEY_COLUMNS = {
     "cash_closes": ("opening_cash", "cash_receipts", "cash_refunds", "cash_net", "expected_cash", "counted_cash", "difference"),
 }
 MONEY_KEYS = frozenset(key for columns in MONEY_COLUMNS.values() for key in columns) | {
+    'asset_total','debt_total','net_assets','cash_assets','locked_assets','saved_amount','gap','monthly_saving','projected_balance',
+    'fixed_total','variable_total','budget_total','available_total','necessary_total','living_total','split_original_amount',
+    'handling_revenue','storage_revenue','extra_revenue','rent_cost','management_cost','other_cost','hourly_rate','revenue_total','labor_cost','total_cost',
+    'fuel_total','average_unit_price',
+    "opening_cost","week_cost","month_cost","change_week","change_month",
     "income_total","expense_total","closing_balance","previous_total","comparable_total",
     "balance", "net_balance", "refundable", "unrefunded_credit", "charge", "payment", "closing", "opening",
     "purchase", "returns", "cap", "as_of", "cost_difference", "sale_receipts", "refunds", "profit",
@@ -80,7 +86,7 @@ def currency_boundary(cls):
         def call(self, *args, **kwargs):
             depth = getattr(self, "_currency_depth", 0)
             self._currency_depth = depth + 1
-            own_read=name in {'products','trade_products','lookup_barcode','document'} and not self.db.in_transaction
+            own_read=name in {'products','trade_products','lookup_barcode','document','household_financial_overview','household_cash_forecast','household_annual_report','household_custom_report','work_log_report','sales_period_comparison'} and not self.db.in_transaction
             if own_read:self.db.execute('BEGIN')
             try:
                 result = function(self, *args, **kwargs)

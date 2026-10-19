@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import platform
 import shutil
+import struct
 import subprocess
 import sys
 import sysconfig
@@ -16,7 +17,7 @@ from zipfile import ZIP_DEFLATED, ZipFile
 from pos2 import __version__
 
 ROOT = Path(__file__).resolve().parent
-APP = "SeoyoungPOS-Standalone"
+APP = "SY-POS"
 DISTRIBUTIONS = ("PySide6", "PySide6-Essentials", "PySide6-Addons", "shiboken6", "openpyxl", "et-xmlfile", "python-barcode", "pyinstaller","cryptography","cffi","pycparser","korean-lunar-calendar")
 
 
@@ -88,9 +89,23 @@ def build(output, native=False):
         raise RuntimeError("The verified offline Korean font asset is missing or changed.")
     with tempfile.TemporaryDirectory(prefix="seoyoung-standalone-build-") as scratch:
         temporary = Path(scratch)
+        # Windows ICO supports a PNG payload (Vista+). Generate from the same
+        # original logo using Qt; no extra imaging runtime is needed.
+        from PySide6.QtCore import QBuffer, QIODevice, Qt
+        from PySide6.QtGui import QImage
+        image=QImage(str(assets / "sy-monogram.png"))
+        if image.isNull():raise RuntimeError("The SY POS logo image is missing.")
+        canvas=QImage(256,256,QImage.Format.Format_ARGB32);canvas.fill(0)
+        from PySide6.QtGui import QPainter
+        painter=QPainter(canvas)
+        scaled=image.scaled(256,256,Qt.AspectRatioMode.KeepAspectRatio,Qt.TransformationMode.SmoothTransformation)
+        painter.drawImage((256-scaled.width())//2,(256-scaled.height())//2,scaled);painter.end()
+        buffer=QBuffer();buffer.open(QIODevice.OpenModeFlag.WriteOnly);canvas.save(buffer,"PNG")
+        payload=bytes(buffer.data());icon=temporary / "sy-pos.ico"
+        icon.write_bytes(struct.pack("<HHH",0,1,1)+struct.pack("<BBBBHHII",0,0,0,0,1,32,len(payload),22)+payload)
         command = [sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--onedir", "--windowed", "--name", APP,
                    "--paths", str(ROOT), "--distpath", str(output), "--workpath", str(temporary / "work"), "--specpath", str(temporary),
-                   "--add-data", f"{assets}{os.pathsep}pos2/assets", "--hidden-import", "PySide6.QtPrintSupport", "--hidden-import", "PySide6.QtSvg", "--hidden-import","PySide6.QtMultimedia", "--collect-all", "barcode", "--exclude-module", "seoyoung_pos", str(ROOT / "launch.py")]
+                   "--icon",str(icon),"--add-data", f"{assets}{os.pathsep}pos2/assets", "--hidden-import", "PySide6.QtPrintSupport", "--hidden-import", "PySide6.QtSvg", "--hidden-import","PySide6.QtMultimedia", "--collect-all", "barcode", "--exclude-module", "seoyoung_pos", str(ROOT / "launch.py")]
         build_environment = dict(os.environ)
         build_environment["PYINSTALLER_CONFIG_DIR"] = str(temporary / "cache")
         subprocess.run(command, cwd=ROOT, env=build_environment, check=True)
@@ -103,19 +118,19 @@ def build(output, native=False):
     subprocess.run([str(executable), "--smoke-test", "--screenshot", str(screenshot)], cwd=bundle, env=environment, check=True, timeout=180)
     if not screenshot.is_file() or screenshot.stat().st_size < 1000:
         raise RuntimeError("The real frozen executable did not produce its desktop screenshot.")
-    for suffix in ("-home", "-purchase", "-return", "-product-search", "-categories", "-backup", "-payments", "-login", "-permissions","-suppliers","-supplier-groups","-product-units","-reports","-quotation","-diary","-household","-health","-schedule","-alerts","-mail-settings","-accounts","-fixed-costs","-vehicles","-attachments","-personal-schedule","-inspiration","-pc-connection","-health-report","-vehicle-report","-vehicle-payments","-classification"):
+    for suffix in ("-home", "-purchase", "-return", "-product-search", "-categories", "-backup", "-payments", "-login", "-permissions","-suppliers","-supplier-groups","-product-units","-reports","-quotation","-diary","-household","-health","-schedule","-alerts","-mail-settings","-accounts","-fixed-costs","-vehicles","-attachments","-personal-schedule","-inspiration","-pc-connection","-health-report","-vehicle-report","-vehicle-payments","-classification","-opening-stock","-stock-waste","-inventory-assets","-member-details","-email-recovery","-independent-windows","-lucky-numbers","-financial-overview","-savings-goals","-category-budgets","-annual-household","-custom-household-reports","-worklog-dashboard","-worklog-productivity","-sales-comparison"):
         capture = screenshot.with_name(screenshot.stem + suffix + screenshot.suffix)
         if not capture.is_file() or capture.stat().st_size < 1000:
             raise RuntimeError(f"The frozen executable did not validate its new workflow screen: {suffix}")
     if label == "Windows":
-        (bundle / "체험 실행.bat").write_bytes(b'@echo off\r\ncd /d "%~dp0"\r\n"SeoyoungPOS-Standalone.exe" --demo\r\n')
+        (bundle / "체험 실행.bat").write_bytes(b'@echo off\r\ncd /d "%~dp0"\r\n"SY-POS.exe" --demo\r\n')
     documents = bundle / "안내문서"
     documents.mkdir()
     for source in sorted(ROOT.glob("*.md")):
         if source.name != "CONTRACT.md":
             shutil.copy2(source, documents / source.name)
     (bundle / "먼저_읽어주세요.txt").write_text(
-        f"서영 POS 독립판 {__version__}\n\n"
+        f"SY POS 독립판 {__version__}\n\n"
         + ("Windows 10/11 x64용 무설치 프로그램입니다.\n" if label == "Windows" else f"주의: 이 파일은 {label} 검증용이며 Windows 프로그램이 아닙니다.\n")
         + f"ZIP 전체를 쓰기 가능한 폴더에 압축 해제하고 {executable.name}을 실행하세요.\n"
         "Python 설치·서버·인터넷·카드 연동이 필요하지 않습니다.\n"

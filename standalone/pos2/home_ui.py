@@ -4,15 +4,15 @@ from datetime import date, timedelta, datetime, timezone
 from hashlib import sha256
 import time
 
-from PySide6.QtCore import QDate, QDateTime, Qt, QTimer, QTime, QObject, Signal, QRunnable, QThreadPool
-from PySide6.QtGui import QColor, QFont
+from PySide6.QtCore import QDate, QDateTime, Qt, QTimer, QTime, QObject, Signal, QRunnable, QThreadPool, QUrl
+from PySide6.QtGui import QColor, QFont, QDesktopServices
 from PySide6.QtWidgets import QCheckBox, QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QMessageBox, QTableWidget, QTableWidgetItem, QTextEdit, QTimeEdit, QVBoxLayout, QWidget, QAbstractItemView,QSpinBox
 
 from .widgets import Page, FormDialog, DataGrid, action, date_field, won
 from .navigation import mark_saved
 from .menu_help import MENU_HELP, attach_help
 from .permissions import has_menu
-from .online_info import CITIES, fetch_online
+from .online_info import CITIES, fetch_online, WEATHER_SITES
 
 
 class OnlineSignals(QObject):
@@ -103,6 +103,8 @@ class HomePage(Page):
         self.calendar.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.calendar.setMinimumHeight(420)
         self.calendar.cellClicked.connect(self.select_day)
+        self.calendar.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.calendar.customContextMenuRequested.connect(self.calendar_menu)
         left.addWidget(self.calendar,1)
         self.day_summary = QLabel(); self.day_summary.setWordWrap(True)
         left.addWidget(self.day_summary)
@@ -118,13 +120,18 @@ class HomePage(Page):
         weather_layout=QVBoxLayout(weather_panel)
         weather_layout.setContentsMargins(12,10,12,10)
         self.weather=QLabel("날씨 · 지역을 선택해 주세요"); self.weather.setWordWrap(True); self.weather.setStyleSheet("font-size:18px;color:#356D88;")
-        self.weather_source=QLabel("시간대 예보: MET Norway · CC BY 4.0\n인터넷 연결 시 조회 / 자동 위치 조회 없음"); self.weather_source.setObjectName("muted"); self.weather_source.setWordWrap(True)
+        self.weather.setTextFormat(Qt.TextFormat.PlainText)
+        self.weather_source=QLabel("기상청 동네예보 · 발표/예보 시각 구분\n인터넷 연결 시 조회 / 자동 위치 조회 없음"); self.weather_source.setObjectName("muted"); self.weather_source.setWordWrap(True); self.weather_source.setTextFormat(Qt.TextFormat.PlainText)
         weather_layout.addWidget(self.weather); weather_layout.addWidget(self.weather_source)
         weather_tools=QHBoxLayout()
         self.weather_settings=action("지역·표시 설정",self.configure_online)
         self.weather_settings.setEnabled(self.store.actor["role"]=="admin")
-        weather_tools.addWidget(self.weather_settings); weather_tools.addWidget(action("새로고침",self.refresh_online))
+        self.weather_refresh=action("새로고침",lambda:self.refresh_online(force=True))
+        weather_tools.addWidget(self.weather_settings); weather_tools.addWidget(self.weather_refresh)
         weather_layout.addLayout(weather_tools); right.addWidget(weather_panel)
+        sources=QHBoxLayout()
+        for title in WEATHER_SITES:sources.addWidget(action(title+' 원문',lambda checked=False,site=title:self.open_weather_site(site)))
+        weather_layout.addLayout(sources)
         tools = QHBoxLayout()
         self.event_scope = QComboBox(); self.event_scope.addItem("선택 날짜 일정",False); self.event_scope.addItem("이달의 모든 일정",True)
         self.event_scope.currentIndexChanged.connect(self.refresh_events)
@@ -154,6 +161,7 @@ class HomePage(Page):
         self.online_enabled,self.online_pending=False,False
         self.clock_anchor=None
         self.last_online_fetch=None
+        self.last_weather=None
         self.update_clock()
 
     def message_draft(self):
@@ -165,13 +173,17 @@ class HomePage(Page):
 
     def update_clock(self):
         current = QDateTime.currentDateTime()
+        weekdays = ("월요일","화요일","수요일","목요일","금요일","토요일","일요일")
         if self.clock_anchor and time.monotonic()-self.clock_anchor[1]<3600:
             stamp=self.clock_anchor[0]+time.monotonic()-self.clock_anchor[1]
-            self.clock.setText(datetime.fromtimestamp(stamp,timezone.utc).astimezone(timezone(timedelta(hours=9))).strftime("%H:%M:%S"))
+            shown=datetime.fromtimestamp(stamp,timezone.utc).astimezone(timezone(timedelta(hours=9)))
+            hour=shown.hour
+            self.clock.setText(f"{'오전' if hour<12 else '오후'} {hour%12 or 12:02d}:{shown.minute:02d}:{shown.second:02d} · {weekdays[shown.weekday()]}")
             self.clock_source.setText("한국표준시 KST · 인터넷 참고 시각 (TimeAPI)")
         else:
-            self.clock.setText(current.toString("HH:mm:ss")); self.clock_source.setText("PC 시간 · Windows 설정 기준")
-        weekdays = ("월요일","화요일","수요일","목요일","금요일","토요일","일요일")
+            hour=current.time().hour()
+            self.clock.setText(f"{'오전' if hour<12 else '오후'} {hour%12 or 12:02d}:{current.time().minute():02d}:{current.time().second():02d} · {weekdays[current.date().dayOfWeek()-1]}")
+            self.clock_source.setText("PC 시간 · Windows 설정 기준")
         self.greeting.setText(f"{current.toString('yyyy년 M월 d일')} {weekdays[current.date().dayOfWeek()-1]} · {(self.store.actor or {}).get('name','')}님")
         phrases = ("오늘은 작은 정리가 큰 여유를 만듭니다. 마감 전에 장부를 한 번 살펴보세요.","차근차근 확인한 한 건의 거래가 든든한 하루를 만듭니다.","오늘의 행운은 반가운 인사에서 시작됩니다. 손님에게 미소를 건네보세요.","서두르지 않아도 괜찮습니다. 중요한 일부터 하나씩 마무리해 보세요.","새로운 아이디어가 떠오르면 메모해 두세요. 내일의 도움이 될 수 있습니다.","잠깐의 휴식이 집중력을 더합니다. 바쁜 하루에도 물 한 잔 잊지 마세요.")
         day = current.date().toString("yyyy-MM-dd")
@@ -180,29 +192,44 @@ class HomePage(Page):
     def enable_online(self):
         self.online_enabled=True; self.online_timer.start(); QTimer.singleShot(100,self.refresh_online)
 
-    def refresh_online(self):
+    def open_weather_site(self,site):
+        if site not in WEATHER_SITES:return
+        if QMessageBox.question(self,"날씨 사이트 열기",f"{site} 공식 사이트를 외부 브라우저로 열까요?\n인터넷을 사용합니다. 장부·개인 기록은 전송하지 않습니다.",QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No,QMessageBox.StandardButton.No)==QMessageBox.StandardButton.Yes:
+            if not QDesktopServices.openUrl(QUrl(WEATHER_SITES[site])):QMessageBox.information(self,"브라우저 확인","기본 브라우저 연결을 확인하세요.")
+
+    def refresh_online(self,force=False):
         config=self.store.online_preferences()
         if not config["enabled"]:
-            self.weather.setText("날씨 · 지역을 선택하고 표시를 켜세요"); self.clock_anchor=None; self.update_clock(); return
+            self.weather.setText("날씨 · 지역을 선택하고 표시를 켜세요"); self.weather_source.setText("인터넷 표시 꺼짐 · 자동 위치 조회 없음")
+            self.last_weather=None; self.clock_anchor=None; self.update_clock(); return
         if not self.online_enabled or self.online_pending: return
-        if self.last_online_fetch and self.last_online_fetch[0]==config and time.monotonic()-self.last_online_fetch[1]<(600 if self.last_online_fetch[2] else 30):return
+        if not force and self.last_online_fetch and self.last_online_fetch[0]==config and time.monotonic()-self.last_online_fetch[1]<(600 if self.last_online_fetch[2] else 30):return
         self.online_pending=True
+        self.weather_refresh.setEnabled(False)
         self.weather.setText(f"{config['city']} · 날씨 확인 중…")
         self.worker=OnlineWorker(config); self.worker.signals.finished.connect(self.online_finished)
         QThreadPool.globalInstance().start(self.worker)
 
     def online_finished(self,result):
         self.online_pending=False
+        self.weather_refresh.setEnabled(True)
         try: current=self.store.online_preferences()
         except (ValueError,PermissionError): return
-        if result["config"]!=current: return
+        if result["config"]!=current:
+            self.refresh_online(force=True); return
         self.last_online_fetch=(current,time.monotonic(),bool(result.get("weather")))
         if result.get("weather"):
+            self.last_weather=(current,dict(result))
             self.weather.setText(f"{result['city']} · {result['weather']}")
-            self.weather_source.setText(f"{result['weather_at']} KST 시간대 예보\nMET Norway · CC BY 4.0 / 자동 위치 조회 없음")
+            self.weather_source.setText(f"{result['weather_at']} KST 예보 · {result.get('weather_issued','')} 발표\n{result.get('weather_source','기상청')} / 자동 위치 조회 없음")
         else:
-            self.weather.setText(f"{current['city']} · 날씨 조회 불가")
-            self.weather_source.setText("인터넷 연결 또는 예보 제공 상태를 확인하세요.\n장부·일정 기능은 계속 사용할 수 있습니다.")
+            if self.last_weather and self.last_weather[0]==current:
+                previous=self.last_weather[1]
+                self.weather.setText(f"{current['city']} · {previous['weather']} (이전 조회)")
+                self.weather_source.setText(f"{previous['weather_at']} KST · 최신 정보가 아닙니다.\n인터넷 연결 후 새로고침하세요. 장부·일정은 계속 사용할 수 있습니다.")
+            else:
+                self.weather.setText(f"{current['city']} · 날씨 조회를 완료하지 못했습니다")
+                self.weather_source.setText("인터넷·Windows 날짜/시각을 확인하고 새로고침하세요.\n"+result.get('weather_details','예보 서비스에 연결하지 못했습니다.'))
         if result.get("clock"):
             self.clock_anchor=(result["clock"],result["clock_anchor"])
         self.update_clock()
@@ -223,12 +250,12 @@ class HomePage(Page):
             if value in CITIES:
                 name.setText(value); lat.setText(str(CITIES[value][0])); lon.setText(str(CITIES[value][1]))
         city.currentTextChanged.connect(select_city)
-        info=QLabel("GPS·IP 위치 조회는 하지 않습니다. 예보 서비스(MET Norway)에 선택한 지역 좌표만 전송합니다. 시각은 TimeAPI에서 확인하며 PC 시간은 변경하지 않습니다. 인터넷 표시를 끄면 외부 조회를 하지 않습니다."); info.setWordWrap(True); dialog.body.addWidget(info)
+        info=QLabel("GPS·IP 위치 조회 없이 선택한 국내 지역의 기상청 격자 예보를 표시합니다. 현재 관측값이 아닌 예보이며 발표/예보 시각을 함께 확인하세요. 기상청 조회 실패 시 같은 공식 기관의 대체 주소로 재조회합니다. 웨더아이는 원문 버튼으로 엽니다(자료 자동 복제 없음). 시각은 TimeAPI 참고이며 PC 시간은 변경하지 않습니다. 표시를 끄면 자동 외부 조회를 하지 않습니다."); info.setWordWrap(True); dialog.body.addWidget(info)
         def save():
             try:self.store.save_settings({"online_info":{"enabled":enabled.isChecked(),"city":name.text(),"latitude":lat.text(),"longitude":lon.text()}}); dialog.accept()
             except (ValueError,PermissionError) as exc:dialog.error(exc)
         dialog.finish(save)
-        if dialog.exec():self.clock_anchor=None; self.refresh_online()
+        if dialog.exec():self.clock_anchor=None; self.refresh_online(force=True)
 
     def refresh(self):
         self.draw_calendar()
@@ -277,6 +304,13 @@ class HomePage(Page):
 
     def select_day(self,row,column):
         self.selected_date = self.calendar.item(row,column).data(Qt.ItemDataRole.UserRole); self.refresh_events()
+
+    def calendar_menu(self,point):
+        item=self.calendar.itemAt(point)
+        if item is None:return
+        self.calendar.setCurrentItem(item);self.selected_date=item.data(Qt.ItemDataRole.UserRole);self.refresh_events()
+        from .calendar_actions import schedule_menu
+        schedule_menu(self.store,self.selected_date,self.calendar.viewport().mapToGlobal(point),self,self.draw_calendar)
 
     def refresh_events(self,*_):
         if not hasattr(self,"events"): return

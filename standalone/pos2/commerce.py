@@ -114,7 +114,7 @@ class CommerceMixin:
         result["net_balance"] = -result["balance"] if result["source_id"] else result["balance"]
         return result
 
-    def documents(self, kind=None, start="", end="", partner_id=None, status="", search=""):
+    def documents(self, kind=None, start="", end="", partner_id=None, status="", search="",member_id=None,user_id=None):
         self._require("trade")
         where, values = [], []
         for column, value in (("kind", kind), ("partner_id", partner_id), ("status", status)):
@@ -136,6 +136,8 @@ class CommerceMixin:
         if search:
             where.append("(d.number LIKE ? OR p.name LIKE ? OR d.memo LIKE ?)")
             values.extend([f"%{search}%"] * 3)
+        for column,value in (('member_id',member_id),('user_id',user_id)):
+            if value is not None:where.append('d.'+column+'=?');values.append(value)
         sql = ("SELECT d.*,p.name partner_name,p.code partner_code,u.name user_name "
                "FROM documents d JOIN partners p ON p.id=d.partner_id "
                "JOIN users u ON u.id=d.user_id")

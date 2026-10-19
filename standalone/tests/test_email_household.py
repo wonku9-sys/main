@@ -42,7 +42,7 @@ def bind(shop):
     otp=code(job);delivered(store,job);store.verify_recovery_email(job.identifier,otp);clock[0]+=61
 
 
-def test_email_is_verified_before_binding_and_cannot_be_replaced(shop):
+def test_email_is_verified_before_binding_and_change_requires_current_password(shop):
     store,_=shop
     job=store.prepare_email_code("bind",email="owner@example.com",current_password=PASSWORD)
     otp=code(job)
@@ -51,7 +51,7 @@ def test_email_is_verified_before_binding_and_cannot_be_replaced(shop):
     delivered(store,job);store.verify_recovery_email(job.identifier,otp)
     assert store.recovery_email_status()["email"]=="owner@example.com"
     with pytest.raises(ValueError):store.verify_recovery_email(job.identifier,otp)
-    with pytest.raises(ValueError):store.prepare_email_code("bind",email="attacker@example.com",current_password=PASSWORD)
+    with pytest.raises(ValueError):store.prepare_email_code("bind",email="attacker@example.com",current_password="Wrong-Password!")
 
 
 def test_login_reset_preserves_old_password_until_valid_code_and_invalidates_other_sessions(shop):

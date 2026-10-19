@@ -9,6 +9,7 @@ MENU_POLICIES = {
     "diary": ("보안 일기장", (), ()),
     "worklog": ("업무일지", (), ("create","edit","delete")),
     "household": ("가계부", (), ("create","edit","delete")),
+    "lucky_numbers": ("행운의 숫자", (), ()),
     "products": ("상품장 · 확장단위", ("catalog",), ("create", "edit", "delete")),
     "categories": ("상품 분류", ("catalog",), ("create", "edit", "delete")),
     "suppliers": ("공급사관리", ("catalog",), ("create", "edit", "delete")),
@@ -22,8 +23,13 @@ MENU_POLICIES = {
     "purchase_statement": ("매입계산서", ("trade",), ()),
     "payments": ("결제관리", ("trade",), ("create", "delete")),
     "sales": ("매출장 · 고객반품", ("trade",), ("create", "edit", "delete")),
+    "sales_cancelled": ("취소내역", ("trade",), ()),
+    "sales_held": ("보류내역", ("trade",), ()),
     "ledger": ("거래처 원장", ("trade",), ()),
     "inventory": ("현재고 · 입출고", ("inventory",), ()),
+    "opening_stock": ("기초재고 등록", ("inventory",), ("create",)),
+    "stock_waste": ("재고 폐기", ("inventory",), ("create",)),
+    "inventory_assets": ("재고자산 현황", ("inventory",), ()),
     "counts": ("실사 입력 · 적용", ("inventory",), ("create", "edit", "delete")),
     "closings": ("현금 · 월재고 마감", ("inventory", "trade"), ("create",)),
     "members": ("회원조회/등록", ("loyalty",), ("create", "edit", "delete")),
@@ -52,7 +58,7 @@ def has_menu(actor, key):
         return False
     if not actor:
         return False
-    if key == "home":
+    if key in {"home","lucky_numbers"}:
         return True
     if actor.get("role") == "admin":
         return True

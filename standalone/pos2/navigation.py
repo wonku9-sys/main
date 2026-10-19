@@ -86,7 +86,7 @@ class NavigationGuard(QObject):
 
     def belongs(self, widget):
         while widget is not None:
-            if widget is self.window:
+            if widget is self.window or getattr(widget,'_desktop_owner',None) is self.window:
                 return True
             widget = widget.parentWidget()
         return False
@@ -154,6 +154,7 @@ class NavigationGuard(QObject):
                     if not self.allow_leave(dialog):
                         return False
                     dialog.reject()
+                    if dialog.isVisible():return False
                     QTimer.singleShot(0, self.request_home)
                     return True
             except RuntimeError:
@@ -164,6 +165,12 @@ class NavigationGuard(QObject):
         if not self.enabled or self.suspended:
             return False
         if isinstance(watched, QDialog) and self.belongs(watched) and type(watched).__name__ not in {"LoginDialog", "QMessageBox", "QInputDialog", "QFileDialog", "QPrintDialog", "QPrintPreviewDialog"}:
+            if event.type()==QEvent.Type.Polish and watched.parentWidget() is not None and not getattr(watched,'_desktop_owner',None):
+                from PySide6.QtCore import Qt
+                if watched.parentWidget() is self.window and getattr(self.window,'popup_menus',False):
+                    owner=getattr(self.window,'popup_windows',{}).get(self.window.current_key)
+                    if owner is not None and owner.isVisible():watched.setParent(owner,watched.windowFlags())
+                watched.setWindowModality(Qt.WindowModality.WindowModal)
             if event.type() == QEvent.Type.Show and not getattr(watched, "_home_button", None):
                 button = QPushButton("첫화면", watched)
                 button.setAutoDefault(False)

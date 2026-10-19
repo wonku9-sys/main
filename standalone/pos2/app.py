@@ -96,13 +96,13 @@ SECTIONS = [
     ("첫화면", [("home", "첫화면", ())]),
     ("1. 기초관리", [("products", "상품장", "catalog"), *[(key,title,"admin" if key=="user_access" else "catalog") for key,title in BASIC_VIEWS.items()], ("categories", "상품분류", "catalog"), ("suppliers", "공급사관리", "catalog"), ("customers", "판매처", "catalog"), ("labels", "라벨출력", "catalog"), ("users","직원관리","admin"), ("settings","환경설정 · 백업","admin")]),
     ("2. 매입/발주관리", [("purchases", "매입전표", "trade"), ("purchase_suppliers", "공급사별 매입현황", "trade"), ("purchase_categories", "분류별 매입현황", "trade"), ("purchase_products", "단품별 매입현황", "trade"), ("purchase_documents", "전표별 매입현황", "trade"), ("purchase_statement", "매입계산서", "trade"), ("payments", "결제관리", "trade"), ("ledger", "거래처 원장", "trade")]),
-    ("3. 판매관리", [*[(key,value[0],"trade") for key,value in SALES_VIEWS.items()], ("sales","판매내역 · 고객반품","trade"), ("quotations","견적서","trade"), ("statements","거래명세서","trade")]),
+    ("3. 판매관리", [*[(key,value[0],"trade") for key,value in SALES_VIEWS.items()], ("sales","판매내역 · 고객반품","trade"), ("sales_cancelled","취소내역","trade"), ("sales_held","보류내역","trade"), ("quotations","견적서","trade"), ("statements","거래명세서","trade")]),
     ("5. 마케팅관리", [("promotions","특매관리","loyalty"),("prices","가격변경예약","loyalty")]),
-    ("6. 재고관리", [("inventory", "현재고 · 입출고", "inventory"), ("counts", "재고실사 입력 · 적용", "inventory"), ("closings", "현금 · 월재고 마감", ("inventory", "trade"))]),
+    ("6. 재고관리", [("inventory", "현재고 · 입출고", "inventory"), ("opening_stock", "기초재고 등록", "inventory"), ("stock_waste", "재고 폐기", "inventory"), ("inventory_assets", "재고자산 현황", "inventory"), ("counts", "재고실사 입력 · 적용", "inventory"), ("closings", "현금 · 월재고 마감", ("inventory", "trade"))]),
     ("7. 레포트관리", [("overview","업무 현황","reports"), *[(key,value[0],"reports") for key,value in REPORT_VIEWS.items()], ("reports","기간별 종합집계","reports"), ("commission","공급사 판매수수료","reports")]),
     ("8. 회원관리", [("members","회원조회/등록","loyalty"), *[(key,title,"loyalty") for key,title in MEMBER_VIEWS.items()], ("gifts","사은품조회/등록 · 지급","loyalty"), ("member_tax","(세금)계산서 참고자료","loyalty")]),
     ("0. 관리자 모드", [("permissions", "권한 설정", "admin")]),
-    ("나의 기록", [("diary","보안 일기장",()),("household","가계부",()),("worklog","업무일지",())]),
+    ("나의 기록", [("diary","보안 일기장",()),("household","가계부",()),("worklog","업무일지",()),("lucky_numbers","행운의 숫자",())]),
 ]
 
 
@@ -113,7 +113,7 @@ class LoginDialog(FormDialog):
             store.bootstrap_default_admin()
         super().__init__("사용자 확인", parent)
         self.setMinimumWidth(430)
-        self.resize(880, 530)
+        self.resize(1000, 720)
         self.setStyleSheet('QDialog {background:#FAF8F3;} QLabel {color:#354C49;} #dialogTitle {font-size:29px;color:#214A40;font-weight:700;} QLineEdit {background:#FFFFFF;border:1px solid #D7E0D9;border-radius:9px;padding:9px 12px;min-height:25px;} QLineEdit:focus {border:1px solid #648F7E;} QPushButton {border-radius:9px;padding:10px;} #primary {background:#285F50;color:#FFFFFF;border:0;} #notice {background:#F2EBDD;color:#73654C;border:0;border-radius:9px;padding:12px;}')
         self.selected_target='home'
         self.code = self.field("code", "사용자 코드")
@@ -138,6 +138,7 @@ class LoginDialog(FormDialog):
         save.setDefault(False)
         self.password.returnPressed.connect(self.submit)
         self.body.addWidget(action("로그인 암호 찾기 · 이메일 인증",self.reset_by_email))
+        self.body.addWidget(action("이메일 주소 등록 · 발송 설정",self.setup_recovery_email))
         if network_path:
             from .shared_ui import NetworkSettingsDialog
             self.body.addWidget(action('PC 연결 설정',lambda:NetworkSettingsDialog(network_path,store,self).exec()))
@@ -149,10 +150,14 @@ class LoginDialog(FormDialog):
         subtitle=QLabel('일과 일상을 담는 나만의 공간');subtitle.setStyleSheet('color:#81908A;font-size:13px;');contents.insertWidget(1,subtitle)
         left=QFrame();left.setObjectName('loginChoices');left.setStyleSheet('QFrame#loginChoices {background:qlineargradient(x1:0,y1:0,x2:1,y2:1,stop:0 #183F36,stop:1 #326353);border-radius:18px;} QLabel {background:transparent;color:#EBF2E9;} QPushButton {text-align:left;color:#EBF2E9;background:transparent;border:1px solid #547E6D;border-radius:12px;padding:14px;} QPushButton:hover {background:#3B6A59;} QPushButton:checked {color:#24483C;background:#EEE9D8;border:1px solid #EEE9D8;}')
         choices=QVBoxLayout(left);choices.setContentsMargins(20,28,20,24);choices.setSpacing(14)
-        brand=QLabel('서영 · 나의 데스크');brand.setStyleSheet('font-size:21px;font-weight:700;');choices.addWidget(brand)
+        from .branding import brand_widget
+        choices.addWidget(brand_widget(left,large=True))
+        brand=QLabel('나의 매장, 나의 일상');brand.setStyleSheet('font-size:16px;font-weight:600;');choices.addWidget(brand)
         choices.addWidget(QLabel('오늘은 어디로 갈까요?'));left.setMinimumWidth(245)
         for key,title in [('home','매장 업무'),('household','나의 가계부'),('diary','나의 일기장')]:
             button=action(title,lambda checked=False,target=key:self.choose_target(target));button.setIcon(personal_icon(key));button.setIconSize(QSize(36,36));button.setCheckable(True);button.setAutoExclusive(True);choices.addWidget(button);self.login_choices[key]=button
+        from .lucky_numbers import open_lucky_numbers
+        choices.addWidget(action('행운의 숫자 · 로그인 없이',lambda:open_lucky_numbers(self)))
         choices.addStretch();guide=QLabel('업무도, 나의 작은 기록도\n편안한 한 곳에서.\n\n같은 계정으로 로그인합니다.\n개인 암호는 별도로 확인해요.');guide.setStyleSheet('color:#CADBD0;font-size:12px;');guide.setWordWrap(True);choices.addWidget(guide)
         row=QHBoxLayout();row.addWidget(left);row.addLayout(contents,1);self.body.addLayout(row)
         self.choose_target('home')
@@ -165,6 +170,17 @@ class LoginDialog(FormDialog):
         from .email_ui import EmailCodeDialog
         if EmailCodeDialog(self.store,"login_reset",self,self.code.text()).exec():
             self.password.clear();self.hint.setText("암호가 변경되었습니다. 새 비밀번호로 로그인하세요.")
+
+    def setup_recovery_email(self):
+        from .email_ui import RecoveryEmailDialog
+        try:
+            if self.code.text().strip()=='admin' and self.store.default_login_available():
+                raise ValueError("먼저 최초 로그인에서 새 암호를 설정한 뒤, 상단 ‘복구 이메일’에서 주소와 발송 계정을 등록하세요.")
+            self.store.login(self.code.text(),self.password.text())
+            try:RecoveryEmailDialog(self.store,self).exec()
+            finally:self.store.logout()
+            self.hint.setText("이메일 설정을 확인했습니다. 업무를 시작하려면 다시 로그인하세요.")
+        except (ValueError,PermissionError) as exc:self.error(exc)
 
     def submit(self):
         try:
@@ -286,15 +302,18 @@ class LabelsPage(Page):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, store, demo=False,network_path=None):
+    def __init__(self, store, demo=False,network_path=None,popup_menus=False):
         super().__init__()
         self.store, self.demo = store, demo
+        self.popup_menus=popup_menus;self.popup_windows={};self.personal_windows={}
         self.network_path=network_path;self.shared_service=None;self.shared_refresh=None
         self.pages, self.items, self.nav_actions, self.scrollers = {}, {}, {}, {}
         self.purchase_navigation_item = None
         self.current_page, self.current_key = None, None
         self._backup_runtime_enabled, self._exit_backup_done = False, False
-        self.setWindowTitle(f"서영 POS 독립판 {__version__} · 단독 사용 / 선택형 PC 공유" + (" [체험]" if demo else ""))
+        from .branding import app_icon, brand_widget
+        self.setWindowTitle(f"SY POS 독립판 {__version__} · 단독 사용 / 선택형 PC 공유" + (" [체험]" if demo else ""))
+        self.setWindowIcon(app_icon())
         self.resize(1500, 930)
         self.setMinimumSize(1060, 680)
         central = QWidget()
@@ -307,9 +326,7 @@ class MainWindow(QMainWindow):
         sidebar.setFixedWidth(215)
         side = QVBoxLayout(sidebar)
         side.setContentsMargins(12, 20, 10, 14)
-        brand = QLabel("서영 POS")
-        brand.setObjectName("brand")
-        side.addWidget(brand)
+        side.addWidget(brand_widget(sidebar))
         independent = QLabel(f"PDF 새 설계 · 독립판 {__version__}")
         independent.setObjectName("independent")
         side.addWidget(independent)
@@ -386,7 +403,10 @@ class MainWindow(QMainWindow):
                 item.setToolTip(0, MENU_HELP[key])
                 if title!='나의 기록':item.setIcon(0,self.style().standardIcon(QStyle.StandardPixmap.SP_DirHomeIcon if key=='home' else QStyle.StandardPixmap.SP_FileIcon))
                 self.items[key] = item
+                from .menu_icons import menu_icon
+                item.setIcon(0,menu_icon(key))
                 nav = QAction(caption, self)
+                nav.setIcon(menu_icon(key));nav.setIconVisibleInMenu(True)
                 attach_help(nav, MENU_HELP[key])
                 nav.setCheckable(True)
                 nav.triggered.connect(lambda checked=False, page=key: self.open_page(page))
@@ -394,7 +414,7 @@ class MainWindow(QMainWindow):
                 self.nav_actions[key] = nav
                 if title=="나의 기록":
                     from .personal_icons import personal_icon
-                    button=action({"diary":"일기장  ·  별도 암호","household":"가계부  ·  나의 수입·지출","worklog":"업무일지  ·  오늘의 업무"}[key],lambda checked=False,target=key:self.open_page(target))
+                    button=action({"diary":"일기장  ·  별도 암호","household":"가계부  ·  나의 수입·지출","worklog":"업무일지  ·  오늘의 업무","lucky_numbers":"행운의 숫자  ·  재미있는 추첨"}[key],lambda checked=False,target=key:self.open_page(target))
                     button.setIcon(personal_icon(key));button.setIconSize(QSize(24,24))
                     attach_help(button,MENU_HELP[key]);self.personal_layout.addWidget(button)
         self.personal_panel.setVisible(bool(self.personal_navigation_root.childCount()))
@@ -411,6 +431,9 @@ class MainWindow(QMainWindow):
             shortcut.triggered.connect(callback)
             self.addAction(shortcut)
         self.notify(f"새 독립판 DB: {store.path} · F8 바코드  F5 조회  Ctrl+E 엑셀  Ctrl+P 인쇄")
+        independent=QAction('메뉴 독립 창',self);independent.setCheckable(True);independent.setChecked(self.popup_menus)
+        independent.setToolTip('켜면 업무 메뉴를 독립 창으로 열어 상품장·매입전표 등 여러 화면에서 동시 작업합니다.')
+        independent.toggled.connect(lambda enabled:setattr(self,'popup_menus',enabled));self.toolbar.addAction(independent)
         self.navigation = NavigationGuard(self)
         if self.items:
             self.open_page("home")
@@ -418,6 +441,7 @@ class MainWindow(QMainWindow):
         self.maintenance_timer.setInterval(60 * 60 * 1000)
         self.maintenance_timer.timeout.connect(self.maintain_backups)
         self.maintenance_timer.start()
+        self.popup_timer=QTimer(self);self.popup_timer.setInterval(3000);self.popup_timer.timeout.connect(self.refresh_popups);self.popup_timer.start()
         QTimer.singleShot(500, self.maintain_backups)
         self.backup_timer = QTimer(self)
         self.backup_timer.setInterval(60_000)
@@ -465,6 +489,8 @@ class MainWindow(QMainWindow):
             self.notify(f"자동 백업 실패: {exc} · 설정에서 백업 폴더를 확인하세요.")
 
     def prepare_exit(self):
+        from .independent_windows import close_independent_windows
+        if not close_independent_windows(self):return False
         if not self.navigation.allow_leave(self.current_page):
             return False
         if self.shared_service:self.shared_service.begin_close()
@@ -479,6 +505,18 @@ class MainWindow(QMainWindow):
                     return False
                 self._exit_backup_done = True
         return True
+
+    def refresh_popups(self):
+        if not self.popup_windows or QApplication.activeModalWidget() is not None:return
+        try:revision=self.store.audit_revision()
+        except (ValueError,PermissionError,OSError):return
+        for popup in self.popup_windows.values():
+            if not popup.isVisible() or popup.revision==revision or self.navigation.changed(popup.page):continue
+            try:
+                self.store.require_menu(popup.key);popup.page.refresh();self.navigation.track(popup.page);popup.revision=revision
+            except (ValueError,PermissionError,OSError):
+                for grid in popup.page.findChildren(DataGrid):grid.fill([])
+                popup.page.setEnabled(False)
 
     def maintain_backups(self):
         if not self.isVisible() or QApplication.activeModalWidget() is not None:
@@ -502,9 +540,11 @@ class MainWindow(QMainWindow):
         self.maintenance_timer.stop()
         self.backup_timer.stop()
         self.alert_timer.stop()
+        self.popup_timer.stop()
         self.navigation.disable()
         if self.shared_refresh:self.shared_refresh.stop()
         if self.shared_service:self.shared_service.stop()
+        self.store.lock_diary();self.store.lock_household()
         super().closeEvent(event)
 
     def go_home(self):
@@ -536,7 +576,12 @@ class MainWindow(QMainWindow):
     def open_page(self, key):
         if key not in self.items:
             return False
-        if getattr(self, "navigation", None) and not self.navigation.allow_leave(self.current_page):
+        if key=='lucky_numbers':
+            try:self.store.require_menu(key)
+            except (ValueError,PermissionError) as exc:QMessageBox.warning(self,'행운의 숫자',str(exc));return False
+            from .lucky_numbers import open_lucky_numbers
+            open_lucky_numbers(self);return True
+        if not (self.popup_menus and key!='home') and getattr(self, "navigation", None) and not self.navigation.allow_leave(self.current_page):
             return False
         from .catalog_ui import ProductsPage, CategoriesPage, PartnersPage, UsersPage, SettingsPage
         from .workflow_ui import TradesPage, LedgerPage, CountsPage, ReportPage, ClosingsPage
@@ -549,12 +594,19 @@ class MainWindow(QMainWindow):
         factories["payments"] = lambda: SupplierPaymentsPage(self)
         factories["permissions"] = lambda: PermissionsPage(self)
         factories["home"] = lambda: HomePage(self)
+        from .stock_management_ui import StockAdjustmentPage, InventoryAssetsPage
+        factories['opening_stock']=lambda:StockAdjustmentPage(self,'opening')
+        factories['stock_waste']=lambda:StockAdjustmentPage(self,'waste')
+        factories['inventory_assets']=lambda:InventoryAssetsPage(self)
         factories["suppliers"] = lambda: SuppliersPage(self)
         from .diary_ui import DiaryPage,WorkLogPage
         factories["diary"]=lambda:DiaryPage(self)
         factories["worklog"]=lambda:WorkLogPage(self)
         from .household_ui import HouseholdPage
         factories["household"]=lambda:HouseholdPage(self)
+        from .offline_ui import SalesHistoryPage
+        factories['sales_cancelled']=lambda:SalesHistoryPage(self,'cancelled')
+        factories['sales_held']=lambda:SalesHistoryPage(self,'draft')
         from .purchase_reports import PURCHASE_VIEWS, PurchaseStatusPage
         for group, (page_key, _) in PURCHASE_VIEWS.items():
             factories[page_key] = lambda group=group: PurchaseStatusPage(self, group)
@@ -580,6 +632,10 @@ class MainWindow(QMainWindow):
                 self.pages[key], self.scrollers[key] = page, scroll
                 self.stack.addWidget(scroll)
             page = self.pages[key]
+            if key in self.popup_windows and self.popup_windows[key].isVisible():
+                self.popup_windows[key].showNormal();self.popup_windows[key].raise_();self.popup_windows[key].activateWindow()
+                self.current_key,self.current_page=key,page
+                return True
             page.setEnabled(True)
             page.refresh()
             self.navigation.track(page)
@@ -591,7 +647,17 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "조회 실패", str(exc))
             return False
         self.current_key, self.current_page = key, page
-        self.stack.setCurrentWidget(self.scrollers[key])
+        if self.popup_menus and key!='home' or key in self.popup_windows:
+            from .independent_windows import PageWindow
+            if key not in self.popup_windows:
+                self.stack.removeWidget(self.scrollers[key])
+                self.popup_windows[key]=PageWindow(self,key,page,self.scrollers[key])
+            popup=self.popup_windows[key];popup.show();popup.raise_();popup.activateWindow()
+            # Personal menu buttons open the actual private editor directly;
+            # the smaller landing/settings window remains independently usable.
+            if key in {'diary','household'}:
+                (page.open_diary if key=='diary' else page.open_book)()
+        else:self.stack.setCurrentWidget(self.scrollers[key])
         self.tree.setCurrentItem(self.items[key])
         if key == "home":
             self.reset_navigation()
@@ -694,15 +760,19 @@ def data_directory():
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="서영 POS 독립판 · 서버 없는 오프라인 매장 업무")
+    parser = argparse.ArgumentParser(description="SY POS 독립판 · 서버 없는 오프라인 매장 업무")
     parser.add_argument("--data-dir", type=Path)
     parser.add_argument("--demo", action="store_true")
     parser.add_argument("--smoke-test", action="store_true")
     parser.add_argument("--screenshot", type=Path)
     args = parser.parse_args(argv)
     app = QApplication.instance() or QApplication(sys.argv[:1])
+    from .popup_policy import install_popup_policy
+    install_popup_policy(app)
     QLocale.setDefault(QLocale('ko_KR'))
-    app.setApplicationName("서영 POS 독립판")
+    from .branding import app_icon
+    app.setApplicationName("SY POS 독립판")
+    app.setWindowIcon(app_icon())
     app.setOrganizationName("SeoyoungStandalone")
     app.setStyle(MenuHelpStyle())
     try:
@@ -712,7 +782,8 @@ def main(argv=None):
             raise
         QMessageBox.critical(None, "글꼴 파일 오류", str(exc))
         return 1
-    app.setStyleSheet(STYLE)
+    from .branding import spin_button_style
+    app.setStyleSheet(STYLE+spin_button_style())
     scratch = tempfile.TemporaryDirectory(prefix="seoyoung-v2-") if args.smoke_test else None
     directory = Path(scratch.name) if scratch else args.data_dir or data_directory()
     is_demo = args.demo or args.smoke_test
@@ -750,7 +821,7 @@ def main(argv=None):
             seed(store)
         else:
             backdrop = QMainWindow()
-            backdrop.setWindowTitle("서영 POS 독립판 · 사용자 확인")
+            backdrop.setWindowTitle("SY POS 독립판 · 사용자 확인")
             backdrop.resize(1400, 900)
             for section, _ in SECTIONS:
                 backdrop.menuBar().addMenu(section).setEnabled(False)
@@ -759,7 +830,7 @@ def main(argv=None):
             if login.exec() != QDialog.DialogCode.Accepted:
                 return 0
             login_target=login.selected_target;login.password.clear()
-        window = MainWindow(store, is_demo,None if is_demo else connection_path)
+        window = MainWindow(store, is_demo,None if is_demo else connection_path,popup_menus=not args.smoke_test)
         if network_config['mode']=='host':
             from .shared_server import SharedService
             service=SharedService(path,network_config)
@@ -780,8 +851,9 @@ def main(argv=None):
             def open_personal():
                 if not args.smoke_test:window.show_inspiration(True)
                 if window.open_page(login_target):
-                    page=window.current_page
-                    (page.open_book if login_target=='household' else page.open_diary)()
+                    if not window.popup_menus:
+                        page=window.current_page
+                        (page.open_book if login_target=='household' else page.open_diary)()
             QTimer.singleShot(0,open_personal)
         elif not args.smoke_test:QTimer.singleShot(0,lambda:window.show_inspiration(True))
         if backdrop:
@@ -887,9 +959,26 @@ def main(argv=None):
                             receipt=store.save_household_entry(cash_key,{'date':today,'kind':'expense','title':'주유 (예시)','category':'차량','amount':'65000.25','account_id':account,'vehicle_id':car,'vehicle_type':'fuel','liters':'35.5','odometer':'30000','vehicle_vendor':'가상 주유소','fuel_kind':'휘발유','full_tank':True})
                             store.save_household_fixed_cost(cash_key,{'title':'통신비 (예시)','amount':'35000.55','monthly_day':str(date.today().day),'start_date':today,'account_id':account})
                             store.save_household_budget(cash_key,today[:7],'300000.00')
+                            store.save_household_plan(cash_key,dict(kind='asset',name='예·적금 예시',amount='3500000.25',asset_type='deposit',date=today))
+                            store.save_household_plan(cash_key,dict(kind='debt',name='남은 대출 예시',amount='1250000.50',date=today))
+                            store.save_household_plan(cash_key,dict(kind='goal',name='여행 자금 예시',amount='2000000.00',account_id=account,target_date=f'{date.today().year+1}-12-31'))
+                            store.save_household_plan(cash_key,dict(kind='category_budget',name='식비',amount='200000.00',month=today[:7]))
+                            store.save_household_plan(cash_key,dict(kind='forecast',name='예상 월 수입',amount='2500000.00'))
+                            store.due_household_fixed_alerts(cash_key);store.due_household_vehicle_alerts(cash_key)
                             store.add_personal_attachment(cash_key,'household','entry',receipt,'화면검사.txt',b'Fictional receipt for screenshot validation only.')
                             cashbook=HouseholdDialog(store,cash_key,window);capture('-household',cashbook)
                             for index,suffix in [(1,'-accounts'),(3,'-fixed-costs'),(4,'-vehicles')]:cashbook.finances.setCurrentIndex(index);capture(suffix,cashbook)
+                            cashbook.finances.setCurrentIndex(5)
+                            for index,suffix in [(0,'-financial-overview'),(1,'-savings-goals'),(2,'-category-budgets'),(3,'-annual-household'),(6,'-custom-household-reports')]:cashbook.finances.planning.setCurrentIndex(index);capture(suffix,cashbook)
+                            store.save_work_log(dict(date=today,title='물류 작업·인수인계 (예시)',body='실제 자료가 아닌 화면 검증용입니다.',details=dict(
+                                status='done',category='입출고',customer='가상 고객사',handover='다음 근무 시 보관 구역 확인',
+                                handling_revenue='250000.50',rent_cost='20000.25',capacity='100',occupied='85',
+                                workers=[dict(name='가상 작업자',regular_hours='8',overtime_hours='1.25',hourly_rate='12000.50',overtime_factor='1.5')],
+                                movements=[dict(activity='하역',unit='BOX',qty='500',hours='2'),dict(activity='적치',unit='PLT',qty='13',hours='1.25')]
+                            )))
+                            window.open_page('worklog');capture('-worklog-dashboard',window)
+                            window.current_page.grid.selectRow(0);window.current_page.selection_changed();window.current_page.tabs.setCurrentIndex(2);capture('-worklog-productivity',window)
+                            window.open_page('sales_realtime');capture('-sales-comparison',window)
                             from .attachment_ui import AttachmentDialog
                             attachment=AttachmentDialog(store,cash_key,'household','entry',receipt,cashbook);capture('-attachments',attachment);attachment.reject()
                             from .personal_schedule_ui import PersonalScheduleDialog
@@ -944,6 +1033,28 @@ def main(argv=None):
                                 first_login.close()
                             finally:
                                 fresh_login_store.close()
+                            from uuid import uuid4
+                            stock_example=store.save_product({'name':'재고 흐름 검증용 상품 (예시)','base_unit':'g','price_basis':100,'purchase_price':'1650.00','sale_price':'2500.00','tracked':True})
+                            store.post_stock_adjustment({'kind':'opening','product_id':stock_example,'date':today,'qty':'10000','unit_price':'1650.00','reason':'가상 기초재고'},uuid4().hex)
+                            store.post_stock_adjustment({'kind':'waste','product_id':stock_example,'date':today,'qty':'500','unit_price':'0','reason':'화면 검증용 가상 폐기'},uuid4().hex)
+                            for key,suffix in [('opening_stock','-opening-stock'),('stock_waste','-stock-waste'),('inventory_assets','-inventory-assets')]:
+                                window.open_page(key);capture(suffix,window)
+                            from .loyalty_ui import MemberDialog
+                            member_detail=MemberDialog(store,parent=window);capture('-member-details',member_detail);member_detail.close()
+                            from .email_ui import EmailCodeDialog
+                            mail_recovery=EmailCodeDialog(store,'bind',window);capture('-email-recovery',mail_recovery);mail_recovery.close()
+                            window.popup_menus=True
+                            window.open_page('products');window.open_page('purchases')
+                            assert all(not popup.isModal() for popup in window.popup_windows.values())
+                            capture('-independent-windows',window.popup_windows['purchases'])
+                            from .independent_windows import close_independent_windows
+                            assert close_independent_windows(window)
+                            window.popup_menus=False;window.open_page('home')
+                            from .lucky_numbers import open_lucky_numbers
+                            lucky=open_lucky_numbers(window)
+                            for _ in range(6):lucky.page.draw();lucky.page.finish_draw()
+                            assert len(set(lucky.page.drawn))==6
+                            capture('-lucky-numbers',lucky);lucky.close()
                     if args.smoke_test:
                         print(f"PASS standalone-v2: {len(window.items)} desktop pages, returns, expanded units, persistence, backup restore, no legacy imports", flush=True)
                         app.exit(0)

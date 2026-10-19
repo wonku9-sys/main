@@ -20,8 +20,15 @@ PRIVATE=PRIVATE|frozenset('save_household_budget household_budget due_household_
 PRIVATE=PRIVATE|{'household_spending_comparison'}
 PRIVATE=PRIVATE|frozenset('household_category_rules save_household_category_rule suggest_household_category'.split())
 PRIVATE=PRIVATE|{'health_report'}
+READS=READS|{'stock_adjustments','inventory_assets','inventory_asset_comparison'}
+READS=READS|{'sales_period_comparison'}
+READS=READS|{'sales_history'}
+WRITES=WRITES|{'post_stock_adjustment'}
 PRIVATE=PRIVATE|{'due_health_alerts'}
 PRIVATE=PRIVATE|frozenset('household_vehicle_report household_vehicle_obligations save_household_vehicle_obligation complete_household_vehicle_obligation void_household_vehicle_obligation due_household_vehicle_alerts'.split())
+PRIVATE=PRIVATE|frozenset('household_plans save_household_plan delete_household_plan household_annual_report household_financial_overview household_cash_forecast'.split())
+PRIVATE=PRIVATE|{'split_household_entry','household_custom_report'}
+PRIVATE=PRIVATE|{'work_log_detail','work_log_report','work_log_files','add_work_log_file','work_log_file_data','delete_work_log_file'}
 
 
 def encode(value):

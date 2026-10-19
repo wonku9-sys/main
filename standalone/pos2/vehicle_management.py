@@ -1,6 +1,6 @@
 """Full-to-full fuel estimates and exactly-once private vehicle payments."""
 from datetime import date
-from decimal import Decimal
+from decimal import Decimal,ROUND_HALF_UP
 from collections import Counter
 import hmac
 from .common import day,money,text,now,decimal
@@ -32,7 +32,11 @@ class VehicleManagementMixin:
                     if row['date']>=start:segments.append(dict(start=anchor['date'],end=row['date'],distance=distance,liters=liters,km_per_liter=(distance/liters).quantize(Decimal('0.01'))))
                 anchor=row if odo is not None else None;liters=Decimal(0)
         distance=sum((r['distance'] for r in segments),Decimal(0));consumed=sum((r['liters'] for r in segments),Decimal(0))
-        return dict(expense_total=sum(r['amount'] for r in period),months=[dict(month=k,expense_total=v) for k,v in sorted(months.items())],
+        fuel_total=sum(r['amount'] for r in period if r['vehicle_type']=='fuel')
+        purchased=sum((decimal(r.get('liters') or 0) for r in period if r['vehicle_type']=='fuel'),Decimal(0))
+        return dict(expense_total=sum(r['amount'] for r in period),fuel_total=fuel_total,purchased_liters=purchased,
+            average_unit_price=int((Decimal(fuel_total)/purchased).quantize(Decimal('1'),rounding=ROUND_HALF_UP)) if purchased else None,
+            months=[dict(month=k,expense_total=v) for k,v in sorted(months.items())],
             categories=[dict(name=k,amount=v) for k,v in sorted(groups.items(),key=lambda item:-item[1])],segments=segments,
             distance=distance,liters=consumed,km_per_liter=(distance/consumed).quantize(Decimal('0.01')) if consumed else None,uncertain=uncertain)
 

@@ -246,7 +246,7 @@ def test_sidebar_only_purchase_expanded_after_login_and_home(app,shop):
     def expanded():return [window.tree.topLevelItem(i).text(0) for i in range(window.tree.topLevelItemCount()) if window.tree.topLevelItem(i).isExpanded()]
     assert expanded()==["2. 매입/발주관리"]
     assert window.items["diary"].treeWidget() is None
-    assert window.personal_panel.layout().count()==4
+    assert window.personal_panel.layout().count()==5
     window.tree.expandAll()
     assert window.go_home()
     assert expanded()==["2. 매입/발주관리"]

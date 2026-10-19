@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import date
 from PySide6.QtCore import QDate, Qt
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QDialog, QHBoxLayout, QLabel, QLineEdit,
+    QCheckBox, QComboBox, QDateEdit, QDialog, QHBoxLayout, QLabel, QLineEdit,
     QMessageBox, QPushButton, QTabWidget, QTableWidget, QVBoxLayout, QWidget, QFormLayout,
 )
 
@@ -35,8 +35,16 @@ class MemberDialog(FormDialog):
     def __init__(self, store, record=None, parent=None):
         super().__init__("회원 정보", parent)
         self.store, self.record = store, record or {}
-        for key, title in (("code", "회원 코드 *"), ("name", "회원명 *"), ("phone", "전화번호"), ("birthday", "생일 (YYYY-MM-DD, 선택)"), ("memo", "메모")):
+        for key, title in (("code", "회원 코드 *"), ("name", "회원명 *"), ("mobile", "휴대폰 번호"), ("phone", "일반전화 번호 (집·직장 등)"), ("memo", "메모")):
             self.field(key, title, self.record.get(key, ""))
+        birthday_row=QHBoxLayout();self.birthday_enabled=QCheckBox('생일 등록');self.birthday_enabled.setChecked(bool(self.record.get('birthday')))
+        self.birthday=QDateEdit();self.birthday.setDisplayFormat('yyyy-MM-dd');self.birthday.setCalendarPopup(True);self.birthday.setDateRange(QDate(1900,1,1),QDate.currentDate());self.birthday.setKeyboardTracking(False)
+        self.birthday.setDate(QDate.fromString(self.record['birthday'],'yyyy-MM-dd') if self.record.get('birthday') else QDate(1977,3,10))
+        self.birthday.setEnabled(self.birthday_enabled.isChecked());self.birthday_enabled.toggled.connect(self.birthday.setEnabled)
+        self.birthday.setToolTip('1977-03-10 형식으로 직접 입력하거나 오른쪽 달력 버튼에서 년·월·일을 선택하세요. 생일 등록을 끄면 비워 둡니다.')
+        birthday_row.addWidget(self.birthday_enabled);birthday_row.addWidget(self.birthday,1);self.form.addRow('생년월일 · 직접 입력 / 달력 선택',birthday_row)
+        self.phone_type=QComboBox();self.phone_type.addItems(['휴대폰','일반전화','집','직장','기타']);self.phone_type.setEditable(True);self.phone_type.setCurrentText(self.record.get('phone_type','일반전화'));self.phone_type.lineEdit().setMaxLength(50)
+        self.phone_type.setToolTip('집·직장·기타 선택 또는 원하는 연락처 이름을 직접 입력하세요.');self.form.addRow('일반전화 구분 · 직접 입력 가능',self.phone_type)
         if not record:
             self.fields["code"].setText(store.next_member_code())
         self.active = QCheckBox("사용 회원")
@@ -46,7 +54,7 @@ class MemberDialog(FormDialog):
         profile = QWidget()
         profile_form = QFormLayout(profile)
         main_form,self.form = self.form,profile_form
-        for key,title in (("mobile","휴대폰"),("address","주소"),("member_type","회원유형 (일반고객·사업자 등)"),("group_name","회원그룹"),("business_no","사업자번호"),("company","상호"),("representative","대표자"),("anniversary","기념일 (YYYY-MM-DD, 선택)")):
+        for key,title in (("address","주소"),("member_type","회원유형 (일반고객·사업자 등)"),("group_name","회원그룹"),("business_no","사업자번호"),("company","상호"),("representative","대표자"),("anniversary","기념일 (YYYY-MM-DD, 선택)")):
             self.field(key,title,self.record.get(key,"일반고객" if key=="member_type" else ""))
         self.form = main_form
         tabs.addTab(profile,"연락처 · 그룹 · 사업자정보")
@@ -57,6 +65,8 @@ class MemberDialog(FormDialog):
     def save(self):
         values = {key: field.text().strip() for key, field in self.fields.items()}
         values["active"] = self.active.isChecked()
+        values['birthday']=self.birthday.date().toString('yyyy-MM-dd') if self.birthday_enabled.isChecked() else ''
+        values['phone_type']=self.phone_type.currentText().strip()
         change(self, lambda: self.store.save_member(values, self.record.get("id")))
 
 
@@ -79,7 +89,7 @@ class MembersPage(Page):
         filters.addWidget(action("구매 순위", self.ranking))
         filters.addWidget(action("삭제", self.delete, danger=True))
         self.body.addLayout(filters)
-        self.grid = self.table(["회원 코드", "회원명", "전화번호", "포인트 잔액", "상태", "메모"])
+        self.grid = self.table(["회원 코드", "회원명", "휴대폰", "일반전화", "전화 구분", "생일", "포인트 잔액", "상태", "메모"])
         self.grid.setColumnWidth(1, 160)
         self.grid.setMinimumHeight(210)
         self.grid.itemSelectionChanged.connect(self.details)
@@ -110,7 +120,7 @@ class MembersPage(Page):
         if self.status.currentData() is not None:
             records = [r for r in records if r["active"] == self.status.currentData()]
         self.grid.blockSignals(True)
-        self.grid.fill([[r["code"], r["name"], r["phone"], r["points"], "사용" if r["active"] else "중지", r["memo"]] for r in records], records)
+        self.grid.fill([[r["code"], r["name"], r.get('mobile',''), r["phone"], r.get('phone_type','기타'),r['birthday'],r["points"], "사용" if r["active"] else "중지", r["memo"]] for r in records], records)
         self.grid.blockSignals(False)
         if records:
             row = next((i for i in range(self.grid.rowCount()) if previous and self.grid.item(i, 0).data(Qt.ItemDataRole.UserRole)["id"] == previous["id"]), 0)

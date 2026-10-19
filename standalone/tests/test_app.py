@@ -78,7 +78,7 @@ def test_existing_custom_admin_is_never_overwritten_by_default_login(context):
 @pytest.mark.parametrize("permission,keys", [
     ("catalog", {"products", "categories", "suppliers", "customers", "labels"}),
     ("trade", {"purchases", "payments", "sales", "ledger", "closings"}),
-    ("inventory", {"inventory", "counts", "closings"}),
+    ("inventory", {"inventory", "opening_stock", "stock_waste", "inventory_assets", "counts", "closings"}),
     ("reports", {"overview", "reports", "commission"}),
     ("loyalty", {"members", "promotions", "prices", "gifts"}),
 ])
@@ -88,8 +88,8 @@ def test_scoped_menus_and_all_allowed_pages_refresh(context, permission, keys):
     window = MainWindow(store)
     purchase_views = {"purchase_suppliers", "purchase_categories", "purchase_products", "purchase_documents", "purchase_statement"} if permission == "trade" else set()
     from pos2.offline_menus import REPORT_VIEWS,SALES_VIEWS,BASIC_VIEWS,MEMBER_VIEWS
-    added = set(REPORT_VIEWS) if permission=="reports" else set(SALES_VIEWS)|{"quotations","statements"} if permission=="trade" else set(BASIC_VIEWS)-{"user_access"} if permission=="catalog" else set(MEMBER_VIEWS)|{"member_tax"} if permission=="loyalty" else set()
-    added |= {"diary","worklog","household"}
+    added = set(REPORT_VIEWS) if permission=="reports" else set(SALES_VIEWS)|{"quotations","statements","sales_held","sales_cancelled"} if permission=="trade" else set(BASIC_VIEWS)-{"user_access"} if permission=="catalog" else set(MEMBER_VIEWS)|{"member_tax"} if permission=="loyalty" else set()
+    added |= {"diary","worklog","household","lucky_numbers"}
     assert set(window.items) == keys | {"home"} | purchase_views | added
     assert window.current_key == "home"
     for key in keys | purchase_views | added:

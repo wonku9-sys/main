@@ -26,6 +26,10 @@ CREATE TABLE IF NOT EXISTS member_prices (
  price INTEGER NOT NULL CHECK(price BETWEEN 0 AND 9000000000000),
  UNIQUE(member_id,product_id)
 );
+CREATE TABLE IF NOT EXISTS member_contact_types (
+ member_id INTEGER PRIMARY KEY REFERENCES members(id) ON DELETE CASCADE,
+ phone_type TEXT NOT NULL CHECK(length(phone_type) BETWEEN 1 AND 50)
+);
 CREATE TABLE IF NOT EXISTS promotions (
  id INTEGER PRIMARY KEY, title TEXT NOT NULL, start TEXT NOT NULL, end TEXT NOT NULL,
  active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1)), created_at TEXT NOT NULL
@@ -142,6 +146,8 @@ class LoyaltyMixin:
         for row in rows:
             profile = self.db.execute("SELECT * FROM member_profiles WHERE member_id=?",(row["id"],)).fetchone()
             if profile: row.update({k:profile[k] for k in profile.keys() if k != "member_id"})
+            contact=self.db.execute('SELECT phone_type FROM member_contact_types WHERE member_id=?',(row['id'],)).fetchone()
+            row['phone_type']=contact[0] if contact else '기타'
         return rows
 
     def trade_members(self, search=""):
@@ -178,6 +184,9 @@ class LoyaltyMixin:
             except sqlite3.IntegrityError:
                 raise ValueError("이미 사용 중인 회원 코드입니다.") from None
             profile_old = self.db.execute("SELECT * FROM member_profiles WHERE member_id=?",(id,)).fetchone()
+            previous_type=self.db.execute('SELECT phone_type FROM member_contact_types WHERE member_id=?',(id,)).fetchone()
+            phone_type=text(data.get('phone_type',previous_type[0] if previous_type else '휴대폰'),'연락처 구분',True,50)
+            self.db.execute('INSERT INTO member_contact_types(member_id,phone_type) VALUES(?,?) ON CONFLICT(member_id) DO UPDATE SET phone_type=excluded.phone_type',(id,phone_type))
             fields = ("mobile","address","member_type","business_no","company","representative","group_name","anniversary")
             profile = {key:text(data.get(key,profile_old[key] if profile_old else "일반고객" if key=="member_type" else ""),key) for key in fields}
             if profile["anniversary"]: profile["anniversary"] = day(profile["anniversary"])

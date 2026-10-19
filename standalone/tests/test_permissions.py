@@ -121,7 +121,8 @@ def test_admin_permission_menu_saves_read_only_and_independent_edit_delete_flags
     with pytest.raises(PermissionError):
         shop.staff.save_product({"name": "등록 불가"})
     window = MainWindow(shop.staff)
-    assert set(window.items) == {"home", "products"}
+    # Public entertainment contains no business or private records.
+    assert set(window.items) == {"home", "products", "lucky_numbers"}
     assert window.open_page("products")
     products = window.pages["products"]
     buttons = {button.text(): button for button in products.findChildren(QPushButton)}

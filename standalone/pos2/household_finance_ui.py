@@ -15,13 +15,13 @@ KINDS={'income':'수입','expense':'지출','transfer_in':'이체 입금','trans
 
 
 class MoneyChart(QWidget):
-    def __init__(self, mode, parent=None):
-        super().__init__(parent); self.mode=mode; self.values=[]; self.setMinimumHeight(230)
+    def __init__(self, mode, parent=None,title=None,keep_order=False):
+        super().__init__(parent); self.mode=mode; self.values=[]; self.chart_title=title;self.keep_order=keep_order;self.setMinimumHeight(230)
     def set_values(self, values): self.values=list(values); self.update()
     def paintEvent(self,event):
         p=QPainter(self); p.setRenderHint(QPainter.RenderHint.Antialiasing)
         p.fillRect(self.rect(),QColor('#FFFCF7')); p.setPen(QColor('#514C46'))
-        p.drawText(12,22,'지출 분류 비율' if self.mode=='pie' else '통장별 잔액 · 보관 통장 포함')
+        p.drawText(12,22,self.chart_title or ('지출 분류 비율' if self.mode=='pie' else '통장별 잔액 · 보관 통장 포함'))
         values=self.values
         if not values or not any(v for _,v in values): p.drawText(16,65,'표시할 기록이 아직 없습니다.'); return
         colors=['#709D8A','#C995A3','#CFAB63','#8B9DC3','#AD91B9','#B8C794']
@@ -36,7 +36,7 @@ class MoneyChart(QWidget):
         else:
             # The table always lists every account. The compact chart shows the
             # eight largest absolute balances, including negative overdrafts.
-            values=sorted(values,key=lambda x:-abs(x[1]))[:8]; peak=max(abs(v) for _,v in values) or Decimal(1)
+            values=(values[:24] if self.keep_order else sorted(values,key=lambda x:-abs(x[1]))[:8]); peak=max(abs(v) for _,v in values) or Decimal(1)
             origin=self.width()*.50; width=max(20,self.width()*.23); step=max(21,min(30,(self.height()-38)/len(values)))
             p.setPen(QColor('#CEC8BE')); p.drawLine(int(origin),35,int(origin),self.height()-8)
             for i,(label,value) in enumerate(values):
@@ -82,10 +82,15 @@ class CashFinanceTabs(QTabWidget):
         for label,fn in [('납부·정비 예정',self.obligations),('유지비·연비 리포트',self.vehicle_report),('리콜 공식 조회',lambda:self.official('recall')),('검사 공식 안내',lambda:self.official('inspection'))]:more.addWidget(action(label,fn))
         layout.addLayout(more)
         self.vehicle_summary=QLabel();layout.addWidget(self.vehicle_summary)
+        self.vehicle_summary.setWordWrap(True);self.vehicle_summary.setStyleSheet('background:#E9F0EA;border:1px solid #D7E5DA;padding:14px;border-radius:10px;font-weight:600;')
         self.history=DataGrid(['날짜','기록 종류','내용','금액','업체·장소','주유량(L)','주행거리(km)','상세·보험 기간','메모']);layout.addWidget(self.history,1)
         self.vehicles.itemSelectionChanged.connect(self.vehicle_history)
         self.history.cellDoubleClicked.connect(self.edit_vehicle_expense)
         note=QLabel('차량 비용은 가계부 지출 1건과 연결됩니다. 아래 기록을 더블클릭해 수정하면 가계부도 함께 바뀝니다.\n주유량·주행거리는 선택 입력입니다. 보험료·정비비를 중복으로 가계부에 입력하지 마세요.');note.setWordWrap(True);layout.addWidget(note)
+        from .household_planning_ui import HouseholdPlanningTabs
+        self.planning=HouseholdPlanningTabs(self);self.addTab(self.planning,'재무·계획')
+        from .menu_icons import menu_icon
+        for i,key in enumerate(('report','wallet','money','calendar','truck','goal')):self.setTabIcon(i,menu_icon(key))
     def panel(self,title):
         widget=QWidget();layout=QVBoxLayout(widget);self.addTab(widget,title);return widget,layout
     def private_exec(self,dialog):
@@ -115,7 +120,8 @@ class CashFinanceTabs(QTabWidget):
         index=next((i for i in range(self.vehicles.rowCount()) if self.vehicles.item(i,0).data(Qt.ItemDataRole.UserRole)['id']==(selected or {}).get('id')),0)
         if self.vehicles.rowCount():self.vehicles.selectRow(index)
         self.vehicle_history()
-    def active_grid(self):return {0:self.book.grid,1:self.accounts,2:self.transfers,3:self.fixed,4:self.history}[self.currentIndex()]
+        self.planning.refresh()
+    def active_grid(self):return self.planning.active_grid() if self.currentIndex()==5 else {0:self.book.grid,1:self.accounts,2:self.transfers,3:self.fixed,4:self.history}[self.currentIndex()]
     def add_account(self):self.account_editor()
     def edit_account(self):
         row=self.accounts.selected()
@@ -124,12 +130,14 @@ class CashFinanceTabs(QTabWidget):
     def account_editor(self,record=None):
         record=record or {};d=FormDialog('통장 등록 · 시작 잔액',self)
         name=d.field('name','통장 이름 *',record.get('name',''));bank=d.field('bank','은행·별칭',record.get('bank',''))
+        owner=d.field('owner','소유자 별칭 (본인·배우자·아이 등)',record.get('owner','본인'))
+        account_type=d.combo('account_type','계정 종류',[('입출금 통장','bank'),('현금','cash'),('예·적금','deposit'),('투자','investment'),('카드 미납 관리','card'),('대출 관리','loan'),('기타','other')],record.get('account_type','bank'))
         opened=date_field(record.get('opening_date'));d.form.addRow('시작일',opened)
         amount=d.field('opening','시작 잔액 · 마이너스 가능',record.get('opening_balance','0'))
         active=QCheckBox('사용 중');active.setChecked(record.get('active',True));d.form.addRow(active)
         memo=d.field('memo','메모',record.get('memo',''))
         def save():
-            try:self.store.save_household_account(self.key,dict(name=name.text(),bank=bank.text(),opening_date=opened.date().toString('yyyy-MM-dd'),opening_balance=amount.text(),active=active.isChecked(),memo=memo.text()),record.get('id'));d.accept()
+            try:self.store.save_household_account(self.key,dict(name=name.text(),bank=bank.text(),owner=owner.text(),account_type=account_type.currentData(),opening_date=opened.date().toString('yyyy-MM-dd'),opening_balance=amount.text(),active=active.isChecked(),memo=memo.text()),record.get('id'));d.accept()
             except (ValueError,PermissionError) as exc:d.error(exc)
         d.finish(save)
         if self.private_exec(d):self.book.refresh()
@@ -240,7 +248,15 @@ class CashFinanceTabs(QTabWidget):
         all_history=self.store.household_vehicle_history(self.key,row['id'],'1900-01-01',date.today().isoformat())+self.store.household_vehicle_logs(self.key,row['id'],'1900-01-01',date.today().isoformat())
         odometer=max((Decimal(r['odometer']) for r in all_history if r.get('odometer')),default=Decimal(0))
         if car.get('next_service_date') and car['next_service_date']<=date.today().isoformat() or car.get('next_service_km') and odometer>=Decimal(car['next_service_km']):status='\n⚠ 다음 정비 기준에 도달했습니다. 정비 후 차량 정보의 예정일·주행거리를 갱신하세요.'
-        self.vehicle_summary.setText(f"{row['name']} · 기간 유지비 {won(total)}원 · 그중 주유비 {won(fuel)}원 · 비용 {len(rows)}건 / 메모 {len(logs)}건 · 누적 {odometer:,}km"+status)
+        pending=[r for r in self.store.household_vehicle_obligations(self.key,row['id']) if r['active'] and not r['completed']]
+        reminders=[]
+        for task in sorted(pending,key=lambda r:(r['due_date'] or '9999',r['title']))[:3]:
+            due=[]
+            if task['due_date']:
+                left=(date.fromisoformat(task['due_date'])-date.today()).days;due.append(('D-'+str(left)) if left>0 else '오늘' if left==0 else str(-left)+'일 지남')
+            if task['due_km']:due.append(f"{Decimal(task['due_km'])-odometer:,.0f}km 남음")
+            reminders.append(task['title']+' ('+', '.join(due)+')')
+        self.vehicle_summary.setText(f"{row['name']} · 기간 유지비 {won(total)}원 · 주유비 {won(fuel)}원\n비용 {len(rows)}건 / 운행·점검 {len(logs)}건 · 기록된 누적 {odometer:,}km · 미처리 예정 {len(pending)}건"+status+('\n'+' · '.join(reminders) if reminders else ''))
     def obligations(self):
         self.vehicle_window('obligations')
     def vehicle_report(self):self.vehicle_window('report')
@@ -279,3 +295,4 @@ class CashFinanceTabs(QTabWidget):
             QDialog.reject(dialog)
         for grid in self.findChildren(DataGrid):grid.fill([])
         self.pie.set_values([]);self.bar.set_values([]);self.analysis.clear();self.vehicle_summary.clear()
+        self.planning.wipe()

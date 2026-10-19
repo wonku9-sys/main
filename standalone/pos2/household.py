@@ -114,7 +114,10 @@ class HouseholdMixin(HouseholdFinanceMixin):
         self._household_unlock_token=(self.actor["id"],sha256(key).digest(),self._current_restore_token(),self._household_stamp())
         return bytearray(key)
 
-    def lock_household(self):self._household_unlock_token=None
+    def lock_household(self):
+        self._household_unlock_token=None
+        from .private_session import forget_key
+        forget_key(self,"household")
 
     def _require_household_key(self,key):
         self.require_menu("household")
@@ -151,7 +154,7 @@ class HouseholdMixin(HouseholdFinanceMixin):
         start,end=day(start),day(end)
         if start>end:raise ValueError("조회 기간을 확인하세요.")
         records=self._household_ledger(key)
-        selected=[r for r in records if (account_id is None or r['account_id']==account_id) and (not category or r["category"]==category) and (not search or str(search).casefold() in (r["title"]+r["memo"]+r["category"]+' '.join(r.get('tags',[]))).casefold())]
+        selected=[r for r in records if (account_id is None or r['account_id']==account_id) and (not category or r["category"]==category) and (not search or str(search).casefold().removeprefix('#') in (r["title"]+r["memo"]+r["category"]+r.get('payee','')+' '.join(r.get('tags',[]))).casefold())]
         delta=lambda r:r['amount']*(-1 if r['kind'] in {'expense','transfer_out'} else 1)
         opening=sum(delta(r) for r in selected if r["date"]<start or r['kind']=='opening' and r['date']==start)
         balance=opening;income=expense=0;rows=[]

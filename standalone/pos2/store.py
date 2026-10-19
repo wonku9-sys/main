@@ -37,7 +37,7 @@ DEFAULT_SETTINGS = {
     "online_info": DEFAULT_ONLINE,
     "rounding_mode": "decimal",
     "backup_schedule": DEFAULT_BACKUP_SCHEDULE,
-    "store_name": "서영 POS", "business_no": "", "phone": "", "address": "",
+    "store_name": "SY POS", "business_no": "", "phone": "", "address": "",
     "earn_bps": 100, "point_min": 1000, "point_step": 100, "point_enabled": True,
 }
 
@@ -105,6 +105,7 @@ class Store(CatalogMixin, CommerceMixin, OperationsMixin, LoyaltyMixin, Recovery
             raise
 
     def close(self):
+        self.lock_diary();self.lock_household()
         self.actor = None
         self.db.close()
 

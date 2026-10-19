@@ -4,6 +4,9 @@ from PySide6.QtGui import QColor,QIcon,QPainter,QPen,QPixmap
 
 
 def personal_icon(kind):
+    if kind=='lucky_numbers':
+        from .menu_icons import menu_icon
+        return menu_icon(kind)
     pix=QPixmap(48,48);pix.fill(Qt.GlobalColor.transparent)
     painter=QPainter(pix);painter.setRenderHint(QPainter.RenderHint.Antialiasing)
     colors={'household':('#F9E8D4','#9E7247'),'diary':('#EEE3F7','#856399'),'worklog':('#E2EFEA','#517D6F'),'home':('#DFEFE9','#4F806F')}

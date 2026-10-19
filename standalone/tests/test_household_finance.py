@@ -187,7 +187,8 @@ def test_cashbook_ui_charts_calendar_accounts_vehicle_wipe(book,tmp_path):
     from PySide6.QtCore import QDate
     from pos2.personal_schedule_ui import PersonalScheduleDialog,message_draft
     dialog=HouseholdDialog(s,k);dialog.start.setDate(QDate(2026,1,1));dialog.end.setDate(QDate(2026,1,31));dialog.refresh();dialog.show();app.processEvents()
-    assert dialog.finances.count()==5 and dialog.finances.accounts.rowCount()==2
+    assert dialog.finances.count()==6 and dialog.finances.accounts.rowCount()==2
+    assert dialog.finances.planning.count()==8
     assert dialog.finances.vehicles.rowCount()==1
     for index in range(5):dialog.finances.setCurrentIndex(index);app.processEvents();assert not dialog.grab().isNull()
     assert len(dialog.finances.pie.values)==1

@@ -31,6 +31,7 @@ def date_field(value=None):
     field = QDateEdit()
     field.setCalendarPopup(True)
     field.setDisplayFormat("yyyy-MM-dd")
+    field.setKeyboardTracking(False)
     parsed = QDate.fromString(str(value), "yyyy-MM-dd") if value else QDate.currentDate()
     field.setDate(parsed if parsed.isValid() else QDate.currentDate())
     field.setMinimumWidth(124)
@@ -39,6 +40,8 @@ def date_field(value=None):
 
 def action(text, callback, primary=False, danger=False):
     result = QPushButton(text)
+    from .menu_icons import menu_icon
+    result.setIcon(menu_icon(text))
     result.setObjectName("primary" if primary else "danger" if danger else "action")
     result.clicked.connect(callback)
     from .menu_help import ACTION_HELP, attach_help
@@ -160,7 +163,7 @@ def export_rows(parent, title, headers, rows, access_widget=None):
     if not rows:
         QMessageBox.information(parent, "엑셀 저장", "조회된 자료가 없습니다.")
         return None
-    filename, _ = QFileDialog.getSaveFileName(parent, "조회 결과 저장", f"서영독립판_{title}_{date.today().isoformat()}.xlsx", "Excel 통합문서 (*.xlsx)")
+    filename, _ = QFileDialog.getSaveFileName(parent, "조회 결과 저장", f"SY_POS_{title}_{date.today().isoformat()}.xlsx", "Excel 통합문서 (*.xlsx)")
     if not filename:
         return None
     # The native file chooser runs a nested event loop. Another administrator
@@ -273,7 +276,7 @@ class DataGrid(QTableWidget):
                 content = won(value) if isinstance(value, int) else amount(value) if isinstance(value, Decimal) else str(value if value is not None else "")
                 cells.append(f"<td>{escape(content)}</td>")
             rows.append("<tr>" + "".join(cells) + "</tr>")
-        return f"<html><head><style>body{{font-size:9pt;color:#172e40}}h1{{font-size:18pt}}table{{border-collapse:collapse;width:100%}}th{{background:#e7edf2}}td,th{{border:1px solid #aebfca;padding:5px}}p{{color:#526879}}</style></head><body><h1>{escape(title)}</h1><p>서영 POS 독립판 · {date.today().isoformat()} · {self.rowCount():,}건<br>{escape(info).replace(chr(10), '<br>')}</p><table cellspacing='0' cellpadding='4'><thead><tr>{headers}</tr></thead><tbody>{''.join(rows)}</tbody></table></body></html>"
+        return f"<html><head><style>body{{font-size:9pt;color:#172e40}}h1{{font-size:18pt}}table{{border-collapse:collapse;width:100%}}th{{background:#e7edf2}}td,th{{border:1px solid #aebfca;padding:5px}}p{{color:#526879}}</style></head><body><h1>{escape(title)}</h1><p>SY POS 독립판 · {date.today().isoformat()} · {self.rowCount():,}건<br>{escape(info).replace(chr(10), '<br>')}</p><table cellspacing='0' cellpadding='4'><thead><tr>{headers}</tr></thead><tbody>{''.join(rows)}</tbody></table></body></html>"
 
     def _paint_document(self, printer, title, info, parent=None):
         if not authorize_output(self, parent):
@@ -352,7 +355,7 @@ class Page(QWidget):
         if hasattr(self.window, "notify"):
             self.window.notify(text)
         else:
-            QMessageBox.information(self, "서영 POS 독립판", text)
+            QMessageBox.information(self, "SY POS 독립판", text)
 
     def fail(self, error):
         QMessageBox.warning(self, "처리할 수 없습니다", str(error))
@@ -409,7 +412,8 @@ class FormDialog(QDialog):
 
     def __init__(self, title, parent=None):
         super().__init__(parent)
-        self.setWindowTitle(f"{title} · 서영 POS 독립판")
+        self.setWindowModality(Qt.WindowModality.WindowModal)
+        self.setWindowTitle(f"{title} · SY POS 독립판")
         self.resize(570, 440)
         self.setMinimumWidth(460)
         self.body = QVBoxLayout(self)

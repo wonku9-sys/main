@@ -3,9 +3,10 @@ from PySide6.QtWidgets import QProxyStyle, QStyle
 
 
 MENU_HELP = {
+    "lucky_numbers":"재미용으로 1~45 중 중복 없는 6개를 한 번에 한 개씩 뽑습니다. 로그인 없이도 사용할 수 있습니다.",
     "home": "업무 첫화면으로 이동합니다. 저장하지 않은 입력이 있으면 먼저 확인합니다.",
-    "diary":"로그인 후 별도 일기장 암호로 잠금을 해제합니다. 제목·본문은 암호화 저장되며 5분 동안 사용하지 않으면 잠깁니다.",
-    "worklog":"내 업무일지를 날짜별로 작성·검색하고 인쇄·엑셀 저장합니다. 보안 일기장과 달리 별도 암호화하지 않습니다.",
+    "diary":"일기장 암호를 한 번 입력하면 같은 로그인 동안 다시 열 수 있습니다. 달력·태그·검색·소중한 일기로 기록을 찾으며 자리 비움 시 잠그고 닫기를 사용하세요.",
+    "worklog":"업무·인수인계·물동량·인력·보관율·관리 손익을 기록하고 일·주·요일 통계를 봅니다. 업무 자료와 첨부는 별도 암호화하지 않습니다.",
     "household":"개인 수입·지출·잔액을 관리합니다. 매장 장부와 분리되며 별도 암호를 선택할 수 있습니다.",
     "products": "상품코드·바코드·상품명·규격으로 검색하고 상품과 확장단위를 관리합니다.",
     "categories": "대·중·소분류를 관리합니다. 항목을 오른쪽 클릭하면 추가·수정·삭제할 수 있습니다.",
@@ -20,8 +21,13 @@ MENU_HELP = {
     "purchase_statement": "공급사별 과세·면세·포함 부가세를 내부 관리용으로 집계합니다. 전자세금계산서 발급은 하지 않습니다.",
     "payments": "공급사별 미지급잔액·거래·결제 이력을 조회하고 부분 지급을 기록합니다. 당일 결제는 취소할 수 있습니다.",
     "sales": "매출전표와 고객반품을 조회하고 판매·수금 내역을 기록합니다.",
+    "sales_cancelled":"취소된 판매 전표를 기간·번호로 조회합니다. 취소 이력은 보존하며 확정 매출에서 제외합니다.",
+    "sales_held":"저장한 판매 초안·보류를 조회합니다. 보류 전표는 확정 전까지 재고·대금에 반영되지 않습니다.",
     "ledger": "거래처의 기간 전 이월·거래·입출금과 누적잔액을 확인합니다.",
     "inventory": "상품별 현재고와 입출고 이력, 이동평균 원가를 조회합니다.",
+    "opening_stock": "재고이동이 없는 상품의 시작 수량·단가를 1회 기록하고 기초재고에 반영합니다.",
+    "stock_waste": "현재고 이내의 폐기 수량과 사유를 기록하고 재고 수량·원가를 차감합니다.",
+    "inventory_assets": "기간별 기초·매입·판매·반품·폐기·조정 증감과 기말 재고자산 원가액을 확인합니다.",
     "counts": "실제 재고를 초안으로 입력하고 차이를 검토한 뒤 장부에 반영합니다.",
     "closings": "담당자별 현금과 월말 재고를 확인하고 마감합니다.",
     "members": "회원정보·포인트 내역·회원별 지정가격을 관리합니다.",
@@ -77,6 +83,13 @@ def attach_help(widget, text):
 class MenuHelpStyle(QProxyStyle):
     def __init__(self):
         super().__init__("Fusion")
+
+    def polish(self,widget):
+        from PySide6.QtWidgets import QSpinBox,QDoubleSpinBox
+        if isinstance(widget,(QSpinBox,QDoubleSpinBox)):
+            hint='▲ 값을 늘립니다 · ▼ 값을 줄입니다. 숫자를 직접 입력할 수도 있습니다.'
+            if hint not in widget.toolTip():widget.setToolTip((widget.toolTip()+'\n'+hint).strip())
+        return super().polish(widget)
 
     def styleHint(self, hint, option=None, widget=None, returnData=None):
         if hint == QStyle.StyleHint.SH_ToolTip_WakeUpDelay:

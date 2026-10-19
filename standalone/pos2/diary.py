@@ -12,6 +12,7 @@ from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from .common import day, now, text
+from .worklog import WorkLogMixin,WORKLOG_SCHEMA
 
 DIARY_SCHEMA = """
 CREATE TABLE IF NOT EXISTS diary_vaults (
@@ -52,7 +53,9 @@ def _open(key,cipher,aad):
     return AESGCM(bytes(key)).decrypt(cipher[:12],cipher[12:],aad)
 
 
-class DiaryMixin:
+DIARY_SCHEMA+=WORKLOG_SCHEMA
+
+class DiaryMixin(WorkLogMixin):
     def _diary_require_key(self,key):
         self.require_menu("diary")
         try: token = (self.actor["id"],sha256(bytes(key)).digest(),self._current_restore_token())
@@ -66,6 +69,8 @@ class DiaryMixin:
 
     def lock_diary(self):
         self._diary_unlock_token = None
+        from .private_session import forget_key
+        forget_key(self,"diary")
 
     def diary_exists(self):
         self.require_menu("diary")
@@ -129,6 +134,8 @@ class DiaryMixin:
                 if len(key)!=32: raise ValueError()
             except (InvalidTag,ValueError,TypeError): raise ValueError("일기장 잠금을 다시 해제하세요.") from None
             content = {"date":day(data.get("date")),"title":text(data.get("title","제목 없음"),"제목",True,200),"body":text(data.get("body",""),"일기",maximum=100000),"mood":text(data.get("mood","평온"),"기분",maximum=40)}
+            from .household_parse import normalize_tags
+            content.update(tags=normalize_tags(data.get('tags',[])),bookmark=bool(data.get('bookmark',False)))
             identifier = identifier or uuid4().hex
             cipher = _seal(key,json.dumps(content,ensure_ascii=False).encode(),_aad(user,identifier))
             stamp = now()
@@ -171,6 +178,9 @@ class DiaryMixin:
             if identifier:
                 if not self.db.execute("UPDATE work_logs SET date=?,title=?,body=?,updated_at=? WHERE id=? AND user_id=?",(*values,stamp,identifier,self.actor["id"])).rowcount:raise ValueError("업무일지를 찾을 수 없습니다.")
             else:identifier = self.db.execute("INSERT INTO work_logs(date,title,body,user_id,created_at,updated_at) VALUES(?,?,?,?,?,?)",(*values,self.actor["id"],stamp,stamp)).lastrowid
+            if 'details' in data:
+                from .worklog import validate_details
+                self.db.execute('INSERT INTO work_log_details VALUES(?,?) ON CONFLICT(work_log_id) DO UPDATE SET content=excluded.content',(identifier,json.dumps(validate_details(data['details']),ensure_ascii=False)))
             self._audit("update" if data.get("id") else "save","work_log",identifier,{})
             return identifier
 

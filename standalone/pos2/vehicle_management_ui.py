@@ -14,11 +14,13 @@ def official_site(parent,kind):
 
 class VehicleReportDialog(QDialog):
     def __init__(self,store,key,identifier,parent=None):
-        super().__init__(parent);self.store,self.key,self.identifier=store,key,identifier;self.setWindowTitle('차량 월별·기간별 유지비 · 연비 참고 리포트');self.resize(920,690)
+        super().__init__(parent);self.store,self.key,self.identifier=store,key,identifier;self.setWindowTitle('차량 월별·기간별 유지비 · 연비 참고 리포트');self.resize(1080,850)
         body=QVBoxLayout(self);row=QHBoxLayout();self.start,self.end=date_field(),date_field();self.start.setDate(self.start.date().addMonths(-6))
         for widget in (self.start,QLabel('~'),self.end):row.addWidget(widget)
         row.addWidget(action('조회',self.refresh));body.addLayout(row)
         self.summary=QLabel();self.summary.setWordWrap(True);body.addWidget(self.summary)
+        from .household_finance_ui import MoneyChart
+        charts=QHBoxLayout();self.cost_chart=MoneyChart('pie',title='어디에 유지비를 썼을까요?');self.month_chart=MoneyChart('bar',title='월별 차량 유지비',keep_order=True);charts.addWidget(self.cost_chart);charts.addWidget(self.month_chart);body.addLayout(charts)
         self.months=DataGrid(['월','유지비 합계']);body.addWidget(self.months,1)
         self.categories=DataGrid(['비용 종류','금액']);body.addWidget(self.categories,1)
         self.fuel=DataGrid(['시작일','종료일','주행 km','연료 L','참고 km/L']);body.addWidget(self.fuel,1)
@@ -29,12 +31,15 @@ class VehicleReportDialog(QDialog):
         try:
             r=self.store.household_vehicle_report(self.key,self.identifier,self.start.date().toString('yyyy-MM-dd'),self.end.date().toString('yyyy-MM-dd'))
             self.summary.setText('기간 유지비 '+won(r['expense_total'])+'원 · 만땅법 참고 연비 '+(str(r['km_per_liter'])+' km/L' if r['km_per_liter'] is not None else '계산 가능한 기록 부족')+(' · 불완전한 구간 제외' if r['uncertain'] else ''))
+            self.summary.setText(self.summary.text()+'\n주유비 '+won(r['fuel_total'])+'원 · 구매 주유량 '+str(r['purchased_liters'])+' L · 평균 구매단가 '+(won(r['average_unit_price'])+'원/L' if r['average_unit_price'] is not None else '주유량 미입력'))
+            self.cost_chart.set_values([(VEHICLE_TYPES[v['name']],v['amount']) for v in r['categories']]);self.month_chart.set_values([(v['month'],v['expense_total']) for v in r['months']])
             self.months.fill([[v['month'],v['expense_total']] for v in r['months']]);self.categories.fill([[VEHICLE_TYPES[v['name']],v['amount']] for v in r['categories']])
             self.fuel.fill([[v[k] for k in ('start','end','distance','liters','km_per_liter')] for v in r['segments']])
         except (ValueError,PermissionError) as exc:QMessageBox.warning(self,'차량 리포트',str(exc))
     def wipe(self):
         for grid in (self.months,self.categories,self.fuel):grid.fill([])
         self.summary.clear()
+        self.cost_chart.set_values([]);self.month_chart.set_values([])
     def reject(self):self.wipe();super().reject()
 
 

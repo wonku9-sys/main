@@ -154,7 +154,7 @@ class LabelDialog(QDialog):
         super().__init__(parent)
         self.store = store
         store._require("catalog")
-        self.setWindowTitle("상품 라벨 · 바코드 출력 · 서영 POS 독립판")
+        self.setWindowTitle("상품 라벨 · 바코드 출력 · SY POS 독립판")
         self.resize(1000, 760)
         self.body = QVBoxLayout(self)
         heading = QLabel("라벨 출력")

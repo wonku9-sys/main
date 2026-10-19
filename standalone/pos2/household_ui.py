@@ -36,12 +36,13 @@ class CashCalendar(QCalendarWidget):
 
 class HouseholdPage(Page):
     def __init__(self,window):
-        super().__init__(window,"나의 가계부","개인 수입·지출·잔액 · 매장 매입/판매·결제·회원 포인트에 영향을 주지 않습니다.")
+        super().__init__(window,"나의 가계부","통장과 생활비를 한눈에 · 첫 잠금 해제 후 같은 로그인 동안 다시 열기")
         self.menu_key="household"
         panel=QWidget();panel.setStyleSheet("background:#FFF7EC;border-radius:12px;")
         body=QVBoxLayout(panel);body.setContentsMargins(32,32,32,32)
         title=QLabel("한눈에 정리하는 나의 생활");title.setStyleSheet("font-size:25px;color:#9B7049;font-weight:700;")
         body.addWidget(title)
+        body.addWidget(QLabel("나의 가계부 · 열기 / 개인 암호 설정 / 이메일 복구"))
         note=QLabel("수입과 지출을 분류별로 기록하고 기간별 합계를 확인합니다.\n\n원하면 로그인 암호와 별도로 가계부 암호를 설정할 수 있습니다.\n암호를 설정한 자료는 암호화 저장되며, 이메일 복구는 암호를 잊기 전에 미리 등록해야 합니다.\n\n‘암호 없이 사용’은 별도 암호 보호를 제공하지 않습니다. 개인 금융정보에는 암호 사용을 권장합니다.");note.setWordWrap(True);body.addWidget(note)
         body.addWidget(action("가계부 열기",self.open_book,primary=True))
         body.addWidget(action("가계부 암호 찾기 · 이메일 인증",self.email_reset))
@@ -51,6 +52,12 @@ class HouseholdPage(Page):
         from .email_ui import EmailCodeDialog
         EmailCodeDialog(self.store,"household_reset",self).exec()
     def open_book(self):
+        from .independent_windows import active_personal
+        if active_personal(self,'household'):return
+        from .private_session import cached_key
+        cached=cached_key(self.store,"household")
+        if cached is not None:
+            self.show_book(cached);return
         try:state=self.store.household_status()
         except (ValueError,PermissionError) as exc:self.fail(exc);return
         if not state["exists"]:
@@ -70,6 +77,7 @@ class HouseholdPage(Page):
         key=None
         if state["password_enabled"]:
             dialog=FormDialog("가계부 잠금 해제",self)
+            guide=QLabel("나의 가계부\n개인 가계부 암호를 한 번 입력하면 같은 로그인 중에는 다시 묻지 않습니다.");guide.setWordWrap(True);dialog.body.insertWidget(1,guide)
             password=dialog.field("password","가계부 암호",password=True)
             holder={}
             def unlock():
@@ -80,22 +88,27 @@ class HouseholdPage(Page):
             password.clear()
         else:key=self.store.unlock_household()
         if key is not None:
-            book=HouseholdDialog(self.store,key,self)
-            try:book.exec()
-            finally:book.wipe();book.deleteLater()
+            self.show_book(key)
+
+    def show_book(self,key):
+        from .independent_windows import show_personal
+        book=HouseholdDialog(self.store,key,self)
+        show_personal(self,'household',book)
 
 
 class HouseholdDialog(QDialog):
     def __init__(self,store,key,parent=None):
         if getattr(store,'is_shared_client',False):store=store.private
         super().__init__(parent);self.store,self.key=store,key;self.menu_key="household";self.read_permissions=()
+        from .private_session import remember_key
+        remember_key(store,"household",key)
         self.closed_securely=False;self.setWindowTitle("나의 가계부 · 수입과 지출");self.resize(1150,760)
         self.setStyleSheet("QDialog {background:#FFF9F6;} QTableWidget {alternate-background-color:#FFF8FA;selection-background-color:#F2DDEB;} #cashCard {background:#F2F8EE;border:1px solid #DDEAD7;border-radius:12px;} #memoCard {background:#FFF0E9;border:1px solid #F1DACE;border-radius:12px;} QCalendarWidget {background:#FFFFFF;border:1px solid #E9DEEB;border-radius:12px;} QCalendarWidget QToolButton {color:#876A88;background:#F7EFF7;} QTextEdit {background:#FFFCF2;border:1px solid #EBDCD1;border-radius:8px;padding:10px;}")
         outer=QVBoxLayout(self);outer.setContentsMargins(0,0,0,0);scroll=QScrollArea(self);scroll.setWidgetResizable(True);container=QWidget();container.setObjectName('personalSurface');self.body=QVBoxLayout(container);scroll.setWidget(container);outer.addWidget(scroll)
-        heading=QHBoxLayout();title=QLabel("나의 수입과 지출");title.setStyleSheet("font-size:23px;color:#947044;font-weight:700;")
+        heading=QHBoxLayout();title=QLabel("나의 가계부");title.setObjectName('personalHeading');title.setStyleSheet("font-size:23px;color:#947044;font-weight:700;")
         from .personal_themes import theme_picker
         self.theme=theme_picker(store,'household',self)
-        heading.addWidget(title,1);heading.addWidget(self.theme);heading.addWidget(action("암호 설정·변경",self.password_settings));heading.addWidget(action("이메일 복구 등록",self.email_enable));heading.addWidget(action("잠그고 닫기",self.reject));self.body.addLayout(heading)
+        heading.addWidget(title,1);heading.addWidget(self.theme);heading.addWidget(action("암호 설정·변경",self.password_settings));heading.addWidget(action("이메일 복구 등록",self.email_enable));heading.addWidget(action("잠그고 닫기",self.lock_close));heading.addWidget(action("닫기",self.reject));self.body.addLayout(heading)
         row=QHBoxLayout();self.start,self.end=date_field(date.today().replace(day=1)),date_field()
         self.category=QComboBox();self.account=QComboBox();self.search=QLineEdit();self.search.setPlaceholderText("내용 · 분류 · 메모 · #태그 검색")
         for control in (self.start,QLabel("~"),self.end,self.account,self.category,self.search):row.addWidget(control)
@@ -109,6 +122,8 @@ class HouseholdDialog(QDialog):
         content=QHBoxLayout();left=QVBoxLayout()
         self.calendar=CashCalendar();self.calendar.setVerticalHeaderFormat(QCalendarWidget.VerticalHeaderFormat.NoVerticalHeader);self.calendar.setMinimumWidth(290);self.calendar.setMinimumHeight(295);self.calendar.setMaximumHeight(320)
         left.addWidget(self.calendar)
+        from .calendar_actions import attach_calendar_menu
+        attach_calendar_menu(self.calendar,self.calendar_menu)
         legend=QLabel('● 초록 수입  ·  분홍 지출  ·  금색 메모');legend.setStyleSheet('font-size:10px;');left.addWidget(legend)
         card=QFrame();card.setObjectName("memoCard");memo_layout=QVBoxLayout(card)
         self.memo_date=date.today().isoformat();self.memo_heading=QLabel();self.memo_heading.setStyleSheet("font-size:15px;color:#A17B6C;font-weight:600;")
@@ -125,6 +140,7 @@ class HouseholdDialog(QDialog):
         self.fixed_notice=QLabel();self.fixed_notice.setWordWrap(True);self.body.addWidget(self.fixed_notice)
         foot=QLabel("달력은 기록된 일별 지출·무지출을 표시합니다. 실제 은행 잔액과 자동 동기화하지 않습니다.\n통장·분류·검색을 지정하면 거래내역 잔액은 그 조건 기준입니다. 통장 한눈에·차량·고정비는 기간만 적용합니다.");foot.setWordWrap(True);self.body.addWidget(foot)
         self.grid.cellDoubleClicked.connect(lambda *_:self.edit());self.search.returnPressed.connect(self.refresh)
+        self.grid.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu);self.grid.customContextMenuRequested.connect(self.transaction_menu)
         from .popup_sound import sound_checkbox
         personal=QHBoxLayout();self.body.addLayout(personal)
         self.popup_sound=sound_checkbox(store);personal.addWidget(self.popup_sound);personal.addStretch()
@@ -206,7 +222,7 @@ class HouseholdDialog(QDialog):
         if dialog.exec():self.refresh()
         total.clear();dialog.deleteLater()
     def fixed_alerts(self):
-        if self.closed_securely or not self.isVisible() or QApplication.activeModalWidget() is not self:return
+        if self.closed_securely or not self.isVisible() or QApplication.activeModalWidget() not in {None,self}:return
         try:rows=self.store.due_household_fixed_alerts(self.key)
         except (ValueError,PermissionError):return
         if rows:
@@ -242,6 +258,13 @@ class HouseholdDialog(QDialog):
     def select_day(self,value):
         if not self.confirm_memo():self.calendar.setSelectedDate(QDate.fromString(self.memo_date,"yyyy-MM-dd"));return
         self.memo_date=value.toString("yyyy-MM-dd");self.start.setDate(value);self.end.setDate(value);self.load_memo();self.refresh()
+    def calendar_menu(self,selected,position):
+        self.select_day(selected)
+        if self.memo_date!=selected.toString('yyyy-MM-dd'):return
+        self.calendar.setSelectedDate(selected)
+        from .calendar_actions import schedule_menu
+        def add(kind):self.editor(initial={'date':self.memo_date,'kind':kind})
+        schedule_menu(self.store,selected,position,self,self.refresh,extra=[('이 날짜 지출 기록',lambda:add('expense')),('이 날짜 수입 기록',lambda:add('income')),('비공개 메모 작성·수정',lambda:self.memo.setFocus())])
     def select_month(self,year,month):
         if not self.confirm_memo():return
         first=QDate(year,month,1);self.start.setDate(first);self.end.setDate(QDate(year,month,first.daysInMonth()))
@@ -262,6 +285,7 @@ class HouseholdDialog(QDialog):
         title=dialog.field("title","내용 *",record.get("title",""))
         amount=dialog.field("amount","금액 (원, 소수점 두 자리)",record.get("amount",""))
         memo=dialog.field("memo","메모",record.get("memo",""))
+        payee=dialog.field('payee','거래처·사용자 (가게·가족 이름 등)',record.get('payee',''))
         tags=dialog.field('tags','태그 (#여행 #가족 등)',' '.join('#'+t for t in record.get('tags',[])))
         car=dialog.combo('car','차량 연동',[('차량 아님','')]+[(r['name'],r['id']) for r in self.store.household_vehicles(self.key)],record.get('vehicle_id',''))
         car_kind=dialog.combo('type','차량 비용 종류',[(v,k) for k,v in VEHICLE_TYPES.items()],record.get('vehicle_type') or 'fuel')
@@ -289,7 +313,7 @@ class HouseholdDialog(QDialog):
         car.currentIndexChanged.connect(car_fields);car_kind.currentIndexChanged.connect(car_fields);car_fields()
         def save():
             try:
-                self.store.save_household_entry(self.key,{"date":entry_date.date().toString("yyyy-MM-dd"),"kind":kind.currentData(),"category":category.text(),"title":title.text(),"amount":amount.text(),"memo":memo.text(),'tags':tags.text(),'account_id':account.currentData(),'vehicle_id':car.currentData(),'vehicle_type':car_kind.currentData() if car.currentData() else '', 'liters':liters.text() if liters.isEnabled() else '', 'odometer':odometer.text() if car.currentData() else '', 'vehicle_vendor':vendor.text(),'vehicle_detail':detail.text(),'fuel_kind':fuel.text(),'full_tank':full.isChecked(),'insurance_start':insurance_start.text(),'insurance_end':insurance_end.text()},record_values.get("id"));dialog.accept()
+                self.store.save_household_entry(self.key,{"date":entry_date.date().toString("yyyy-MM-dd"),"kind":kind.currentData(),"category":category.text(),"title":title.text(),"amount":amount.text(),"memo":memo.text(),'payee':payee.text(),'tags':tags.text(),'account_id':account.currentData(),'vehicle_id':car.currentData(),'vehicle_type':car_kind.currentData() if car.currentData() else '', 'liters':liters.text() if liters.isEnabled() else '', 'odometer':odometer.text() if car.currentData() else '', 'vehicle_vendor':vendor.text(),'vehicle_detail':detail.text(),'fuel_kind':fuel.text(),'full_tank':full.isChecked(),'insurance_start':insurance_start.text(),'insurance_end':insurance_end.text()},record_values.get("id"));dialog.accept()
             except (ValueError,PermissionError) as exc:dialog.error(exc)
         dialog.scroll_form();dialog.finish(save)
         accepted=dialog.exec()
@@ -299,6 +323,36 @@ class HouseholdDialog(QDialog):
         values.clear();dialog.deleteLater()
         if accepted:self.refresh()
     def add(self):self.editor()
+    def transaction_menu(self,position):
+        from PySide6.QtWidgets import QMenu
+        item=self.grid.indexAt(position)
+        if item.isValid():self.grid.selectRow(item.row())
+        menu=QMenu(self);menu.addAction('수입·지출 추가',self.add);row=self.grid.selected()
+        if row and row['kind'] in {'income','expense'}:
+            menu.addAction('선택 거래 수정',lambda:self.editor(row));menu.addAction('사진·문서 첨부',self.attach);menu.addAction('거래 나누기',self.split_entry)
+        menu.addSeparator();menu.addAction('재무·예산·목표·보고서 열기',lambda:self.finances.setCurrentIndex(5))
+        self._transaction_context=menu;menu.popup(self.grid.viewport().mapToGlobal(position))
+    def split_entry(self):
+        from PySide6.QtWidgets import QTableWidget,QTableWidgetItem
+        row=self.grid.selected()
+        if not row or row['kind'] not in {'income','expense'}:return
+        d=FormDialog('거래 나누기 · 합계 보존',self);d.resize(760,520)
+        note=QLabel('원래 금액 '+won(row['amount'])+'원 · 같은 날짜·통장·수입/지출로 분리합니다.\n첫 번째 세부 거래에 원래 첨부파일을 유지합니다. 차량·고정비 거래는 분할하지 않습니다.');note.setWordWrap(True);d.body.addWidget(note)
+        grid=QTableWidget(10,3);grid.setHorizontalHeaderLabels(['분류','내용','금액']);d.body.addWidget(grid,1)
+        for c,value in enumerate((row['category'],row['title'],str(row['amount']))):grid.setItem(0,c,QTableWidgetItem(value))
+        total=QLabel();d.body.addWidget(total)
+        def parts():return [dict(zip(('category','title','amount'),[(grid.item(r,c).text().strip() if grid.item(r,c) else '') for c in range(3)])) for r in range(grid.rowCount()) if any(grid.item(r,c) and grid.item(r,c).text().strip() for c in range(3))]
+        def calculate():
+            try:total.setText('합계 '+won(sum(Decimal(p['amount'].replace(',','')) for p in parts()))+'원 · 원금과 같아야 저장됩니다.')
+            except Exception:total.setText('금액을 숫자로 입력하세요.')
+        grid.itemChanged.connect(lambda *_:calculate());calculate()
+        def save():
+            try:self.store.split_household_entry(self.key,row['id'],parts());d.accept()
+            except (ValueError,PermissionError) as exc:d.error(exc)
+        d.finish(save)
+        try:
+            if d.exec():self.refresh()
+        finally:grid.clearContents();d.deleteLater()
     def edit(self):
         if self.finances.currentIndex()!=0:return
         row=self.grid.selected()
@@ -313,6 +367,7 @@ class HouseholdDialog(QDialog):
             except (ValueError,PermissionError) as exc:QMessageBox.warning(self,"삭제 실패",str(exc))
     def password_settings(self):
         dialog=FormDialog("가계부 암호 설정·변경",self)
+        guide=QLabel("나의 가계부\n별도 암호 사용 여부와 새 암호를 설정합니다. 같은 로그인 중에는 닫았다 다시 열어도 잠금 해제를 유지합니다.");guide.setWordWrap(True);dialog.body.insertWidget(1,guide)
         enabled=QCheckBox("별도 암호 사용");enabled.setChecked(self.store.household_status()["password_enabled"]);dialog.form.addRow(enabled)
         password=dialog.field("password","새 가계부 암호 (8~128자)",password=True);confirm=dialog.field("confirm","새 암호 확인",password=True)
         note=QLabel("암호 사용을 끄면 별도 암호 보호가 없어집니다. 현재 열려 있는 가계부에만 적용합니다.");note.setWordWrap(True);dialog.body.addWidget(note)
@@ -323,7 +378,7 @@ class HouseholdDialog(QDialog):
     def email_enable(self):
         from .email_ui import EmailCodeDialog
         EmailCodeDialog(self.store,"household_enable",self).exec()
-        # Recovery setup verifies the password separately and relocks the key.
+        # Recovery verifies a separate key copy; normal close still honours memo saving.
         self.reject()
     def export(self):
         self.store._require_household_key(self.key);self.finances.active_grid().export(self,"개인 가계부 · "+self.finances.tabText(self.finances.currentIndex()))
@@ -333,28 +388,30 @@ class HouseholdDialog(QDialog):
         if event.type() in {QEvent.Type.KeyPress,QEvent.Type.MouseButtonPress,QEvent.Type.MouseMove,QEvent.Type.Wheel} and isinstance(watched,QWidget) and (watched is self or self.isAncestorOf(watched)):self.last_activity=time.monotonic()
         return False
     def check_idle(self):
+        if self.closed_securely:return
+        try:self.store._require_household_key(self.key)
+        except (ValueError,PermissionError):
+            self._lock_on_close=True;self.wipe();QDialog.reject(self);return
         self.fixed_alerts()
         if not self.closed_securely:
             from .health_report_ui import show_health_alerts
             show_health_alerts(self.store,'household',self.key,self)
-            if self.isVisible() and QApplication.activeModalWidget() is self and time.monotonic()-getattr(self,'_last_vehicle_alert',0)>=60:
+            if self.isVisible() and QApplication.activeModalWidget() in {None,self} and time.monotonic()-getattr(self,'_last_vehicle_alert',0)>=60:
                 self._last_vehicle_alert=time.monotonic()
                 try:alerts=self.store.due_household_vehicle_alerts(self.key)
                 except (ValueError,PermissionError):alerts=[]
                 if alerts:QMessageBox.information(self,'차량 납부·정비 예정 확인','\n'.join(r['vehicle']+' · '+r['title']+' · '+r['due_date']+(' / '+r['due_km']+'km' if r['due_km'] else '') for r in alerts)+'\n\n실제 차량 상태와 납부 여부를 확인하세요. 자동 송금하거나 차량 상태를 판정하지 않습니다.')
         if not self.closed_securely and time.monotonic()-self.last_fixed_check>=60 and QApplication.activeModalWidget() in {None,self}:self.refresh()
-        if not self.closed_securely and self.isVisible() and QApplication.activeModalWidget() is self:
+        if not self.closed_securely and self.isVisible() and QApplication.activeModalWidget() in {None,self}:
             try:records=self.store.due_desk_alerts()
             except (ValueError,PermissionError):records=[]
             if records:
                 from .alert_ui import ScheduleAlertDialog
                 ScheduleAlertDialog(records,self).exec()
-        # Do not discard an editor's unsaved entries. Its own home/close guard
-        # remains active; lock when it closes after an idle timeout.
-        if time.monotonic()-self.last_activity>=300 and QApplication.activeModalWidget() in {None,self}:
-            self.hide()
-            if self.snapshot()!=self.memo_saved:self.save()
-            self.wipe();QDialog.reject(self)
+    def lock_close(self):
+        self._lock_on_close=True
+        try:self.reject()
+        finally:self._lock_on_close=False
     def wipe(self):
         if self.closed_securely:return
         from .popup_sound import play_popup
@@ -365,7 +422,9 @@ class HouseholdDialog(QDialog):
         from .attachment_ui import scrub_attachments
         scrub_attachments(self)
         self.finances.wipe();self.account.clear();self.category.clear();self.fixed_notice.clear();self.budget_label.clear();self.comparison.clear();self.budget_bar.setValue(0);self.calendar.spending={};self.calendar.marks={};self.calendar.updateCells()
-        self.key[:]=bytes(len(self.key));self.store.lock_household();self.grid.fill([]);self.summary.clear();self.search.clear();self.memo.clear()
+        self.key[:]=bytes(len(self.key))
+        if getattr(self,"_lock_on_close",False):self.store.lock_household()
+        self.grid.fill([]);self.summary.clear();self.search.clear();self.memo.clear()
         guard=getattr(self,"_navigation_guard",None)
         if guard:guard.snapshots.pop(self,None)
     def reject(self):
