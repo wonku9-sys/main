@@ -1056,6 +1056,9 @@ def default_data_dir(demo=False):
 
 
 def main(argv=None):
+    from .extended_ui import install
+    install()
+
     parser = argparse.ArgumentParser(description="서영 POS — 오프라인 매입·매출·재고 관리")
     parser.add_argument("--data-dir", type=Path, help="SQLite 자료 폴더 (기본값: 사용자 자료 폴더 또는 포터블 data)")
     parser.add_argument("--demo", action="store_true", help="실제 자료와 분리된 샘플 데이터로 실행")

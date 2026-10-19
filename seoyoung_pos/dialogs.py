@@ -299,7 +299,20 @@ class ProductDialog(BusinessDialog):
             form = QVBoxLayout()
             form.setSpacing(6)
             form.addWidget(QLabel(title))
-            form.addWidget(field)
+            if key == "code" and not record:
+                code_row = QHBoxLayout()
+                code_row.setSpacing(8)
+                code_row.addWidget(field, 1)
+                self.auto_code_button = QPushButton("상품코드 자동생성")
+                self.auto_code_button.setObjectName("product_auto_code_button")
+                self.auto_code_button.setToolTip(
+                    "등록된 숫자 상품코드의 다음 번호를 자동 입력합니다. 직접 입력한 코드는 변경하지 않습니다."
+                )
+                self.auto_code_button.clicked.connect(self.generate_product_code)
+                code_row.addWidget(self.auto_code_button)
+                form.addLayout(code_row)
+            else:
+                form.addWidget(field)
             grid.addLayout(form, row, column)
         self.unit = QComboBox()
         self.unit.addItems(["kg", "g", "개", "박스", "팩", "EA", "L", "mL"])
@@ -374,6 +387,20 @@ class ProductDialog(BusinessDialog):
         tabs.currentChanged.connect(self.load_history)
         self.buttons(callback=self.save)
         self.fields["name"].setFocus()
+
+    def generate_product_code(self):
+        """Fill only an empty product-code field; never touch the barcode field."""
+        if self.fields["code"].text().strip():
+            QMessageBox.information(
+                self, "상품코드 입력 확인",
+                "이미 상품코드가 입력되어 있습니다. 자동생성하려면 해당 칸을 먼저 비워 주세요.",
+            )
+            return
+        try:
+            self.fields["code"].setText(self.service.next_product_code())
+            self.fields["name"].setFocus()
+        except (ValueError, PermissionError) as error:
+            self.error(error)
 
     def load_history(self, tab_index: int):
         if not self.record or tab_index == 0:

@@ -358,6 +358,25 @@ class POSService:
         rows = self.db.execute("SELECT p.*,COALESCE(s.name,'') AS supplier_name FROM products p LEFT JOIN partners s ON s.id=p.supplier_id WHERE " + " AND ".join(clauses) + " ORDER BY p.name,p.id", params)
         return [self._product(row) for row in rows]
 
+    def next_product_code(self, minimum_width=6) -> str:
+        """Suggest the next unused numeric product code, preserving leading zeros.
+
+        Existing alphanumeric/manual codes and barcodes are ignored. Only the
+        ASCII-digit product-code namespace is sequential (000001, 000002, ...).
+        This is a suggestion, not a reservation: save_product's UNIQUE
+        constraint remains the final duplicate-code safeguard.
+        """
+        self._require("products")
+        if not isinstance(minimum_width, int) or not 1 <= minimum_width <= 12:
+            raise ValueError("상품코드 자릿수는 1~12자리여야 합니다.")
+        maximum = 0
+        width = minimum_width
+        for (code,) in self.db.execute("SELECT code FROM products"):
+            if code and code.isascii() and code.isdecimal():
+                maximum = max(maximum, int(code))
+                width = max(width, len(code))
+        return str(maximum + 1).zfill(width)
+
     def save_product(self, data, product_id=None) -> int:
         self._require("products")
         text_fields = ("code", "barcode", "name", "category", "specification", "unit", "origin", "memo")
