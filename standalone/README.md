@@ -1,4 +1,4 @@
-# 서영 POS 독립판 2.0.0
+# 서영 POS 독립판 2.0.1
 
 PDF 사용설명서의 오프라인 업무 절차를 분석해 새 패키지 `pos2`와 새 SQLite 데이터베이스로 만든 Windows 매장 관리 프로그램입니다. 기존 서영 POS 프로그램·화면 클래스·업무 DB를 가져오거나 변환하지 않습니다. 인터넷, 웹브라우저, 별도 서버, GitHub 로그인 없이 실행합니다.
 
@@ -11,6 +11,8 @@ PDF 사용설명서의 오프라인 업무 절차를 분석해 새 패키지 `po
 5. 이후 같은 폴더의 EXE를 실행하면 기존 자료가 유지됩니다. 실자료는 EXE 옆 `data-v2/seoyoung-standalone-v2.db`에 저장됩니다.
 
 Windows 10/11 x64용입니다. 프로그램과 데이터 폴더를 함께 보관하세요. 기존 프로그램 폴더에 덮어쓰지 마세요. PC를 바꾸려면 프로그램을 종료한 뒤 폴더 전체를 복사하거나 관리자 설정의 DB 백업을 사용하세요. 다른 프로그램의 DB는 열지 않습니다. 실행 중인 장부를 USB 드라이브에서 분리하거나 네트워크·동기화 드라이브에서 동시에 열지 마세요. 한 PC·한 매장 단독 운영이 대상입니다.
+
+화면·PDF·라벨의 한글 표시를 위해 OFL 라이선스의 Noto Sans KR 글꼴을 함께 제공합니다. Windows 언어팩이나 온라인 글꼴 다운로드가 필요하지 않습니다. ZIP의 내부 파일도 함께 압축 해제해야 합니다.
 
 `체험 실행.bat`이 있는 배포본에서는 별도 체험 자료로 화면과 기능을 확인할 수 있습니다. 체험 계정은 `demo` / `Standalone-Demo-2026!`이며 실자료 로그인에 사용할 수 없습니다. 체험 실행은 실제 장부와 다른 파일을 사용합니다.
 
@@ -59,4 +61,4 @@ QT_QPA_PLATFORM=offscreen uv run --frozen --extra dev python -m pos2 --smoke-tes
 uv run --frozen python -m pos2
 ```
 
-Windows PowerShell에서는 headless 검증이 필요할 때 `$env:QT_QPA_PLATFORM = 'offscreen'`을 먼저 설정합니다. 실제 화면 실행 시에는 이를 지우세요. Windows에서 `python build_portable.py`로 네이티브 EXE를 만듭니다. Linux 빌드는 Windows 실행 파일로 제공하지 않습니다.
+Windows PowerShell에서는 `$env:QT_QPA_PLATFORM = 'windows'`로 실제 Windows Qt 플랫폼을 사용해 검증합니다. Linux 클라우드 검증에는 `offscreen`을 사용합니다. Windows에서 `python build_portable.py`로 네이티브 EXE를 만듭니다. Linux 빌드는 Windows 실행 파일로 제공하지 않습니다.

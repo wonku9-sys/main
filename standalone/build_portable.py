@@ -13,6 +13,8 @@ import sysconfig
 import tempfile
 from zipfile import ZIP_DEFLATED, ZipFile
 
+from pos2 import __version__
+
 ROOT = Path(__file__).resolve().parent
 APP = "SeoyoungPOS-Standalone"
 DISTRIBUTIONS = ("PySide6", "PySide6-Essentials", "PySide6-Addons", "shiboken6", "openpyxl", "et-xmlfile", "python-barcode", "pyinstaller")
@@ -31,6 +33,8 @@ def licenses(destination):
     if python_notice is None:
         raise RuntimeError("The Python interpreter's original LICENSE.txt must be available before distribution.")
     shutil.copy2(python_notice, destination / "Python-LICENSE.txt")
+    shutil.copy2(ROOT / "pos2" / "assets" / "OFL.txt", destination / "NotoSansKR-OFL.txt")
+    shutil.copy2(ROOT / "pos2" / "assets" / "FONT_SOURCE.md", destination / "NotoSansKR-SOURCE.md")
     for name in DISTRIBUTIONS:
         distribution = metadata.distribution(name)
         copied = 0
@@ -78,11 +82,15 @@ def build(output, native=False):
     if not (ROOT / "README.md").is_file():
         raise RuntimeError("The independent application's README.md is required before packaging.")
     output.mkdir(parents=True, exist_ok=True)
+    assets = ROOT / "pos2" / "assets"
+    font = assets / "NotoSansKR-Regular.ttf"
+    if not font.is_file() or sha256(font.read_bytes()).hexdigest() != "194018e6b2b293a7964f037b25c0249ce1418bc9ab3c971060a03aa57861e252":
+        raise RuntimeError("The verified offline Korean font asset is missing or changed.")
     with tempfile.TemporaryDirectory(prefix="seoyoung-standalone-build-") as scratch:
         temporary = Path(scratch)
         command = [sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--onedir", "--windowed", "--name", APP,
                    "--paths", str(ROOT), "--distpath", str(output), "--workpath", str(temporary / "work"), "--specpath", str(temporary),
-                   "--hidden-import", "PySide6.QtPrintSupport", "--hidden-import", "PySide6.QtSvg", "--collect-all", "barcode", "--exclude-module", "seoyoung_pos", str(ROOT / "launch.py")]
+                   "--add-data", f"{assets}{os.pathsep}pos2/assets", "--hidden-import", "PySide6.QtPrintSupport", "--hidden-import", "PySide6.QtSvg", "--collect-all", "barcode", "--exclude-module", "seoyoung_pos", str(ROOT / "launch.py")]
         build_environment = dict(os.environ)
         build_environment["PYINSTALLER_CONFIG_DIR"] = str(temporary / "cache")
         subprocess.run(command, cwd=ROOT, env=build_environment, check=True)
@@ -90,7 +98,7 @@ def build(output, native=False):
     if not executable.is_file():
         raise RuntimeError("The frozen executable was not created.")
     environment = dict(os.environ)
-    environment["QT_QPA_PLATFORM"] = "offscreen"
+    environment["QT_QPA_PLATFORM"] = "windows" if sys.platform == "win32" else "offscreen"
     screenshot = output / f"{APP}-{label}-smoke.png"
     subprocess.run([str(executable), "--smoke-test", "--screenshot", str(screenshot)], cwd=bundle, env=environment, check=True, timeout=180)
     if not screenshot.is_file() or screenshot.stat().st_size < 1000:
@@ -103,7 +111,7 @@ def build(output, native=False):
         if source.name != "CONTRACT.md":
             shutil.copy2(source, documents / source.name)
     (bundle / "먼저_읽어주세요.txt").write_text(
-        "서영 POS 독립판 2.0.0\n\n"
+        f"서영 POS 독립판 {__version__}\n\n"
         + ("Windows 10/11 x64용 무설치 프로그램입니다.\n" if label == "Windows" else f"주의: 이 파일은 {label} 검증용이며 Windows 프로그램이 아닙니다.\n")
         + f"ZIP 전체를 쓰기 가능한 폴더에 압축 해제하고 {executable.name}을 실행하세요.\n"
         "Python 설치·서버·인터넷·카드 연동이 필요하지 않습니다.\n"

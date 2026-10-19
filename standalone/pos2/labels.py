@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 )
 
 from .widgets import DataGrid, action, amount, won
+from .font_support import font_family
 
 
 def barcode_bits(value, mode="auto"):
@@ -69,7 +70,7 @@ def paint_label(painter, item, size, mode="auto"):
     painter.save()
     painter.translate(size.offset_x, size.offset_y)
     painter.fillRect(QRectF(0, 0, size.width, size.height), Qt.GlobalColor.white)
-    font = QFont("Malgun Gothic")
+    font = QFont(font_family())
     font.setPixelSize(3 if size.height >= 30 else 2)
     font.setBold(True)
     painter.setFont(font)

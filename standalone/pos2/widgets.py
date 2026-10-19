@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QFrame, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMessageBox,
     QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
+from .font_support import font_family
 
 
 def won(value):
@@ -249,7 +250,7 @@ class DataGrid(QTableWidget):
         if not authorize_output(self, parent):
             return False
         document = QTextDocument()
-        document.setDefaultFont(QFont("Malgun Gothic", 9))
+        document.setDefaultFont(QFont(font_family(), 9))
         document.setHtml(self.document_html(title, info))
         if not authorize_output(self, parent):
             return False

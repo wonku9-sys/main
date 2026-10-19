@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import __version__
+from .font_support import font_family, verify_glyphs
 from .store import Store
 from .widgets import DataGrid, FormDialog, Page, ScanField, action, date_field, won
 
@@ -430,7 +431,13 @@ def main(argv=None):
     app.setApplicationName("서영 POS 독립판")
     app.setOrganizationName("SeoyoungStandalone")
     app.setStyle("Fusion")
-    app.setFont(QFont("Malgun Gothic" if sys.platform == "win32" else "Noto Sans CJK KR", 10))
+    try:
+        app.setFont(QFont(font_family(), 10))
+    except RuntimeError as exc:
+        if args.smoke_test:
+            raise
+        QMessageBox.critical(None, "글꼴 파일 오류", str(exc))
+        return 1
     app.setStyleSheet(STYLE)
     scratch = tempfile.TemporaryDirectory(prefix="seoyoung-v2-") if args.smoke_test else None
     directory = Path(scratch.name) if scratch else args.data_dir or data_directory()
@@ -462,6 +469,7 @@ def main(argv=None):
             def verify():
                 try:
                     if args.smoke_test:
+                        verify_glyphs()
                         assert len(store.products()) == 6
                         assert len(store.documents(status="posted")) >= 9
                         for key in window.items:

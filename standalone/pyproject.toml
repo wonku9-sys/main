@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "seoyoung-pos-standalone"
-version = "2.0.0"
+version = "2.0.1"
 description = "Offline Korean desktop retail management, independently designed from manual workflows"
 requires-python = ">=3.12,<3.13"
 dependencies = [
@@ -23,6 +23,9 @@ seoyoung-standalone = "pos2.app:main"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["pos2*"]
+
+[tool.setuptools.package-data]
+pos2 = ["assets/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
