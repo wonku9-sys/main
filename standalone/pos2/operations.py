@@ -119,6 +119,7 @@ class OperationsMixin:
             raise ValueError("실사할 상품을 한 개 이상 선택하세요.")
         with self._tx():
             self._require("inventory")
+            self._require_capability("counts", "create")
             self._assert_open(count_day)
             rows, seen = [], set()
             for item in items:
@@ -191,6 +192,7 @@ class OperationsMixin:
         self._require("inventory")
         with self._tx():
             self._require("inventory")
+            self._require_capability("counts", "edit")
             count = self.db.execute("SELECT * FROM inventory_counts WHERE id=?", (count_id,)).fetchone()
             if not count or count["status"] != "draft":
                 raise ValueError("미적용 초안 실사만 재고에 적용할 수 있습니다.")
@@ -221,6 +223,7 @@ class OperationsMixin:
         self._require("inventory")
         with self._tx():
             self._require("inventory")
+            self._require_capability("counts", "delete")
             row = self.db.execute("SELECT status FROM inventory_counts WHERE id=?", (count_id,)).fetchone()
             if not row or row[0] != "draft":
                 raise ValueError("미적용 초안 실사만 삭제할 수 있습니다.")
@@ -244,6 +247,7 @@ class OperationsMixin:
         return result
 
     def inventory_close(self, month):
+        self._require_capability("closings", "create")
         self._require("inventory")
         try:
             if len(month) != 7 or month[4] != "-":
@@ -256,6 +260,7 @@ class OperationsMixin:
             raise ValueError("마감월은 YYYY-MM 형식으로 입력하세요.") from None
         self._not_future(end, "월 재고마감")
         with self._tx():
+            self._require_capability("closings", "create")
             self._require("inventory")
             self._assert_open(end)
             rows = self.db.execute(
@@ -336,6 +341,7 @@ class OperationsMixin:
         memo = text(data.get("memo"), "메모")
         with self._tx():
             self._require("trade")
+            self._require_capability("closings", "create")
             self._assert_cash_open(close_day)
             values = self._cash_expected(close_day, self.actor["id"])
             expected = _bounded(opening + values["cash_net"], "예상 현금")

@@ -12,6 +12,11 @@ from .workflow_ui import KINDS, PartnerPicker, TradeDialog, _confirm, _date, _wa
 class SupplierPaymentDialog(QDialog):
     read_permissions = ("trade",)
 
+    def reject(self):
+        from .navigation import confirm_dialog_exit
+        if confirm_dialog_exit(self):
+            super().reject()
+
     def __init__(self, window, partner_id):
         super().__init__(window)
         self.store, self.partner_id, self.saved_id, self.snapshot = window.store, partner_id, None, None
@@ -99,6 +104,8 @@ class SupplierPaymentDialog(QDialog):
                 return
             self.saved_id = self.store.settle_supplier(self.partner_id, value, _date(self.date), self.method.currentData(), self.memo.text(), self.snapshot["state"])
             self.save_button.setEnabled(False)
+            from .navigation import mark_saved
+            mark_saved(self)
             self.accept()
         except (ValueError, PermissionError) as exc:
             self.error.setText(str(exc))
@@ -143,7 +150,7 @@ class SupplierPaymentsPage(Page):
         self.body.removeWidget(self.grid)
         self.ledger_grid = DataGrid(["일자", "구분", "전표번호", "거래액", "지급·환급", "누적잔액", "메모"])
         self.history_grid = DataGrid(["결제일", "결제번호", "공급사코드", "공급사명", "구분", "결제금액", "방법", "담당자", "상태", "메모"])
-        for name, grid in (("외상매입 현황", self.grid), ("거래·매입 내역", self.ledger_grid), ("결제 내역", self.history_grid)):
+        for name, grid in (("외상매입내역조회", self.grid), ("월별거래내역조회", self.ledger_grid), ("결제내역조회", self.history_grid)):
             self.tabs.addTab(grid, name)
         self.body.addWidget(self.tabs, 1)
         controls = QHBoxLayout()

@@ -5,6 +5,8 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 LIMIT = 9_000_000_000_000
 PERMISSIONS = frozenset({"catalog", "trade", "inventory", "loyalty", "reports", "admin"})
+from .permissions import DENIAL_PERMISSIONS
+ALLOWED_PERMISSIONS = PERMISSIONS | DENIAL_PERMISSIONS
 
 
 def decimal(value):

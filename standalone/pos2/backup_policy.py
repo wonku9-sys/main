@@ -8,7 +8,7 @@ import secrets
 import tempfile
 
 
-BACKUP_NAME = re.compile(r"^(서영POS-백업|복원전-자동백업)_\d{8}_\d{6}_[0-9a-f]{8}\.db$")
+BACKUP_NAME = re.compile(r"^(서영POS-백업|복원전-자동백업|서영POS-자동백업|서영POS-종료백업)_\d{8}_\d{6}_[0-9a-f]{8}\.db$")
 KEEP = 15
 
 
@@ -34,7 +34,7 @@ class BackupPolicyMixin:
             stat = file.stat()
             result.append({"path": str(file), "name": file.name, "created": datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S"),
                            "mtime_ns": stat.st_mtime_ns, "size": stat.st_size,
-                           "kind": "복원 전 보호" if file.name.startswith("복원전-자동백업_") else "일반 백업",
+                           "kind": "복원 전 보호" if file.name.startswith("복원전-자동백업_") else "정기 자동" if file.name.startswith("서영POS-자동백업_") else "종료 자동" if file.name.startswith("서영POS-종료백업_") else "일반 백업",
                            "managed": bool(BACKUP_NAME.fullmatch(file.name))})
         return sorted(result, key=lambda item: (item["mtime_ns"], item["name"]), reverse=True)
 

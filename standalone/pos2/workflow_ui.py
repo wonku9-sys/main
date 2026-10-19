@@ -193,28 +193,90 @@ class ProductPicker(QDialog):
         self.accept()
 
 
+class PurchaseSourcePicker(QDialog):
+    """Choose the original purchase without permitting unrelated returns."""
+    def __init__(self, window, partner_id=None):
+        super().__init__(window)
+        self.store, self.partner_id, self.record = window.store, partner_id, None
+        self.setWindowTitle("반품할 매입전표 선택")
+        self.resize(900, 550)
+        body = QVBoxLayout(self)
+        body.addWidget(QLabel("반품할 원매입전표를 선택하세요. 남은 수량만 반품하며, 원래 단가로 미지급잔액과 재고를 차감합니다."))
+        filters = QHBoxLayout()
+        self.start, self.end = _dates(filters, self.refresh)
+        self.start.setDate(QDate.currentDate().addMonths(-3))
+        body.addLayout(filters)
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("전표번호 · 공급사명 · 메모 검색")
+        self.search.returnPressed.connect(self.refresh)
+        body.addWidget(self.search)
+        self.grid = DataGrid(["전표번호", "매입일", "공급사", "매입합계", "미지급잔액", "메모"])
+        self.grid.read_permissions = ("trade",)
+        body.addWidget(self.grid, 1)
+        self.grid.itemDoubleClicked.connect(self.choose)
+        controls = QHBoxLayout()
+        controls.addStretch()
+        controls.addWidget(action("선택", self.choose, True))
+        controls.addWidget(action("닫기", self.reject))
+        body.addLayout(controls)
+        self.refresh()
+
+    def refresh(self):
+        if not hasattr(self, "grid"):
+            return
+        try:
+            self.store.require_menu("purchases")
+            rows = self.store.documents("purchase", _date(self.start), _date(self.end), self.partner_id, "posted", self.search.text())
+            self.grid.fill([[r["number"], r["date"], r["partner_name"], r["total"], r["balance"], r["memo"]] for r in rows], rows)
+        except (ValueError, PermissionError) as exc:
+            _warn(self, exc)
+
+    def choose(self, *_):
+        row = self.grid.selected()
+        if not row:
+            return
+        try:
+            self.record = self.store.document(row["id"])
+            if not any(Decimal(str(line["remaining_qty"])) > 0 for line in self.record["lines"]):
+                return _warn(self, "이미 전량 반품한 전표입니다. 다른 전표를 선택하세요.")
+            self.accept()
+        except (ValueError, PermissionError) as exc:
+            _warn(self, exc)
+
+
 class TradeDialog(QDialog):
     """Explicit draft/post workflow; scans only edit unsaved line quantities."""
+
+    def reject(self):
+        from .navigation import confirm_dialog_exit
+        if confirm_dialog_exit(self):
+            super().reject()
     def __init__(self, window, kind="purchase", record=None, source=None):
         super().__init__(window)
         self.window, self.store, self.kind = window, window.store, kind
         self.record = self.store.document(record) if isinstance(record, int) else record
         self.source = self.store.document(source) if isinstance(source, int) else source
         self.readonly = bool(self.record and self.record["status"] != "draft")
+        from .permissions import can_action
+        resource = "purchases" if kind.startswith("purchase") else "sales"
+        self.store.require_menu(resource)
+        if self.record and not can_action(self.store.actor, resource, "edit"):
+            self.readonly = True
         self.is_return = kind.endswith("_return")
         self.saved_id = None
         self.line_rows = []
         self.products = self.store.products()
         self.product_map = {p["id"]: p for p in self.products}
         self.line_columns = ("product", "spec", "barcode", "qty", "unit", "factor", "base_qty", "price", "total", "sale_price", "margin", "category", "supplier", "stock", "delete")
-        self.setWindowTitle(f"{KINDS[kind]} 전표 · " + (self.record["number"] if self.record else "새 전표"))
+        self.setWindowTitle(("새 반품전표" if self.is_return else "새 매입전표") if kind.startswith("purchase") and not self.record else f"{KINDS[kind]} 전표 · " + (self.record["number"] if self.record else "새 전표"))
         self.resize(1180, 820)
         self.setMinimumSize(850, 620)
         if QApplication.platformName() != "offscreen" and self.screen():
             area = self.screen().availableGeometry()
             self.resize(min(1180, max(850, area.width() - 50)), min(820, max(620, area.height() - 70)))
         body = QVBoxLayout(self)
-        heading = QLabel(f"{KINDS[kind]} 전표")
+        heading = QLabel(("반품전표" if self.is_return else "매입전표") if kind.startswith("purchase") else f"{KINDS[kind]} 전표")
+        self.heading = heading
         heading.setObjectName("pageTitle")
         body.addWidget(heading)
         self.explanation = QLabel("초안은 재고·결제·포인트를 변경하지 않습니다. 확정 후에는 수정 대신 취소 후 재등록합니다.")
@@ -234,7 +296,7 @@ class TradeDialog(QDialog):
             self.party_map[party["id"]] = party
             self.partner.addItem(f"{party['code']} · {party['name']}", party["id"])
         metadata.addWidget(self.partner, 1)
-        self.pick_button = action("거래처 검색", lambda: self.pick_partner(party_kind))
+        self.pick_button = action("공급사 (F3)" if kind.startswith("purchase") else "거래처 검색", lambda: self.pick_partner(party_kind))
         metadata.addWidget(self.pick_button)
         self.member = QComboBox()
         self.member.addItem("비회원", None)
@@ -244,6 +306,19 @@ class TradeDialog(QDialog):
             metadata.addWidget(QLabel("회원"))
             metadata.addWidget(self.member)
         body.addLayout(metadata)
+        self.return_mode = None
+        if kind.startswith("purchase"):
+            mode_row = QHBoxLayout()
+            self.return_mode = QCheckBox("반품")
+            self.return_mode.setChecked(self.is_return)
+            self.return_mode.setEnabled(not self.record and not self.readonly and can_action(self.store.actor, "purchases", "delete"))
+            self.return_mode.setToolTip("체크하면 원매입전표를 선택해 반품합니다. 확정 전표의 종류는 변경하지 않습니다.")
+            mode_row.addWidget(QLabel("전표 구분"))
+            mode_row.addWidget(self.return_mode)
+            self.source_label = QLabel(f"원전표 {self.source['number']}" if self.source else "매입 · 반품 체크 시 원전표 선택")
+            mode_row.addWidget(self.source_label, 1)
+            body.addLayout(mode_row)
+            self.return_mode.toggled.connect(self.switch_purchase_mode)
         original = self.record or self.source or {}
         if original.get("partner_id") and self.partner.findData(original["partner_id"]) < 0:
             self.partner.addItem(original.get("partner_name", "이력 거래처"), original["partner_id"])
@@ -264,10 +339,17 @@ class TradeDialog(QDialog):
         self.scan.scanned.connect(self.scan_barcode)
         scanner.addWidget(self.scan, 1)
         self.add_button = action("품목 추가", self.add_line)
-        self.search_button = action("상품 검색 (F5)", self.pick_product)
+        self.search_button = action("상품검색 (F5)", self.pick_product)
         self.quote_button = action("선택 날짜·회원 제안가 적용", self.apply_quotes)
         scanner.addWidget(self.add_button)
         scanner.addWidget(self.search_button)
+        if kind.startswith("purchase"):
+            self.edit_line_button = action("매입수정 (F6)", self.edit_selected_line)
+            self.remove_line_button = action("선택행삭제 (F7)", self.remove_selected_line)
+            scanner.addWidget(self.edit_line_button)
+            scanner.addWidget(self.remove_line_button)
+            self.edit_line_button.setEnabled(not self.readonly)
+            self.remove_line_button.setEnabled(not self.readonly)
         scanner.addWidget(self.quote_button)
         body.addLayout(scanner)
         self.table = QTableWidget(0, len(self.line_columns))
@@ -310,7 +392,8 @@ class TradeDialog(QDialog):
         self.method.addItem("계좌이체", "transfer")
         self.points = QLineEdit(str((self.record or {}).get("points_used", 0)))
         self.points.setMaximumWidth(110)
-        settlement.addWidget(QLabel("환불금액" if self.is_return else "결제금액"))
+        self.paid_caption = QLabel("환불금액" if self.is_return else "결제금액")
+        settlement.addWidget(self.paid_caption)
         settlement.addWidget(self.paid)
         settlement.addWidget(self.method)
         if kind == "sale":
@@ -335,9 +418,19 @@ class TradeDialog(QDialog):
         self.excel_button = action("엑셀 저장", self.export_document)
         footer.addWidget(self.print_button)
         footer.addWidget(self.excel_button)
+        if kind.startswith("purchase"):
+            self.new_product_button = action("새 상품등록 (F9)", self.new_product)
+            self.new_product_button.setEnabled(not self.readonly and not self.is_return and can_action(self.store.actor, "products", "create"))
+            footer.addWidget(self.new_product_button)
         footer.addStretch()
-        self.draft_button = action("초안 저장", lambda: self.save(False))
-        self.post_button = action("전표 확정", lambda: self.save(True), True)
+        self.draft_button = action("전표 적용 (A)" if kind.startswith("purchase") else "초안 저장", lambda: self.save(False, not self.kind.startswith("purchase")))
+        self.draft_button.setToolTip("입력을 초안으로 저장하고 계속 작업합니다. 재고·결제에는 반영하지 않습니다." if kind.startswith("purchase") else "초안을 저장합니다.")
+        self.post_button = action("저장" if kind.startswith("purchase") else "전표 확정", lambda: self.save(True), True)
+        allowed = can_action(self.store.actor, resource, "edit" if self.record else "create")
+        if self.is_return:
+            allowed = allowed and can_action(self.store.actor, resource, "delete")
+        self.draft_button.setEnabled(allowed)
+        self.post_button.setEnabled(allowed)
         self.close_button = action("닫기", self.reject)
         for button in (self.draft_button, self.post_button, self.close_button):
             button.setAutoDefault(False)
@@ -349,6 +442,17 @@ class TradeDialog(QDialog):
         self.shortcut_product.activated.connect(self.pick_product)
         self.shortcut_delete = QShortcut(QKeySequence("F7"), self)
         self.shortcut_delete.activated.connect(self.remove_selected_line)
+        if kind.startswith("purchase"):
+            self.shortcut_supplier = QShortcut(QKeySequence("F3"), self)
+            self.shortcut_supplier.activated.connect(lambda: self.pick_partner("supplier") if self.pick_button.isEnabled() else None)
+            self.shortcut_edit = QShortcut(QKeySequence("F6"), self)
+            self.shortcut_edit.activated.connect(self.edit_selected_line)
+            self.shortcut_new_product = QShortcut(QKeySequence("F9"), self)
+            self.shortcut_new_product.activated.connect(self.new_product)
+            self.shortcut_apply = QShortcut(QKeySequence("Alt+A"), self)
+            self.shortcut_apply.activated.connect(lambda: self.save(False, False))
+            self.shortcut_save = QShortcut(QKeySequence("Alt+S"), self)
+            self.shortcut_save.activated.connect(lambda: self.save(True))
         lines = (self.record or {}).get("lines") or (self.source or {}).get("lines") or []
         source_lines = self.source or (self.store.document(self.record["source_id"]) if self.is_return and self.record and self.record.get("source_id") else {})
         source_map = {line["id"]: line for line in source_lines.get("lines", [])}
@@ -384,6 +488,80 @@ class TradeDialog(QDialog):
         self.void_button.setEnabled(bool(self.record and self.record["status"] == "posted"))
         self.refresh_payments()
         self.recalculate()
+
+    def switch_purchase_mode(self, checked):
+        if self.record or self.readonly:
+            return
+        source = None
+        if checked:
+            try:
+                self.store._require_capability("purchases", "delete")
+            except PermissionError as exc:
+                _warn(self, exc)
+                self.return_mode.blockSignals(True)
+                self.return_mode.setChecked(False)
+                self.return_mode.blockSignals(False)
+                return
+            picker = PurchaseSourcePicker(self.window, self.partner.currentData())
+            if picker.exec() != QDialog.DialogCode.Accepted:
+                self.return_mode.blockSignals(True)
+                self.return_mode.setChecked(False)
+                self.return_mode.blockSignals(False)
+                return
+            source = picker.record
+        if any(row["product"].currentData() for row in self.line_rows):
+            if not _confirm(self, "전표 구분 변경", "입력한 품목을 비우고 전표 구분을 변경할까요?"):
+                self.return_mode.blockSignals(True)
+                self.return_mode.setChecked(not checked)
+                self.return_mode.blockSignals(False)
+                return
+        self.line_rows.clear()
+        self.table.setRowCount(0)
+        self.source, self.is_return = source, checked
+        self.kind = "purchase_return" if checked else "purchase"
+        self.heading.setText("반품전표" if checked else "매입전표")
+        self.setWindowTitle("새 반품전표" if checked else "새 매입전표")
+        self.source_label.setText(f"원전표 {source['number']} · 반품수량 입력" if checked else "매입 · 반품 체크 시 원전표 선택")
+        self.paid.setText("0")
+        self.paid_caption.setText("환불금액" if checked else "결제금액")
+        for control in (self.partner, self.pick_button, self.add_button, self.search_button, self.scan, self.quote_button):
+            control.setEnabled(not checked)
+        from .permissions import can_action
+        self.new_product_button.setEnabled(not checked and can_action(self.store.actor, "products", "create"))
+        if source:
+            self.partner.setCurrentIndex(self.partner.findData(source["partner_id"]))
+            for line in source["lines"]:
+                if Decimal(str(line["remaining_qty"])) > 0:
+                    self.add_line(line["product_id"], line.get("unit_id"), "0", line["unit_price"], line)
+        else:
+            self.add_line()
+        self.recalculate()
+
+    def edit_selected_line(self):
+        if self.readonly:
+            return
+        index = self.table.currentRow()
+        if self.line_rows:
+            index = max(0, index)
+            self.table.setCurrentCell(index, 3)
+            self.line_rows[index]["qty"].setFocus()
+            self.line_rows[index]["qty"].selectAll()
+
+    def new_product(self):
+        if self.readonly or self.is_return:
+            return
+        try:
+            self.store._require_capability("products", "create")
+            from .catalog_ui import ProductDialog
+            dialog = ProductDialog(self.store, parent=self)
+            dialog.supplier.setCurrentIndex(max(0, dialog.supplier.findData(self.partner.currentData())))
+            if dialog.exec() == QDialog.DialogCode.Accepted and dialog.saved_id:
+                product = next(row for row in self.store.products() if row["id"] == dialog.saved_id)
+                self.products.append(product)
+                self.product_map[product["id"]] = product
+                self.add_line(product["id"])
+        except (ValueError, PermissionError) as exc:
+            _warn(self, exc)
 
     def update_partner_info(self, *_):
         party = self.party_map.get(self.partner.currentData(), {})
@@ -658,7 +836,7 @@ class TradeDialog(QDialog):
             lines.append({"product_id": product_id, "unit_id": row["unit"].currentData(), "qty": quantity, "unit_price": row["price"].text().strip(), "source_line_id": row["source"]["id"] if row.get("source") else None})
         return {"kind": self.kind, "date": _date(self.date), "partner_id": self.partner.currentData(), "member_id": self.member.currentData(), "source_id": (self.source or self.record or {}).get("id") if self.source else (self.record or {}).get("source_id"), "lines": lines, "paid": self.paid.text(), "method": self.method.currentData(), "points_used": self.points.text() if self.kind == "sale" else 0, "memo": self.memo.text()}
 
-    def save(self, post):
+    def save(self, post, close=True):
         if self.readonly:
             return
         try:
@@ -669,7 +847,15 @@ class TradeDialog(QDialog):
                 return
             identifier = self.record["id"] if self.record else None
             self.saved_id = self.store.post_document(data, identifier) if post else self.store.save_draft(data, identifier)
-            self.accept()
+            from .navigation import mark_saved
+            mark_saved(self)
+            if close:
+                self.accept()
+            else:
+                self.record = self.store.document(self.saved_id)
+                self.return_mode.setEnabled(False)
+                mark_saved(self)
+                self.explanation.setText("전표를 초안으로 저장했습니다. 계속 입력하거나 ‘저장’을 눌러 재고·결제에 반영하세요.")
         except (ValueError, PermissionError, InvalidOperation) as exc:
             _warn(self, exc)
 
@@ -721,7 +907,7 @@ class TradeDialog(QDialog):
 class TradesPage(Page):
     def __init__(self, window, kind="purchase"):
         self.kind = kind
-        super().__init__(window, "매입장" if kind == "purchase" else "매출장", "기간과 거래처를 선택해 전표를 조회합니다. 확정·반품·결제를 구분합니다.")
+        super().__init__(window, "매입전표" if kind == "purchase" else "매출장", "매입등록 → 공급사 → 상품·수량·매입가 → 저장. 반품은 전표 창의 ‘반품’에 체크합니다." if kind == "purchase" else "기간과 거래처를 선택해 전표를 조회합니다.")
         self.actions.addWidget(action("매입등록" if kind == "purchase" else "매출등록", self.new_trade, True))
         filters = QHBoxLayout()
         self.start, self.end = _dates(filters, self.refresh)
@@ -741,6 +927,11 @@ class TradesPage(Page):
         self.partner_lookup.setIcon(search_icon())
         self.returns = QCheckBox("반품 포함")
         self.returns.setChecked(True)
+        self.type_filter = QComboBox()
+        self.type_filter.addItem("전체 유형", "")
+        self.type_filter.addItem("매입" if kind == "purchase" else "매출", kind)
+        self.type_filter.addItem("반품", kind + "_return")
+        filters.addWidget(self.type_filter)
         filters.addWidget(self.status)
         filters.addWidget(self.partner_filter)
         filters.addWidget(self.partner_lookup)
@@ -748,14 +939,14 @@ class TradesPage(Page):
         self.body.addLayout(filters)
         search_row = QHBoxLayout()
         search_row.addWidget(self.search, 1)
-        search_row.addWidget(self.returns)
+        self.returns.hide()
         self.body.addLayout(search_row)
         self.summary = QLabel()
         self.summary.setObjectName("summary")
         self.body.addWidget(self.summary)
         self.grid = self.table(["전표번호", "구분", "거래일", "거래처", "합계", "결제", "포인트", "미결제", "상태", "담당자", "메모"])
         controls = QHBoxLayout()
-        for label, callback in (("상세 / 초안 수정", self.detail), ("수금 · 지급 / 환불", self.settle), ("원전표 반품", self.return_trade), ("확정 취소", self.cancel), ("초안 삭제", self.delete_draft)):
+        for label, callback in (("전표 조회 / 수정", self.detail), ("결제 / 환불", self.settle), ("반품등록", self.return_trade), ("확정 취소", self.cancel), ("초안 삭제", self.delete_draft)):
             controls.addWidget(action(label, callback))
         controls.addStretch()
         self.body.addLayout(controls)
@@ -763,6 +954,7 @@ class TradesPage(Page):
         self.search.returnPressed.connect(self.refresh)
         self.partner_filter.currentIndexChanged.connect(self.refresh)
         self.returns.toggled.connect(self.refresh)
+        self.type_filter.currentIndexChanged.connect(self.refresh)
 
     def pick_filter_partner(self):
         picker = PartnerPicker(self.window, "supplier" if self.kind == "purchase" else "customer", for_filter=True)
@@ -780,6 +972,8 @@ class TradesPage(Page):
         try:
             rows = self.store.documents(start=_date(self.start), end=_date(self.end), partner_id=self.partner_filter.currentData(), status=self.status.currentData(), search=self.search.text())
             rows = [r for r in rows if r["kind"] == self.kind or self.returns.isChecked() and r["kind"] == self.kind + "_return"]
+            if self.type_filter.currentData():
+                rows = [r for r in rows if r["kind"] == self.type_filter.currentData()]
             self.grid.fill([[r["number"], KINDS[r["kind"]], r["date"], r.get("partner_name", ""), -r["total"] if r["kind"].endswith("_return") else r["total"], r.get("cash_paid", 0), r.get("points_used", 0), r.get("net_balance", -r.get("balance", 0) if r["kind"].endswith("_return") else r.get("balance", 0)), STATUSES[r["status"]], r.get("user_name", ""), r["memo"]] for r in rows], rows)
             active = [r for r in rows if r["status"] == "posted"]
             total = sum((-1 if r["kind"].endswith("_return") else 1) * r["total"] for r in active)
@@ -799,6 +993,10 @@ class TradesPage(Page):
         return row
 
     def new_trade(self):
+        try:
+            self.store._require_capability("purchases" if self.kind == "purchase" else "sales", "create")
+        except PermissionError as exc:
+            return self.fail(exc)
         picker = PartnerPicker(self.window, "supplier" if self.kind == "purchase" else "customer")
         if picker.exec() != QDialog.DialogCode.Accepted:
             return
@@ -838,7 +1036,12 @@ class TradesPage(Page):
             self.fail(exc)
 
     def return_trade(self):
-        row = self.selected()
+        row = self.grid.selected()
+        if self.kind == "purchase" and (not row or row["status"] != "posted" or row["kind"] != "purchase"):
+            picker = PurchaseSourcePicker(self.window, self.partner_filter.currentData())
+            if picker.exec() != QDialog.DialogCode.Accepted:
+                return
+            row = picker.record
         if not row:
             return
         if row["status"] != "posted" or row["kind"] != self.kind:
@@ -898,6 +1101,11 @@ class LedgerPage(Page):
 
 class CountEditor(QDialog):
     """Inputs are keyed by immutable product ID; sorting never changes targets."""
+
+    def reject(self):
+        from .navigation import confirm_dialog_exit
+        if confirm_dialog_exit(self):
+            super().reject()
     def __init__(self, window):
         super().__init__(window)
         self.store, self.saved_id = window.store, None
@@ -941,6 +1149,8 @@ class CountEditor(QDialog):
             if not items:
                 raise ValueError("실사한 상품의 실제 수량을 입력하세요.")
             self.saved_id = self.store.create_count({"title": self.title.text(), "date": _date(self.date), "items": items})
+            from .navigation import mark_saved
+            mark_saved(self)
             self.accept()
         except (ValueError, PermissionError) as exc:
             _warn(self, exc)

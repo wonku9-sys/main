@@ -8,7 +8,7 @@ from decimal import Decimal, InvalidOperation
 import json
 from types import SimpleNamespace
 
-from PySide6.QtCore import QDate, Qt
+from PySide6.QtCore import QDate, QTime, Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QApplication,
@@ -16,10 +16,11 @@ from PySide6.QtWidgets import (
     QDialogButtonBox, QFileDialog, QFormLayout, QFrame, QGridLayout,
     QGroupBox, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMessageBox,
     QPushButton, QScrollArea, QTabWidget, QTextEdit, QVBoxLayout, QWidget,
-    QMenu, QStyle, QTreeWidget, QTreeWidgetItem,
+    QMenu, QStyle, QTreeWidget, QTreeWidgetItem, QSpinBox, QTimeEdit,
 )
 
 from .widgets import DataGrid, Page, ScanField
+from .permissions import can_action, restrict_button
 
 
 PERMISSION_LABELS = {
@@ -67,6 +68,9 @@ def _button(label, callback, layout, primary=False):
     if primary:
         button.setObjectName("primary")
     button.clicked.connect(lambda *_: callback())
+    from .menu_help import ACTION_HELP, attach_help
+    attach_help(button, ACTION_HELP.get(label))
+    restrict_button(button, callback)
     layout.addWidget(button)
     return button
 
@@ -96,6 +100,16 @@ def _combo(options, value=None, editable=False):
 
 class EntryDialog(QDialog):
     """Small consistent editor for local records and conversion units."""
+
+    def accept(self):
+        from .navigation import mark_saved
+        mark_saved(self)
+        super().accept()
+
+    def reject(self):
+        from .navigation import confirm_dialog_exit
+        if confirm_dialog_exit(self):
+            super().reject()
 
     def __init__(self, title, parent=None, width=580):
         super().__init__(parent)
@@ -258,7 +272,8 @@ class CategoriesPage(Page):
         menu = QMenu(self)
         def option(text, callback, enabled=True):
             entry = menu.addAction(text)
-            entry.setEnabled(enabled)
+            operation = "create" if "추가" in text else "delete" if "삭제" in text else "edit" if any(word in text for word in ("수정", "무효화", "유효화")) else None
+            entry.setEnabled(enabled and (not operation or can_action(self.store.actor, "categories", operation)))
             entry.triggered.connect(lambda _checked=False: callback())
         option("분류 등록정보 / 수정", self.edit, bool(record))
         menu.addSeparator()
@@ -358,6 +373,11 @@ class PartnerPicker(QDialog):
 
 class ProductDialog(QDialog):
     """Real product editor with read-only transaction history and unit CRUD."""
+
+    def reject(self):
+        from .navigation import confirm_dialog_exit
+        if confirm_dialog_exit(self):
+            super().reject()
 
     def __init__(self, store, record=None, parent=None):
         super().__init__(parent)
@@ -652,6 +672,8 @@ class ProductDialog(QDialog):
             self.saved_id = self.store.save_product(self.values(), self.record.get("id"))
             self.record = next(r for r in self.store.products() if r["id"] == self.saved_id)
             self.fields["code"].setText(self.record["code"])
+            from .navigation import mark_saved
+            mark_saved(self)
             self.error_label.clear()
             self.refresh_details()
         except (ValueError, PermissionError) as exc:
@@ -1036,6 +1058,7 @@ class UsersPage(Page):
         self.grid = self.table(["사용자 코드", "이름", "역할", "접근권한", "상태"])
         _button("사용자 등록", self.add, self.actions, True)
         _button("정보 / 권한 / 비밀번호", self.edit, self.actions)
+        _button("메뉴별 권한 설정", self.permissions, self.actions)
         _button("사용자 삭제", self.delete, self.actions)
         _button("조회", self.refresh, self.actions)
         self.grid.itemDoubleClicked.connect(lambda *_: self.edit())
@@ -1044,7 +1067,7 @@ class UsersPage(Page):
     def refresh(self):
         users = self.store.list_users()
         self.grid.fill([[r["code"], r["name"], "관리자" if r["role"] == "admin" else "일반 사용자",
-                         "모든 업무" if r["role"] == "admin" else ", ".join(PERMISSION_LABELS.get(p, p) for p in sorted(r["permissions"])),
+                         "모든 업무" if r["role"] == "admin" else ", ".join(PERMISSION_LABELS[p] for p in sorted(r["permissions"]) if p in PERMISSION_LABELS) + (" · 세부 제한" if any(p.startswith("deny:") for p in r["permissions"]) else ""),
                          "사용" if r["active"] else "중지"] for r in users], users)
 
     def editor(self, record=None):
@@ -1083,7 +1106,7 @@ class UsersPage(Page):
             if not values.get("password") and record:
                 values.pop("password", None)
             self.store.save_user(dict(values, role=role.currentData(), active=active.isChecked(),
-                                      permissions=[key for key, box in permission_boxes.items() if box.isChecked()]), record.get("id"))
+                                      permissions=[key for key, box in permission_boxes.items() if box.isChecked()] + [p for p in record.get("permissions", []) if p.startswith("deny:")]), record.get("id"))
         dialog.finish(save)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self.refresh()
@@ -1104,6 +1127,13 @@ class UsersPage(Page):
                 self.refresh()
             except (ValueError, PermissionError) as exc:
                 _error(self, exc)
+
+    def permissions(self):
+        if hasattr(self.window, "open_page") and self.window.open_page("permissions"):
+            selected = self.grid.selected()
+            page = self.window.current_page
+            if selected:
+                page.user.setCurrentIndex(page.user.findData(selected["id"]))
 
 
 class SettingsPage(Page):
@@ -1128,6 +1158,40 @@ class SettingsPage(Page):
             point_form.addRow(label, field)
         point_form.addRow(QLabel("회원매출은 전액 정산 시 적립됩니다. 정책 변경 전 거래의 포인트 내역은 유지됩니다."))
         self.body.addWidget(points)
+        schedule = QGroupBox("자동 백업 설정")
+        schedule_form = QFormLayout(schedule)
+        self.backup_mode = QComboBox()
+        self.backup_mode.addItem("자동 · 정해진 일정에 백업", "auto")
+        self.backup_mode.addItem("수동 · 지금 백업 버튼으로 실행", "manual")
+        schedule_form.addRow("백업 방식", self.backup_mode)
+        self.backup_frequency = QComboBox()
+        for label, value in (("매일", "daily"), ("요일 선택", "weekly"), ("며칠 간격", "interval")):
+            self.backup_frequency.addItem(label, value)
+        schedule_form.addRow("자동 백업 주기", self.backup_frequency)
+        self.backup_time = QTimeEdit()
+        self.backup_time.setDisplayFormat("HH:mm")
+        schedule_form.addRow("실행 시간 (이 PC 시간)", self.backup_time)
+        day_widget = QWidget()
+        day_layout = QHBoxLayout(day_widget)
+        day_layout.setContentsMargins(0, 0, 0, 0)
+        self.backup_weekdays = []
+        for label in ("월", "화", "수", "목", "금", "토", "일"):
+            box = QCheckBox(label)
+            self.backup_weekdays.append(box)
+            day_layout.addWidget(box)
+        schedule_form.addRow("실행 요일", day_widget)
+        self.backup_every = QSpinBox()
+        self.backup_every.setRange(1, 365)
+        self.backup_every.setSuffix("일 간격")
+        schedule_form.addRow("기간 간격", self.backup_every)
+        self.backup_exit = QCheckBox("프로그램 종료 시 자동 백업 (수동 방식에서도 적용)")
+        schedule_form.addRow(self.backup_exit)
+        tip = QLabel("설정 저장을 누르면 적용됩니다. 자동 일정은 프로그램 실행 중에 동작하며, 놓친 일정은 다음 실행 때 한 번 백업합니다.\n종료 시에는 저장 확인을 마친 뒤 백업합니다. 강제 종료·정전 시에는 실행되지 않습니다. ‘지금 백업’은 언제든 사용 가능합니다.")
+        tip.setWordWrap(True)
+        schedule_form.addRow(tip)
+        self.body.addWidget(schedule)
+        self.backup_mode.currentIndexChanged.connect(self.update_backup_controls)
+        self.backup_frequency.currentIndexChanged.connect(self.update_backup_controls)
         backup = QGroupBox("안전한 데이터 보관")
         backup_layout = QVBoxLayout(backup)
         self.data_location = QLabel()
@@ -1157,13 +1221,42 @@ class SettingsPage(Page):
         self.refresh()
 
     def refresh(self):
+        guard = getattr(self, "_navigation_guard", None)
+        if guard and not guard.allow_leave(self):
+            return
         settings = self.store.settings()
         defaults = {"earn_bps": 100, "point_min": 1000, "point_step": 100}
         for key, field in self.fields.items():
             field.setText(str(settings.get(key, defaults.get(key, ""))))
         self.point_enabled.setChecked(bool(settings.get("point_enabled", True)))
+        policy = self.store.backup_schedule()
+        self.backup_mode.setCurrentIndex(self.backup_mode.findData(policy["mode"]))
+        self.backup_frequency.setCurrentIndex(self.backup_frequency.findData(policy["frequency"]))
+        self.backup_time.setTime(QTime.fromString(policy["time"], "HH:mm"))
+        self.backup_every.setValue(policy["every_days"])
+        self.backup_exit.setChecked(policy["on_exit"])
+        for index, box in enumerate(self.backup_weekdays):
+            box.setChecked(index in policy["weekdays"])
+        self.update_backup_controls()
         self.data_location.setText(f"업무 데이터: {getattr(self.store, 'path', '현재 로컬 데이터베이스')}")
         self.refresh_backups()
+        from .navigation import mark_saved
+        mark_saved(self)
+
+    def update_backup_controls(self, *_):
+        automatic = self.backup_mode.currentData() == "auto"
+        frequency = self.backup_frequency.currentData()
+        self.backup_frequency.setEnabled(automatic)
+        self.backup_time.setEnabled(automatic)
+        self.backup_every.setEnabled(automatic and frequency == "interval")
+        for box in self.backup_weekdays:
+            box.setEnabled(automatic and frequency == "weekly")
+
+    def backup_schedule_values(self):
+        return {"mode": self.backup_mode.currentData(), "frequency": self.backup_frequency.currentData(),
+                "time": self.backup_time.time().toString("HH:mm"), "every_days": self.backup_every.value(),
+                "weekdays": [index for index, box in enumerate(self.backup_weekdays) if box.isChecked()],
+                "on_exit": self.backup_exit.isChecked()}
 
     def refresh_backups(self):
         records = self.store.backup_files()
@@ -1187,7 +1280,10 @@ class SettingsPage(Page):
             if not 0 <= values["earn_bps"] <= 10000 or values["point_min"] < 0 or values["point_step"] <= 0:
                 raise ValueError("적립률은 0~10000, 최소 사용은 0 이상, 사용 단위는 1 이상으로 입력하세요.")
             values["point_enabled"] = self.point_enabled.isChecked()
+            values["backup_schedule"] = self.backup_schedule_values()
             self.store.save_settings(values)
+            from .navigation import mark_saved
+            mark_saved(self)
             self.notify("매장 설정을 저장했습니다.")
         except (ValueError, PermissionError) as exc:
             _error(self, exc)

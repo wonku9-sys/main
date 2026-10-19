@@ -76,7 +76,7 @@ def build(output, native=False):
     label = "Windows" if sys.platform == "win32" else "Linux" if sys.platform.startswith("linux") else platform.system()
     output = output.resolve()
     bundle = output / APP
-    archive = output / f"{APP}-{label}-x64-portable.zip"
+    archive = output / f"{APP}-v{__version__}-{label}-x64-portable.zip"
     if bundle.exists() or archive.exists() or archive.with_suffix(archive.suffix + ".sha256").exists():
         raise RuntimeError("Output already exists. Preserve it and choose a fresh --output directory.")
     if not (ROOT / "README.md").is_file():
@@ -103,7 +103,7 @@ def build(output, native=False):
     subprocess.run([str(executable), "--smoke-test", "--screenshot", str(screenshot)], cwd=bundle, env=environment, check=True, timeout=180)
     if not screenshot.is_file() or screenshot.stat().st_size < 1000:
         raise RuntimeError("The real frozen executable did not produce its desktop screenshot.")
-    for suffix in ("-purchase", "-product-search", "-categories", "-backup", "-payments", "-login"):
+    for suffix in ("-home", "-purchase", "-return", "-product-search", "-categories", "-backup", "-payments", "-login", "-permissions"):
         capture = screenshot.with_name(screenshot.stem + suffix + screenshot.suffix)
         if not capture.is_file() or capture.stat().st_size < 1000:
             raise RuntimeError(f"The frozen executable did not validate its new workflow screen: {suffix}")

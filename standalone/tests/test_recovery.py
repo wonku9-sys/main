@@ -70,7 +70,7 @@ def test_old_v201_release_backup_is_accepted_without_modifying_it(shop, tmp_path
     assert legacy.read_bytes() == original
     shop.login(DEMO_CODE, DEMO_PASSWORD)
     assert len(shop.products()) == 6
-    assert shop.db.execute("PRAGMA user_version").fetchone()[0] == 201
+    assert shop.db.execute("PRAGMA user_version").fetchone()[0] == recovery.SCHEMA_VERSION
 
 
 @pytest.mark.parametrize("fault", ["plain", "foreign", "future", "missing_admin", "modified_trigger", "bad_json", "bad_fk", "damaged"])

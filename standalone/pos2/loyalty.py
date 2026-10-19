@@ -154,6 +154,7 @@ class LoyaltyMixin:
     def save_member(self, data, id=None):
         with self._tx():
             self._require("loyalty")
+            self._require_capability("members", "edit" if id else "create")
             old = self._member_row(id) if id is not None else None
             values = {key: text(data.get(key, old[key] if old else ""), label, required)
                       for key, label, required in (("code", "회원 코드", True), ("name", "회원명", True),
@@ -178,6 +179,7 @@ class LoyaltyMixin:
         """Unused members may be removed; financial history is never orphaned."""
         with self._tx():
             self._require("loyalty")
+            self._require_capability("members", "delete")
             row = self._member_row(id)
             if row["points"] or self.db.execute("SELECT 1 FROM point_entries WHERE member_id=? UNION ALL SELECT 1 FROM documents WHERE member_id=? UNION ALL SELECT 1 FROM gift_redemptions WHERE member_id=? LIMIT 1", (id, id, id)).fetchone():
                 raise ValueError("포인트 또는 거래 이력이 있는 회원은 삭제할 수 없습니다. 사용 중지로 변경하세요.")
@@ -193,6 +195,7 @@ class LoyaltyMixin:
     def save_member_price(self, data):
         with self._tx():
             self._require("loyalty")
+            self._require_capability("members", "edit")
             self._member_row(data["member_id"], active=True)
             self._loyalty_product(data["product_id"])
             price = money(data["price"])
@@ -204,6 +207,7 @@ class LoyaltyMixin:
     def delete_member_price(self, id):
         with self._tx():
             self._require("loyalty")
+            self._require_capability("members", "delete")
             row = self.db.execute("SELECT * FROM member_prices WHERE id=?", (id,)).fetchone()
             if row is None:
                 raise ValueError("회원 지정가를 찾을 수 없습니다.")
@@ -257,11 +261,13 @@ class LoyaltyMixin:
     def save_promotion(self, data, id=None):
         with self._tx():
             self._require("loyalty")
+            self._require_capability("promotions", "edit" if id else "create")
             return self._save_promotion(data, id)
 
     def delete_promotion(self, id):
         with self._tx():
             self._require("loyalty")
+            self._require_capability("promotions", "delete")
             if not self.db.execute("SELECT 1 FROM promotions WHERE id=?", (id,)).fetchone():
                 raise ValueError("특매 그룹을 찾을 수 없습니다.")
             self.db.execute("UPDATE promotions SET active=0 WHERE id=?", (id,))
@@ -270,6 +276,7 @@ class LoyaltyMixin:
     def clone_promotion(self, id, new_start, new_end):
         with self._tx():
             self._require("loyalty")
+            self._require_capability("promotions", "create")
             data = self.promotion(id)
             data.update(start=new_start, end=new_end, title=data["title"] + " (복사)", active=True)
             return self._save_promotion(data)
@@ -277,6 +284,7 @@ class LoyaltyMixin:
     def extend_promotion(self, id, new_end):
         with self._tx():
             self._require("loyalty")
+            self._require_capability("promotions", "edit")
             data = self.promotion(id)
             if day(new_end) < data["end"]:
                 raise ValueError("기간 연장은 현재 종료일 이후로 지정하세요.")
@@ -290,6 +298,7 @@ class LoyaltyMixin:
     def save_price_schedule(self, data, id=None):
         with self._tx():
             self._require("loyalty")
+            self._require_capability("prices", "edit" if id else "create")
             if id is not None and not self.db.execute("SELECT 1 FROM price_schedules WHERE id=?", (id,)).fetchone():
                 raise ValueError("가격 예약을 찾을 수 없습니다.")
             self._loyalty_product(data["product_id"])
@@ -311,6 +320,7 @@ class LoyaltyMixin:
     def delete_price_schedule(self, id):
         with self._tx():
             self._require("loyalty")
+            self._require_capability("prices", "delete")
             if not self.db.execute("SELECT 1 FROM price_schedules WHERE id=?", (id,)).fetchone():
                 raise ValueError("가격 예약을 찾을 수 없습니다.")
             self.db.execute("UPDATE price_schedules SET active=0 WHERE id=?", (id,))
@@ -367,6 +377,7 @@ class LoyaltyMixin:
     def adjust_points(self, member_id, delta, reason):
         with self._tx():
             self._require("loyalty")
+            self._require_capability("members", "edit")
             self._member_row(member_id, active=True)
             delta = integer(delta, "조정 포인트", signed=True)
             if not delta:
@@ -472,6 +483,7 @@ class LoyaltyMixin:
     def save_gift(self, data, id=None):
         with self._tx():
             self._require("loyalty")
+            self._require_capability("gifts", "edit" if id else "create")
             old = self.db.execute("SELECT * FROM gifts WHERE id=?", (id,)).fetchone() if id is not None else None
             if id is not None and old is None:
                 raise ValueError("사은품을 찾을 수 없습니다.")
@@ -493,6 +505,7 @@ class LoyaltyMixin:
     def redeem_gift(self, member_id, gift_id, qty, reason):
         with self._tx():
             self._require("loyalty")
+            self._require_capability("gifts", "create")
             member = self._member_row(member_id, active=True)
             gift = self.db.execute("SELECT * FROM gifts WHERE id=? AND active=1", (gift_id,)).fetchone()
             if gift is None:
@@ -513,6 +526,7 @@ class LoyaltyMixin:
     def return_gift(self, redemption_id, qty, reason):
         with self._tx():
             self._require("loyalty")
+            self._require_capability("gifts", "delete")
             source = self.db.execute("SELECT * FROM gift_redemptions WHERE id=? AND kind='redeem'", (redemption_id,)).fetchone()
             if source is None:
                 raise ValueError("원래 사은품 지급 기록을 찾을 수 없습니다.")

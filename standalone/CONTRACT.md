@@ -25,6 +25,10 @@
 
 ## API
 
+2.2.0: `permissions.py`의 MENU_POLICIES와 `deny:메뉴`, `deny:메뉴.작업`은 기존 영역 권한 위에 메뉴별 접근·등록·수정·삭제 제한을 적용한다. `Store.require_menu`/`_require_capability`는 최신 계정을 재조회하고 공개 쓰기 API의 트랜잭션 안에서 검사한다. 기존 업무영역 권한의 부재는 세부 허용으로 우회할 수 없으며 관리자는 전체 권한이다. 권한 메뉴는 관리자만 변경하고 JSON allowlist로 미지의 권한을 거부한다. 현재 스키마 버전은 202이며 200/201 백업도 검사·이관한다. 배포 ZIP 이름은 패키지 버전에서 자동 생성한다.
+
+`backup_schedule.py`는 관리자 설정을 검증하고 실행 중 일정 확인/누락 1회 보충/종료 백업을 고정 폴더로 수행한다. 직원도 고정 자동 백업만 가능하며 임의 경로·복원 권한은 없다. 성공 후에만 일정 완료 표시, 실패는 5분 재시도 간격, 부분 파일은 목록·정리에서 제외한다. 일정은 현지 PC 시각, 상태는 장부 외부 sidecar에 저장한다. `navigation.py`는 미저장 확인 후 초안 저장 또는 폐기를 수행하며 저장 실패 시 이동을 막는다. 메뉴 도움말은 고정 한글 문자열이며 외부 조회가 없다.
+
 2.1.0 추가: `categories(),save_category(data,id=None),delete_category(id)`는 최대 3단계 마스터와 사용 중 삭제 방어를 제공한다. `save_product` 새 코드 공란은 `code_sequences`의 영속 최대값으로 원자 생성하며 복원 시에도 라이브 최대값을 유지한다. `retirement_target`는 퇴출대상 표시(거래 가능), `active=0`는 무효이다. UI에서는 사전에 만든 분류만 선택한다. `products` 검색은 규격을 포함한다.
 
 `SettlementMixin`: `supplier_summary(start,end,search='',only_purchases=False,partner_id=None)`, `supplier_outstanding(partner_id,payment_date=None)`, `settle_supplier(partner_id,amount,date,method='cash',memo='',expected_state=None)`, `supplier_payment_history(start,end,partner_id=None,include_voided=True)`, `supplier_settlement_detail(id)`, `void_supplier_settlement(id,reason)`, `void_supplier_payment(id,reason)`. 새 supplier_settlements는 opening_amount와 payments.supplier_settlement_id로 초기 외상·전표별 지급을 연결하고 이중 집계하지 않는다. 한 트랜잭션에서 날짜·현재잔액·스냅샷·마감을 재확인해 배분하며 오류는 전체 롤백한다. 묶음 일부 결제의 직접 취소는 막고 당일 묶음 전체 취소만 허용한다.

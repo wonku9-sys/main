@@ -58,6 +58,7 @@ class SettlementMixin:
     def settle_supplier(self, partner_id, amount, date, method="cash", memo="", expected_state=None):
         with self._tx():
             self._require("trade")
+            self._require_capability("payments", "create")
             when = day(date)
             if when > calendar_date.today().isoformat():
                 raise ValueError("미래 날짜에는 결제를 등록할 수 없습니다.")
@@ -120,6 +121,7 @@ class SettlementMixin:
     def void_supplier_settlement(self, identifier, reason):
         with self._tx():
             self._require("trade")
+            self._require_capability("payments", "delete")
             group = self.supplier_settlement_detail(identifier)
             reason = text(reason, "취소 사유", True)
             if group["voided"]:
@@ -137,6 +139,7 @@ class SettlementMixin:
     def void_supplier_payment(self, identifier, reason):
         with self._tx():
             self._require("trade")
+            self._require_capability("payments", "delete")
             row = self.db.execute("SELECT p.* FROM payments p JOIN partners s ON s.id=p.partner_id WHERE p.id=? AND s.kind='supplier'", (identifier,)).fetchone()
             if not row or row["date"] != calendar_date.today().isoformat():
                 raise ValueError("당일 공급사 결제만 취소할 수 있습니다.")

@@ -48,10 +48,10 @@ jobs:
           if-no-files-found: error
           retention-days: 30
           path: |
-            standalone/dist/SeoyoungPOS-Standalone-Windows-x64-portable.zip
-            standalone/dist/SeoyoungPOS-Standalone-Windows-x64-portable.zip.sha256
-            standalone/dist/SeoyoungPOS-Standalone-source.zip
-            standalone/dist/SeoyoungPOS-Standalone-source.zip.sha256
+            standalone/dist/SeoyoungPOS-Standalone-v*-Windows-x64-portable.zip
+            standalone/dist/SeoyoungPOS-Standalone-v*-Windows-x64-portable.zip.sha256
+            standalone/dist/SeoyoungPOS-Standalone-v*-source.zip
+            standalone/dist/SeoyoungPOS-Standalone-v*-source.zip.sha256
 
   release:
     if: startsWith(github.ref, 'refs/tags/standalone-v')
@@ -68,11 +68,10 @@ jobs:
       - name: Verify both archive checksums
         working-directory: release-assets
         run: |
-          sha256sum --check SeoyoungPOS-Standalone-Windows-x64-portable.zip.sha256
-          sha256sum --check SeoyoungPOS-Standalone-source.zip.sha256
+          sha256sum --check SeoyoungPOS-Standalone-v*.zip.sha256
       - name: Publish independently named standalone release
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          gh release create "$RELEASE_TAG" --verify-tag --latest --title "서영 POS 독립판 ${RELEASE_TAG#standalone-}" --notes-file standalone/RELEASE_NOTES.md release-assets/SeoyoungPOS-Standalone-Windows-x64-portable.zip release-assets/SeoyoungPOS-Standalone-Windows-x64-portable.zip.sha256 release-assets/SeoyoungPOS-Standalone-source.zip release-assets/SeoyoungPOS-Standalone-source.zip.sha256
+          gh release create "$RELEASE_TAG" --verify-tag --latest --title "서영 POS 독립판 ${RELEASE_TAG#standalone-}" --notes-file standalone/RELEASE_NOTES.md release-assets/*.zip release-assets/*.zip.sha256

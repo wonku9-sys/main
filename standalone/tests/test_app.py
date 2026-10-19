@@ -84,7 +84,8 @@ def test_scoped_menus_and_all_allowed_pages_refresh(context, permission, keys):
     app, store = context
     login_staff(store, permission)
     window = MainWindow(store)
-    assert set(window.items) == keys
+    assert set(window.items) == keys | {"home"}
+    assert window.current_key == "home"
     for key in keys:
         assert window.open_page(key)
     assert not window.open_page("settings")

@@ -1,6 +1,7 @@
 """Fresh local SQLite unit of work and authentication boundary."""
 
 from contextlib import contextmanager
+from copy import deepcopy
 from hashlib import scrypt
 import hmac
 import json
@@ -11,15 +12,18 @@ import sqlite3
 from .catalog import CatalogMixin
 from .backup_policy import BackupPolicyMixin
 from .commerce import CommerceMixin
-from .common import PERMISSIONS, now, text
+from .common import PERMISSIONS, ALLOWED_PERMISSIONS, now, text
+from .permissions import MENU_POLICIES, ACTIONS, has_menu, can_action
 from .loyalty import LoyaltyMixin
 from .operations import OperationsMixin
 from .recovery import RecoveryMixin, SCHEMA_VERSION
 from .schema import initialize
 from .settlement import SettlementMixin
+from .backup_schedule import BackupScheduleMixin, DEFAULT_BACKUP_SCHEDULE, validate_schedule
 
 APPLICATION_ID = 1398362162
 DEFAULT_SETTINGS = {
+    "backup_schedule": DEFAULT_BACKUP_SCHEDULE,
     "store_name": "서영 POS", "business_no": "", "phone": "", "address": "",
     "earn_bps": 100, "point_min": 1000, "point_step": 100, "point_enabled": True,
 }
@@ -51,7 +55,7 @@ def password_matches(password, encoded):
         return False
 
 
-class Store(CatalogMixin, CommerceMixin, OperationsMixin, LoyaltyMixin, RecoveryMixin, BackupPolicyMixin, SettlementMixin):
+class Store(CatalogMixin, CommerceMixin, OperationsMixin, LoyaltyMixin, RecoveryMixin, BackupPolicyMixin, SettlementMixin, BackupScheduleMixin):
     def __init__(self, path):
         self.path = Path(path).expanduser().resolve() if str(path) != ":memory:" else None
         if self.path:
@@ -133,6 +137,18 @@ class Store(CatalogMixin, CommerceMixin, OperationsMixin, LoyaltyMixin, Recovery
                 last_error = exc
         raise last_error or PermissionError("로그인이 필요합니다.")
 
+    def require_menu(self, key):
+        actor = self._require()
+        if not has_menu(actor, key):
+            raise PermissionError(f"{MENU_POLICIES.get(key, (key,))[0]} 메뉴 접근권한이 없습니다.")
+        return actor
+
+    def _require_capability(self, key, operation):
+        actor = self.require_menu(key)
+        if not can_action(actor, key, operation):
+            raise PermissionError(f"{MENU_POLICIES[key][0]}의 {ACTIONS[operation]} 권한이 없습니다.")
+        return actor
+
     def _audit(self, action, entity, entity_id=None, detail=None):
         self.db.execute("INSERT INTO audit(at,user_id,action,entity,entity_id,detail) VALUES(?,?,?,?,?,?)", (
             now(), self.actor["id"] if self.actor else None, action, entity, entity_id,
@@ -207,7 +223,7 @@ class Store(CatalogMixin, CommerceMixin, OperationsMixin, LoyaltyMixin, Recovery
                 raise ValueError("계정 역할은 관리자 또는 일반 사용자여야 합니다.")
             active = int(bool(data.get("active", existing["active"] if existing else True)))
             permissions = data.get("permissions", json.loads(existing["permissions"]) if existing else [])
-            if not isinstance(permissions, (list, tuple, set)) or not set(permissions) <= PERMISSIONS:
+            if not isinstance(permissions, (list, tuple, set)) or not set(permissions) <= ALLOWED_PERMISSIONS:
                 raise ValueError("올바른 사용자 권한을 선택하세요.")
             if role != "admin" and "admin" in permissions:
                 raise ValueError("관리자 권한은 관리자 역할에만 부여할 수 있습니다.")
@@ -248,7 +264,7 @@ class Store(CatalogMixin, CommerceMixin, OperationsMixin, LoyaltyMixin, Recovery
             self._audit("password", "user", row["id"], {})
 
     def _settings_values(self):
-        result = dict(DEFAULT_SETTINGS)
+        result = deepcopy(DEFAULT_SETTINGS)
         result.update({row["key"]: json.loads(row["value"]) for row in self.db.execute("SELECT * FROM settings")})
         return result
 
@@ -272,6 +288,8 @@ class Store(CatalogMixin, CommerceMixin, OperationsMixin, LoyaltyMixin, Recovery
                 limit = 10000 if key == "earn_bps" else 9_000_000_000_000
                 if value < (1 if key == "point_step" else 0) or value > limit:
                     raise ValueError("포인트 정책 허용 범위를 확인하세요.")
+            elif key == "backup_schedule":
+                value = validate_schedule(value)
             elif key == "point_enabled":
                 if not isinstance(value, bool):
                     raise ValueError("포인트 사용 여부는 체크 값이어야 합니다.")
@@ -290,6 +308,13 @@ class Store(CatalogMixin, CommerceMixin, OperationsMixin, LoyaltyMixin, Recovery
 
     def backup(self, path):
         self._require("admin")
+        result = self._backup_file(path)
+        with self._tx():
+            self._require("admin")
+            self._audit("backup", "settings", None, {"file": Path(result).name})
+        return result
+
+    def _backup_file(self, path):
         target = Path(path).expanduser().resolve()
         if self.path and target == self.path:
             raise ValueError("사용 중인 업무 DB에 덮어쓸 수 없습니다.")
@@ -303,9 +328,8 @@ class Store(CatalogMixin, CommerceMixin, OperationsMixin, LoyaltyMixin, Recovery
                 raise ValueError("백업 파일 무결성 검사에 실패했습니다.")
             if destination.execute("PRAGMA foreign_key_check").fetchone():
                 raise ValueError("백업 파일 연결 이력 검사에 실패했습니다.")
+        except sqlite3.Error as exc:
+            raise ValueError(f"백업 파일을 저장하지 못했습니다: {exc}") from exc
         finally:
             destination.close()
-        with self._tx():
-            self._require("admin")
-            self._audit("backup", "settings", None, {"file": target.name})
         return str(target)

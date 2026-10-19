@@ -11,7 +11,8 @@ import sqlite3
 import tempfile
 import time
 
-from .common import PERMISSIONS, now
+from .common import ALLOWED_PERMISSIONS, now
+from .backup_schedule import validate_schedule
 from .loyalty import LOYALTY_SCHEMA
 from .operations import OPERATIONS_SCHEMA
 from .schema import SCHEMA, initialize
@@ -22,10 +23,10 @@ CREATE TABLE IF NOT EXISTS restore_state (
  id INTEGER PRIMARY KEY CHECK(id=1), token TEXT NOT NULL
 );
 INSERT OR IGNORE INTO restore_state(id,token) VALUES(1,'');
-PRAGMA user_version=201;
+PRAGMA user_version=202;
 """
-SUPPORTED_VERSIONS = {200, 201}
-SCHEMA_VERSION = 201
+SUPPORTED_VERSIONS = {200, 201, 202}
+SCHEMA_VERSION = 202
 APPLICATION_ID = 1398362162
 
 
@@ -87,7 +88,7 @@ def _validate_database(db):
             if (algorithm, n, r, p) != ("scrypt", "16384", "8", "1") or len(bytes.fromhex(salt)) != 16 or len(bytes.fromhex(digest)) != 32:
                 raise ValueError("invalid password hash")
             permissions = json.loads(row[1])
-            if not isinstance(permissions, list) or not set(permissions) <= PERMISSIONS or row[2] != "admin" and "admin" in permissions:
+            if not isinstance(permissions, list) or not set(permissions) <= ALLOWED_PERMISSIONS or row[2] != "admin" and "admin" in permissions:
                 raise ValueError("invalid permissions")
         except (ValueError, TypeError):
             raise ValueError("백업의 사용자 인증 정보가 올바르지 않습니다.") from None
@@ -100,6 +101,8 @@ def _validate_database(db):
                 raise ValueError("invalid points policy")
         if type(settings.get("point_enabled", True)) is not bool or not all(isinstance(settings.get(key, ""), str) for key in ("store_name", "business_no", "phone", "address")):
             raise ValueError("invalid settings")
+        if "backup_schedule" in settings:
+            validate_schedule(settings["backup_schedule"])
         if ("table", "restore_state") in actual:
             states = db.execute("SELECT token FROM restore_state").fetchall()
             if len(states) != 1:
@@ -220,8 +223,11 @@ class RecoveryMixin:
                 # A retained automatic backup is also used for rollback if a
                 # post-copy check fails. Never delete the user's selected file.
                 try:
-                    with sqlite3.connect(safety, isolation_level=None) as saved:
+                    saved = sqlite3.connect(safety, isolation_level=None)
+                    try:
                         _copy_database(saved, self.db)
+                    finally:
+                        saved.close()
                     self._restore_token = self._current_restore_token()
                     self.actor = actor
                 except Exception as recovery_error:

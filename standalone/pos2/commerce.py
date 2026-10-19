@@ -16,6 +16,20 @@ KINDS = {"purchase", "sale", "purchase_return", "sale_return"}
 
 
 class CommerceMixin:
+    def _document_menu(self, kind):
+        if kind not in KINDS:
+            raise ValueError("전표 유형이 올바르지 않습니다.")
+        return "purchases" if kind.startswith("purchase") else "sales"
+
+    def _require_trade_write(self, data, identifier=None):
+        menu = self._document_menu(data.get("kind"))
+        self._require_capability(menu, "edit" if identifier else "create")
+        if str(data.get("kind", "")).endswith("_return"):
+            self._require_capability(menu, "delete")
+        if identifier:
+            original = self._trade_row(identifier)
+            self._require_capability(self._document_menu(original["kind"]), "edit")
+
     def _trade_row(self, identifier):
         row = self.db.execute("SELECT * FROM documents WHERE id=?", (identifier,)).fetchone()
         if not row:
@@ -313,6 +327,7 @@ class CommerceMixin:
     def save_draft(self, data, id=None):
         with self._tx():
             self._require("trade")
+            self._require_trade_write(data, id)
             prepared = self._prepare_trade(data)
             identifier = self._write_trade(prepared, "draft", id)
             self._audit("save_draft", "document", identifier, {"kind": prepared["kind"], "total": prepared["total"]})
@@ -321,6 +336,7 @@ class CommerceMixin:
     def delete_draft(self, identifier):
         with self._tx():
             self._require("trade")
+            self._require_capability(self._document_menu(self._trade_row(identifier)["kind"]), "delete")
             if self._trade_row(identifier)["status"] != "draft":
                 raise ValueError("초안만 삭제할 수 있습니다. 확정 이력은 보존합니다.")
             self.db.execute("DELETE FROM documents WHERE id=?", (identifier,))
@@ -344,6 +360,7 @@ class CommerceMixin:
     def post_document(self, data, draft_id=None):
         with self._tx():
             self._require("trade")
+            self._require_trade_write(data, draft_id)
             prepared = self._prepare_trade(data, posting=True)
             if prepared["date"] > calendar_date.today().isoformat():
                 raise ValueError("미래 거래는 확정할 수 없습니다. 예정 거래는 초안으로 보관하세요.")
@@ -399,6 +416,7 @@ class CommerceMixin:
 
     def _insert_trade_payment(self, document_id, amount, payment_date, method, memo):
         record = self._trade_row(document_id)
+        self._require_capability("payments" if record["kind"].startswith("purchase") else "sales", "create")
         if record["status"] != "posted":
             raise ValueError("확정된 전표만 정산할 수 있습니다.")
         payment_date = day(payment_date)
@@ -450,6 +468,7 @@ class CommerceMixin:
         if payment["supplier_settlement_id"] and payment["supplier_settlement_id"] != settlement_id:
             raise ValueError("공급사 묶음 결제입니다. 결제관리에서 결제 전체를 취소하세요.")
         record = self._trade_row(payment["document_id"])
+        self._require_capability("payments" if record["kind"].startswith("purchase") else "sales", "delete")
         if record["member_id"] and record["kind"] == "sale":
             raise ValueError("회원 매출의 전액 정산을 해제할 수 없습니다. 원전표 반품을 이용하세요.")
         self._assert_open(payment["date"])
@@ -478,6 +497,7 @@ class CommerceMixin:
             self._require("trade")
             reason = text(reason, "취소 사유", required=True)
             record = self._trade_row(identifier)
+            self._require_capability(self._document_menu(record["kind"]), "delete")
             if record["status"] != "posted":
                 raise ValueError("확정 상태의 전표만 취소할 수 있습니다.")
             self._assert_open(record["date"])

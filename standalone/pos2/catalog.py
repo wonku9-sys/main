@@ -14,11 +14,13 @@ class CatalogMixin:
         for row in self.db.execute("SELECT DISTINCT category,category_mid,category_small FROM products"):
             self._ensure_category_path(*row, allow_inactive=True)
 
-    def _ensure_category_path(self, category, middle="", small="", allow_inactive=False):
+    def _ensure_category_path(self, category, middle="", small="", allow_inactive=False, check_create=False):
         parent = None
         for level, name in enumerate((category, middle, small), 1):
             if not name:
                 break
+            if check_create and not self.db.execute("SELECT 1 FROM product_categories WHERE parent_id IS ? AND name=?", (parent, name)).fetchone():
+                self._require_capability("categories", "create")
             self.db.execute("INSERT OR IGNORE INTO product_categories(parent_id,name,level) VALUES(?,?,?)", (parent, name, level))
             row = self.db.execute("SELECT id,active FROM product_categories WHERE parent_id IS ? AND name=?", (parent, name)).fetchone()
             if not row["active"] and not allow_inactive:
@@ -51,6 +53,7 @@ class CatalogMixin:
     def save_category(self, data, id=None):
         with self._tx():
             self._require("catalog")
+            self._require_capability("categories", "edit" if id else "create")
             name = text(data.get("name"), "분류명", True, 300)
             old = self.db.execute("SELECT * FROM product_categories WHERE id=?", (id,)).fetchone() if id else None
             if id and not old:
@@ -87,6 +90,7 @@ class CatalogMixin:
     def delete_category(self, id):
         with self._tx():
             self._require("catalog")
+            self._require_capability("categories", "delete")
             path = self._category_path(id)
             if not path:
                 raise ValueError("삭제할 분류를 선택하세요.")
@@ -142,6 +146,8 @@ class CatalogMixin:
         with self._tx():
             self._require("catalog")
             old = self.db.execute("SELECT * FROM partners WHERE id=?", (id,)).fetchone() if id else None
+            kind = old["kind"] if old else data.get("kind", "supplier")
+            self._require_capability("suppliers" if kind == "supplier" else "customers", "edit" if id else "create")
             if id and not old:
                 raise ValueError("거래처를 찾을 수 없습니다.")
             values = dict(old) if old else {key: "" for key in PARTNER_TEXT}
@@ -182,6 +188,7 @@ class CatalogMixin:
             row = self.db.execute("SELECT * FROM partners WHERE id=?", (id,)).fetchone()
             if not row:
                 raise ValueError("거래처를 찾을 수 없습니다.")
+            self._require_capability("suppliers" if row["kind"] == "supplier" else "customers", "delete")
             if row["opening_balance"]:
                 raise ValueError("초기 외상이 있는 거래처는 삭제하지 말고 비활성화하세요.")
             self.db.execute("DELETE FROM partners WHERE id=?", (id,))
@@ -217,6 +224,7 @@ class CatalogMixin:
     def save_product(self, data, id=None):
         with self._tx():
             self._require("catalog")
+            self._require_capability("products", "edit" if id else "create")
             old = self.db.execute("SELECT * FROM products WHERE id=?", (id,)).fetchone() if id else None
             if id and not old:
                 raise ValueError("상품을 찾을 수 없습니다.")
@@ -228,7 +236,7 @@ class CatalogMixin:
             if values["category_small"] and not values["category_mid"]:
                 raise ValueError("소분류를 정하려면 중분류를 먼저 선택하세요.")
             unchanged = bool(old and all(values[key] == old[key] for key in ("category", "category_mid", "category_small")))
-            self._ensure_category_path(values["category"], values["category_mid"], values["category_small"], allow_inactive=unchanged)
+            self._ensure_category_path(values["category"], values["category_mid"], values["category_small"], allow_inactive=unchanged, check_create=True)
             values["base_unit"] = values["base_unit"] or "kg"
             values["supplier_id"] = data.get("supplier_id", old["supplier_id"] if old else None) or None
             if values["supplier_id"]:
@@ -265,6 +273,7 @@ class CatalogMixin:
     def delete_product(self, id):
         with self._tx():
             self._require("catalog")
+            self._require_capability("products", "delete")
             row = self.db.execute("SELECT * FROM products WHERE id=?", (id,)).fetchone()
             if not row:
                 raise ValueError("상품을 찾을 수 없습니다.")
@@ -285,6 +294,7 @@ class CatalogMixin:
     def save_unit(self, data, id=None):
         with self._tx():
             self._require("catalog")
+            self._require_capability("products", "edit")
             old = self.db.execute("SELECT * FROM product_units WHERE id=?", (id,)).fetchone() if id else None
             if id and not old:
                 raise ValueError("확장단위를 찾을 수 없습니다.")
@@ -307,6 +317,7 @@ class CatalogMixin:
     def delete_unit(self, id):
         with self._tx():
             self._require("catalog")
+            self._require_capability("products", "delete")
             row = self.db.execute("SELECT * FROM product_units WHERE id=?", (id,)).fetchone()
             if not row:
                 raise ValueError("확장단위를 찾을 수 없습니다.")
@@ -334,12 +345,13 @@ class CatalogMixin:
             raise ValueError("상품을 선택하세요.")
         with self._tx():
             self._require("catalog")
+            self._require_capability("products", "edit")
             for identifier in unique:
                 row = self.db.execute("SELECT category FROM products WHERE id=?", (identifier,)).fetchone()
                 if not row:
                     raise ValueError("선택한 상품 중 존재하지 않는 상품이 있습니다.")
                 current = self.db.execute("SELECT category_mid,category_small FROM products WHERE id=?", (identifier,)).fetchone()
-                self._ensure_category_path(category, current[0], current[1])
+                self._ensure_category_path(category, current[0], current[1], check_create=True)
                 self.db.execute("UPDATE products SET category=?,updated_at=? WHERE id=?", (category, now(), identifier))
                 self._audit("bulk_category", "product", identifier, {"changes": {"category": {"old": row[0], "new": category}}})
 

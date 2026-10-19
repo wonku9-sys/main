@@ -39,6 +39,10 @@ def action(text, callback, primary=False, danger=False):
     result = QPushButton(text)
     result.setObjectName("primary" if primary else "danger" if danger else "action")
     result.clicked.connect(callback)
+    from .menu_help import ACTION_HELP, attach_help
+    attach_help(result, ACTION_HELP.get(text))
+    from .permissions import restrict_button
+    restrict_button(result, callback)
     return result
 
 
@@ -55,6 +59,7 @@ def search_icon():
 
 
 READ_PERMISSIONS = {
+    "PermissionsPage": ("admin",),
     "SupplierPaymentsPage": ("trade",), "SupplierPaymentDialog": ("trade",),
     "ProductsPage": ("catalog",), "PartnersPage": ("catalog",),
     "ProductDialog": ("catalog",), "LabelsPage": ("catalog",),
@@ -89,7 +94,9 @@ def _output_context(widget, parent=None):
     permissions = None
     for candidate in candidates:
         if store is None and getattr(candidate, "store", None) is not None:
-            store, owner = candidate.store, candidate
+            store = candidate.store
+            if owner is None:
+                owner = candidate
         if permissions is None:
             explicit = getattr(candidate, "read_permissions", None)
             if explicit is not None:
@@ -129,6 +136,10 @@ def authorize_output(widget, parent=None):
         return True
     try:
         store._require(*permissions)
+        from .permissions import menu_key_for
+        key = menu_key_for(owner) if owner is not None else None
+        if key:
+            store.require_menu(key)
         return True
     except PermissionError as exc:
         _clear_output_cache(widget, owner)
@@ -381,6 +392,16 @@ class ScanField(QLineEdit):
 
 
 class FormDialog(QDialog):
+    def accept(self):
+        from .navigation import mark_saved
+        mark_saved(self)
+        super().accept()
+
+    def reject(self):
+        from .navigation import confirm_dialog_exit
+        if confirm_dialog_exit(self):
+            super().reject()
+
     def __init__(self, title, parent=None):
         super().__init__(parent)
         self.setWindowTitle(f"{title} · 서영 POS 독립판")

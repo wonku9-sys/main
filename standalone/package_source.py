@@ -4,9 +4,10 @@ import argparse
 from hashlib import sha256
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
+from pos2 import __version__
 
 ROOT = Path(__file__).resolve().parent
-NAME = "SeoyoungPOS-Standalone-source.zip"
+NAME = f"SeoyoungPOS-Standalone-v{__version__}-source.zip"
 
 
 def source_files():

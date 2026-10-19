@@ -11,7 +11,7 @@ import tempfile
 from PySide6.QtCore import QDate, QLockFile, QSize, Qt, QTimer
 from PySide6.QtGui import QAction, QFont, QIcon, QKeySequence
 from PySide6.QtWidgets import (
-    QApplication, QDialog, QFrame, QHBoxLayout, QLabel, QMainWindow, QMessageBox,
+    QApplication, QDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QMainWindow, QMessageBox,
     QScrollArea, QStackedWidget, QStyle, QToolBar, QTreeWidget, QTreeWidgetItem,
     QVBoxLayout, QWidget,
 )
@@ -19,6 +19,9 @@ from PySide6.QtWidgets import (
 from . import __version__
 from .font_support import font_family, verify_glyphs
 from .store import Store
+from .permissions import has_menu
+from .navigation import NavigationGuard
+from .menu_help import MENU_HELP, ACTION_HELP, MenuHelpStyle, attach_help
 from .widgets import DataGrid, FormDialog, Page, ScanField, action, date_field, won
 
 
@@ -73,15 +76,17 @@ QScrollBar:vertical { background:#EFF3F5; width:10px; }
 QScrollBar::handle:vertical { background:#BECED5; border-radius:4px; min-height:25px; }
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height:0; }
 QStatusBar { color:#81939E; font-size:10px; }
+QToolTip { color:#243A48; background:#FFFBEA; border:1px solid #D9D4B9; padding:7px; }
 """
 
 SECTIONS = [
+    ("첫화면", [("home", "첫화면", ())]),
     ("1. 기초관리", [("products", "상품장 · 확장단위", "catalog"), ("categories", "상품 분류", "catalog"), ("suppliers", "공급사", "catalog"), ("customers", "판매처", "catalog"), ("labels", "라벨 출력", "catalog")]),
-    ("2. 매입 · 판매", [("purchases", "매입장 · 매입반품", "trade"), ("payments", "결제관리 · 공급사 지급", "trade"), ("sales", "매출장 · 고객반품", "trade"), ("ledger", "거래처 원장", "trade")]),
+    ("2. 매입/발주관리", [("purchases", "매입전표", "trade"), ("payments", "결제관리", "trade"), ("sales", "매출장 · 고객반품", "trade"), ("ledger", "거래처 원장", "trade")]),
     ("3. 재고관리", [("inventory", "현재고 · 입출고", "inventory"), ("counts", "실사 입력 · 적용", "inventory"), ("closings", "현금 · 월재고 마감", ("inventory", "trade"))]),
     ("4. 회원 · 행사", [("members", "회원 · 포인트", "loyalty"), ("promotions", "특매 그룹", "loyalty"), ("prices", "가격 변경 예약", "loyalty"), ("gifts", "사은품 교환", "loyalty")]),
     ("5. 조회 · 보고서", [("overview", "업무 현황", "reports"), ("reports", "일 · 월 · 상세 집계", "reports"), ("commission", "공급사 판매 수수료", "reports")]),
-    ("6. 관리자 모드", [("users", "사용자 · 접근권한", "admin"), ("settings", "매장 설정 · 백업", "admin")]),
+    ("6. 관리자 모드", [("users", "사용자 관리", "admin"), ("permissions", "권한 설정", "admin"), ("settings", "매장 설정 · 백업", "admin")]),
 ]
 
 
@@ -117,6 +122,31 @@ class LoginDialog(FormDialog):
             self.accept()
         except (ValueError, PermissionError) as exc:
             self.error(exc)
+
+
+class HomePage(Page):
+    def __init__(self, window):
+        super().__init__(window, "서영 POS · 첫화면", "서버 없이 이 PC에서 관리합니다. 원하는 업무를 선택하세요.")
+        self.links = QWidget()
+        self.body.addWidget(self.links)
+        self.body.addStretch()
+
+    def refresh(self):
+        self.store._require()
+        old = self.links.layout()
+        if old:
+            while old.count():
+                item = old.takeAt(0)
+                if item.widget():
+                    item.widget().deleteLater()
+        else:
+            old = QGridLayout(self.links)
+        keys = [(key, item.text(0)) for key, item in self.window.items.items() if key != "home" and has_menu(self.store.actor, key)]
+        for index, (key, label) in enumerate(keys):
+            button = action(label, lambda checked=False, target=key: self.window.open_page(target))
+            attach_help(button, MENU_HELP[key])
+            button.setMinimumHeight(48)
+            old.addWidget(button, index // 3, index % 3)
 
 
 class OverviewPage(Page):
@@ -226,6 +256,7 @@ class MainWindow(QMainWindow):
         self.store, self.demo = store, demo
         self.pages, self.items, self.nav_actions, self.scrollers = {}, {}, {}, {}
         self.current_page, self.current_key = None, None
+        self._backup_runtime_enabled, self._exit_backup_done = False, False
         self.setWindowTitle(f"서영 POS 독립판 {__version__} · 서버 없는 매장 관리" + (" [체험]" if demo else ""))
         self.resize(1500, 930)
         self.setMinimumSize(1060, 680)
@@ -262,6 +293,7 @@ class MainWindow(QMainWindow):
         top.setContentsMargins(20, 8, 20, 8)
         self.location = QLabel("독립형 매장 업무")
         top.addWidget(self.location, 1)
+        top.addWidget(action("첫화면", self.go_home))
         top.addWidget(QLabel(f"{store.actor['name']} · {'관리자 모드' if store.actor['role'] == 'admin' else '일반 사용자'}"))
         self.admin_mode_button = None
         if store.actor["role"] == "admin":
@@ -287,10 +319,12 @@ class MainWindow(QMainWindow):
         self.toolbar.setIconSize(QSize(24, 24))
         self.addToolBar(self.toolbar)
         for title, entries in SECTIONS:
-            allowed = [entry for entry in entries if self.allowed(entry[2])]
+            allowed = [entry for entry in entries if self.allowed(entry[2]) and has_menu(self.store.actor, entry[0])]
             if not allowed:
                 continue
             menu = self.menuBar().addMenu(title)
+            menu.setToolTipsVisible(True)
+            attach_help(menu.menuAction(), " · ".join(caption for _, caption, _ in allowed) + " 업무 메뉴를 엽니다.")
             parent = QTreeWidgetItem(self.tree, [title])
             parent.setExpanded(True)
             font = parent.font(0)
@@ -299,31 +333,70 @@ class MainWindow(QMainWindow):
             for key, caption, _permission in allowed:
                 item = QTreeWidgetItem(parent, [caption])
                 item.setData(0, Qt.ItemDataRole.UserRole, key)
+                item.setToolTip(0, MENU_HELP[key])
                 self.items[key] = item
                 nav = QAction(caption, self)
+                attach_help(nav, MENU_HELP[key])
                 nav.setCheckable(True)
                 nav.triggered.connect(lambda checked=False, page=key: self.open_page(page))
                 menu.addAction(nav)
                 self.nav_actions[key] = nav
-        for title, callback, standard in (("상품장", lambda: self.open_page("products"), QStyle.StandardPixmap.SP_FileDialogContentsView), ("매입 등록", lambda: self.new_trade("purchase"), QStyle.StandardPixmap.SP_ArrowDown), ("판매 등록", lambda: self.new_trade("sale"), QStyle.StandardPixmap.SP_ArrowUp), ("F8 스캔", self.focus_scan, QStyle.StandardPixmap.SP_FileDialogDetailedView), ("조회", self.refresh, QStyle.StandardPixmap.SP_BrowserReload), ("엑셀 저장", self.export, QStyle.StandardPixmap.SP_DialogSaveButton), ("인쇄", self.print, QStyle.StandardPixmap.SP_FileIcon)):
-            if title == "상품장" and not self.allowed("catalog") or title in ("매입 등록", "판매 등록") and not self.allowed("trade"):
+        for title, callback, standard in (("첫화면", self.go_home, QStyle.StandardPixmap.SP_DirHomeIcon), ("상품장", lambda: self.open_page("products"), QStyle.StandardPixmap.SP_FileDialogContentsView), ("매입전표", lambda: self.open_page("purchases"), QStyle.StandardPixmap.SP_ArrowDown), ("판매 등록", lambda: self.new_trade("sale"), QStyle.StandardPixmap.SP_ArrowUp), ("F8 스캔", self.focus_scan, QStyle.StandardPixmap.SP_FileDialogDetailedView), ("조회", self.refresh, QStyle.StandardPixmap.SP_BrowserReload), ("엑셀 저장", self.export, QStyle.StandardPixmap.SP_DialogSaveButton), ("인쇄", self.print, QStyle.StandardPixmap.SP_FileIcon)):
+            if title == "상품장" and not self.allowed("catalog") or title in ("매입전표", "판매 등록") and not self.allowed("trade"):
                 continue
             tool = QAction(self.style().standardIcon(standard), title, self)
+            attach_help(tool, ACTION_HELP[title])
             tool.triggered.connect(callback)
             self.toolbar.addAction(tool)
-        for sequence, callback in (("F8", self.focus_scan), ("F5", self.refresh), ("Ctrl+E", self.export), ("Ctrl+P", self.print), ("Ctrl+N", self.new_current)):
+        for sequence, callback in (("Ctrl+Home", self.go_home), ("F8", self.focus_scan), ("F5", self.refresh), ("Ctrl+E", self.export), ("Ctrl+P", self.print), ("Ctrl+N", self.new_current)):
             shortcut = QAction(self)
             shortcut.setShortcut(QKeySequence(sequence))
             shortcut.triggered.connect(callback)
             self.addAction(shortcut)
         self.notify(f"새 독립판 DB: {store.path} · F8 바코드  F5 조회  Ctrl+E 엑셀  Ctrl+P 인쇄")
+        self.navigation = NavigationGuard(self)
         if self.items:
-            self.open_page("overview" if "overview" in self.items else next(iter(self.items)))
+            self.open_page("home")
         self.maintenance_timer = QTimer(self)
         self.maintenance_timer.setInterval(60 * 60 * 1000)
         self.maintenance_timer.timeout.connect(self.maintain_backups)
         self.maintenance_timer.start()
         QTimer.singleShot(500, self.maintain_backups)
+        self.backup_timer = QTimer(self)
+        self.backup_timer.setInterval(60_000)
+        self.backup_timer.timeout.connect(self.scheduled_backup)
+
+    def enable_runtime(self):
+        self.navigation.enable()
+        self._backup_runtime_enabled = True
+        self.backup_timer.start()
+        QTimer.singleShot(1500, self.scheduled_backup)
+
+    def scheduled_backup(self):
+        if not self._backup_runtime_enabled or not self.isVisible() or QApplication.activeModalWidget() is not None:
+            return
+        try:
+            result = self.store.run_scheduled_backup()
+            if result:
+                self.notify(f"자동 백업 완료: {Path(result).name}")
+                if "settings" in self.pages:
+                    self.pages["settings"].refresh_backups()
+        except (ValueError, PermissionError, OSError) as exc:
+            self.notify(f"자동 백업 실패: {exc} · 설정에서 백업 폴더를 확인하세요.")
+
+    def prepare_exit(self):
+        if not self.navigation.allow_leave(self.current_page):
+            return False
+        if self._backup_runtime_enabled and not self._exit_backup_done and self.store.actor:
+            try:
+                self.store.backup_on_exit()
+                self._exit_backup_done = True
+            except (ValueError, PermissionError, OSError) as exc:
+                answer = QMessageBox.question(self, "종료 백업 실패", f"종료 백업을 저장하지 못했습니다.\n{exc}\n\n백업 없이 종료할까요?", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
+                if answer != QMessageBox.StandardButton.Yes:
+                    return False
+                self._exit_backup_done = True
+        return True
 
     def maintain_backups(self):
         if not self.isVisible() or QApplication.activeModalWidget() is not None:
@@ -341,27 +414,44 @@ class MainWindow(QMainWindow):
             self.notify("백업 정리를 완료하지 못했습니다. 설정에서 백업 폴더를 확인하세요.")
 
     def closeEvent(self, event):
+        if not self.prepare_exit():
+            event.ignore()
+            return
         self.maintenance_timer.stop()
+        self.backup_timer.stop()
+        self.navigation.disable()
         super().closeEvent(event)
+
+    def go_home(self):
+        return self.navigation.request_home()
 
     def allowed(self, permission):
         actor = self.store.actor
         permissions = (permission,) if isinstance(permission, str) else permission
+        if not permissions:
+            return bool(actor)
         return bool(actor and (actor["role"] == "admin" or set(permissions) & set(actor["permissions"])))
 
     def open_page(self, key):
         if key not in self.items:
             return False
+        if getattr(self, "navigation", None) and not self.navigation.allow_leave(self.current_page):
+            return False
         from .catalog_ui import ProductsPage, CategoriesPage, PartnersPage, UsersPage, SettingsPage
         from .workflow_ui import TradesPage, LedgerPage, CountsPage, ReportPage, ClosingsPage
         from .loyalty_ui import MembersPage, PromotionsPage, PricesPage, GiftsPage
         from .payment_ui import SupplierPaymentsPage
+        from .permission_ui import PermissionsPage
         factories = {"overview": lambda: OverviewPage(self), "products": lambda: ProductsPage(self), "suppliers": lambda: PartnersPage(self, "supplier"), "customers": lambda: PartnersPage(self, "customer"), "purchases": lambda: TradesPage(self, "purchase"), "sales": lambda: TradesPage(self, "sale"), "ledger": lambda: LedgerPage(self), "inventory": lambda: InventoryPage(self), "counts": lambda: CountsPage(self), "closings": lambda: ClosingsPage(self), "members": lambda: MembersPage(self), "promotions": lambda: PromotionsPage(self), "prices": lambda: PricesPage(self), "gifts": lambda: GiftsPage(self), "reports": lambda: ReportPage(self), "commission": lambda: CommissionPage(self), "labels": lambda: LabelsPage(self), "users": lambda: UsersPage(self), "settings": lambda: SettingsPage(self)}
         factories["categories"] = lambda: CategoriesPage(self)
         factories["payments"] = lambda: SupplierPaymentsPage(self)
+        factories["permissions"] = lambda: PermissionsPage(self)
+        factories["home"] = lambda: HomePage(self)
         try:
+            self.store.require_menu(key)
             if key not in self.pages:
                 page = factories[key]()
+                page.menu_key = key
                 permissions = next(permission for _, entries in SECTIONS for page_key, _, permission in entries if page_key == key)
                 page.read_permissions = (permissions,) if isinstance(permissions, str) else permissions
                 scroll = QScrollArea()
@@ -370,14 +460,21 @@ class MainWindow(QMainWindow):
                 self.pages[key], self.scrollers[key] = page, scroll
                 self.stack.addWidget(scroll)
             page = self.pages[key]
+            page.setEnabled(True)
             page.refresh()
+            self.navigation.track(page)
         except (ValueError, PermissionError) as exc:
+            if isinstance(exc, PermissionError) and key in self.pages:
+                for grid in self.pages[key].findChildren(DataGrid):
+                    grid.fill([])
+                self.pages[key].setEnabled(False)
             QMessageBox.warning(self, "조회 실패", str(exc))
             return False
         self.current_key, self.current_page = key, page
         self.stack.setCurrentWidget(self.scrollers[key])
         self.tree.setCurrentItem(self.items[key])
-        self.items[key].parent().setExpanded(True)
+        if self.items[key].parent():
+            self.items[key].parent().setExpanded(True)
         self.location.setText(f"매장 업무  /  {page.title}")
         for page_key, nav in self.nav_actions.items():
             nav.setChecked(page_key == key)
@@ -389,8 +486,16 @@ class MainWindow(QMainWindow):
     def refresh(self):
         if self.current_page:
             try:
+                if not self.navigation.allow_leave(self.current_page):
+                    return
+                self.store.require_menu(self.current_key)
                 self.current_page.refresh()
+                self.navigation.track(self.current_page)
             except (ValueError, PermissionError) as exc:
+                if isinstance(exc, PermissionError):
+                    for grid in self.current_page.findChildren(DataGrid):
+                        grid.fill([])
+                    self.current_page.setEnabled(False)
                 QMessageBox.warning(self, "조회", str(exc))
 
     def new_trade(self, kind):
@@ -442,10 +547,14 @@ class MainWindow(QMainWindow):
 
     def logout(self):
         if QMessageBox.question(self, "로그아웃", "로그아웃하고 프로그램을 종료할까요?") == QMessageBox.StandardButton.Yes:
-            self.store.logout()
-            self.close()
+            if self.prepare_exit():
+                self.store.logout()
+                self.navigation.suspended = True
+                self.close()
 
     def finish_restore(self, result):
+        self.navigation.suspended = True
+        self._exit_backup_done = True
         self.maintenance_timer.stop()
         self.setEnabled(False)
         for page in self.pages.values():
@@ -472,7 +581,7 @@ def main(argv=None):
     app = QApplication.instance() or QApplication(sys.argv[:1])
     app.setApplicationName("서영 POS 독립판")
     app.setOrganizationName("SeoyoungStandalone")
-    app.setStyle("Fusion")
+    app.setStyle(MenuHelpStyle())
     try:
         app.setFont(QFont(font_family(), 10))
     except RuntimeError as exc:
@@ -506,6 +615,8 @@ def main(argv=None):
             if LoginDialog(store, backdrop).exec() != QDialog.DialogCode.Accepted:
                 return 0
         window = MainWindow(store, is_demo)
+        if not args.smoke_test:
+            window.enable_runtime()
         if app.platformName() != "offscreen" and app.primaryScreen():
             available = app.primaryScreen().availableGeometry()
             window.resize(min(1500, available.width() - 20), min(930, available.height() - 35))
@@ -548,6 +659,8 @@ def main(argv=None):
                                 app.processEvents()
                                 target = args.screenshot.with_name(args.screenshot.stem + suffix + args.screenshot.suffix)
                                 assert widget.grab().save(str(target))
+                            window.open_page("home")
+                            capture("-home", window)
                             purchase = TradeDialog(window, "purchase")
                             first = store.products()[0]
                             purchase.partner.setCurrentIndex(purchase.partner.findData(first["supplier_id"]))
@@ -562,13 +675,26 @@ def main(argv=None):
                             capture("-product-search", picker)
                             picker.close()
                             purchase.close()
+                            source = next((store.document(row["id"]) for row in store.documents(kind="purchase", status="posted") if any(float(line["remaining_qty"]) > 0 for line in store.document(row["id"])["lines"])), None)
+                            assert source is not None
+                            returned = TradeDialog(window, "purchase_return", source=source)
+                            assert returned.return_mode.isChecked() and returned.line_rows
+                            returned.line_rows[0]["qty"].setText("0.1")
+                            capture("-return", returned)
+                            returned.close()
                             window.open_page("categories")
                             capture("-categories", window)
                             window.open_page("settings")
                             assert window.current_page.backup_grid.rowCount() >= 2
+                            assert window.current_page.backup_exit.isChecked()
                             capture("-backup", window)
                             window.open_page("payments")
                             capture("-payments", window)
+                            window.open_page("permissions")
+                            sample_staff = store.save_user({"code": "STAFF-SMOKE", "name": "권한 예시 직원", "role": "staff", "password": "Smoke-Staff-2026!", "permissions": ["catalog", "trade", "deny:products.delete", "deny:purchases.delete", "deny:payments.delete"]})
+                            window.current_page.refresh()
+                            window.current_page.user.setCurrentIndex(window.current_page.user.findData(sample_staff))
+                            capture("-permissions", window)
                             fresh_login_store = Store(directory / "smoke-login.db")
                             try:
                                 first_login = LoginDialog(fresh_login_store, window)
