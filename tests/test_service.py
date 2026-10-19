@@ -29,6 +29,30 @@ class ServiceTests(unittest.TestCase):
         return self.service.create_document(kind, self.supplier if kind == "purchase" else self.customer,
                                             "2026-10-17", [{"product_id": self.product, "qty": qty, "unit_price": price}], paid=paid)
 
+    def test_sequential_product_code_suggestion_preserves_manual_codes(self):
+        # The setup product P001 is intentionally not part of the numeric sequence.
+        self.assertEqual(self.service.next_product_code(), "000001")
+        first = self.service.save_product({"code": "000001", "name": "자동 상품 1", "unit": "kg"})
+        self.assertEqual(self.service.next_product_code(), "000002")
+        self.service.save_product({"code": "000120", "name": "직접 입력 상품", "unit": "g"})
+        self.assertEqual(self.service.next_product_code(), "000121")
+        self.service.save_product({"code": "0000134", "name": "7자리 상품", "unit": "g"})
+        self.assertEqual(self.service.next_product_code(), "0000135")
+        self.assertEqual(self.service.next_product_code(8), "00000135")
+        with self.assertRaises(ValueError):
+            self.service.save_product({"code": "000001", "name": "중복 상품", "unit": "kg"})
+        self.assertEqual(self.service.next_product_code(), "0000135")
+        self.assertEqual(self.service.db.execute("SELECT code FROM products WHERE id=?", (first,)).fetchone()[0], "000001")
+
+    def test_product_code_suggestion_requires_product_permissions(self):
+        self.service.save_user({
+            "username": "staff2", "name": "코드권한 없는 직원",
+            "password": "staff2-password", "role": "staff", "permissions": ["reports"],
+        })
+        self.service.login("staff2", "staff2-password")
+        with self.assertRaises(PermissionError):
+            self.service.next_product_code()
+
     def test_persistence_and_readable_backup(self):
         document_id = self.document(qty="1.250", price=18000)
         backup = Path(self.temp.name) / "backup.sqlite3"
