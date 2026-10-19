@@ -340,3 +340,35 @@ def test_delete_actions_confirm_and_preserve_protected_records(window, demo_serv
     assert demo_service.users_count() == 1
     assert len(messages) == 1
     assert "로그인" in messages[0][1]
+
+
+def test_new_product_code_auto_button_preserves_barcode_and_manual_entry(application, service, messages):
+    service.create_initial_admin("admin", "관리자", "secure-test-pass")
+    service.login("admin", "secure-test-pass")
+
+    dialog = ProductDialog(service)
+    assert dialog.findChild(QLineEdit, "product_code").text() == ""
+    button = dialog.findChild(
+        __import__("PySide6.QtWidgets", fromlist=["QPushButton"]).QPushButton,
+        "product_auto_code_button",
+    )
+    assert button is not None
+    dialog.fields["barcode"].setText("8801234123456")
+    button.click()
+    assert dialog.fields["code"].text() == "000001"
+    assert dialog.fields["barcode"].text() == "8801234123456"
+    dialog.fields["name"].setText("자동코드 상품")
+    dialog.save()
+    assert dialog.result() == QDialog.DialogCode.Accepted
+    assert service.list_products(search="000001")[0]["barcode"] == "8801234123456"
+
+    second = ProductDialog(service)
+    second.auto_code_button.click()
+    assert second.fields["code"].text() == "000002"
+    second.fields["code"].setText("MANUAL-123")
+    second.auto_code_button.click()
+    assert second.fields["code"].text() == "MANUAL-123"
+    assert any("이미 상품코드" in message for _, message in messages)
+    dialog.deleteLater()
+    second.deleteLater()
+
