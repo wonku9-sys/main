@@ -27,13 +27,8 @@ def rounded(value):
 
 
 def money(value, positive=False):
-    number = decimal(value)
-    if number < 0 or (positive and number <= 0):
-        raise ValueError("금액은 0보다 커야 합니다." if positive else "금액은 음수일 수 없습니다.")
-    result = rounded(number)
-    if positive and result <= 0:
-        raise ValueError("금액은 1원 이상이어야 합니다.")
-    return result
+    from .currency import money_input
+    return money_input(value, positive=positive)
 
 
 def qty(value, allow_zero=False, signed=False):

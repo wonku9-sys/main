@@ -130,7 +130,7 @@ def test_purchase_registration_selects_supplier_then_existing_catalog_product(sh
         calls.append("trade")
         dialog.pick_product()
         assert dialog.line_rows[0]["product"].currentData() == product
-        assert dialog.line_rows[0]["price"].text() == "10000"
+        assert dialog.line_rows[0]["price"].text() == "10000.00"
         assert store.documents() == []
         return QDialog.DialogCode.Rejected
     monkeypatch.setattr(PartnerPicker, "exec", supplier_pick)

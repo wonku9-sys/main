@@ -16,6 +16,8 @@ from .backup_schedule import validate_schedule
 from .loyalty import LOYALTY_SCHEMA
 from .operations import OPERATIONS_SCHEMA
 from .schema import SCHEMA, initialize
+from .suppliers import SUPPLIER_SCHEMA
+from .currency import upgrade_currency
 
 
 RESTORE_SCHEMA = """
@@ -23,10 +25,10 @@ CREATE TABLE IF NOT EXISTS restore_state (
  id INTEGER PRIMARY KEY CHECK(id=1), token TEXT NOT NULL
 );
 INSERT OR IGNORE INTO restore_state(id,token) VALUES(1,'');
-PRAGMA user_version=202;
+PRAGMA user_version=208;
 """
-SUPPORTED_VERSIONS = {200, 201, 202}
-SCHEMA_VERSION = 202
+SUPPORTED_VERSIONS = {200, 201, 202, 203, 204, 205, 206, 207, 208}
+SCHEMA_VERSION = 208
 APPLICATION_ID = 1398362162
 
 
@@ -40,7 +42,8 @@ def _objects(db):
 def _expected_objects():
     db = sqlite3.connect(":memory:")
     try:
-        db.executescript(SCHEMA + LOYALTY_SCHEMA + OPERATIONS_SCHEMA + RESTORE_SCHEMA)
+        initialize(db)
+        db.executescript(LOYALTY_SCHEMA + OPERATIONS_SCHEMA + RESTORE_SCHEMA)
         return _objects(db)
     finally:
         db.close()
@@ -52,8 +55,27 @@ def _validate_database(db):
     version = db.execute("PRAGMA user_version").fetchone()[0]
     if version not in SUPPORTED_VERSIONS:
         raise ValueError("지원하지 않는 백업 버전입니다. 같은 독립판 버전의 백업을 선택하세요.")
-    expected = _expected_objects()
+    expected = dict(_expected_objects())
     actual = _objects(db)
+    email_objects={("table",name) for name in ("email_smtp","recovery_emails","email_challenges","email_private_recovery","household_vaults","household_entries","household_memos","personal_preferences","personal_themes","personal_popup_preferences","desk_event_rules","desk_event_receipts","personal_health_entries")}
+    if version<208 and not email_objects & actual.keys():
+        expected={key:value for key,value in expected.items() if key not in email_objects}
+    private_objects = {("table",name) for name in ("diary_vaults","diary_entries","work_logs")}
+    if version<207 and not private_objects & actual.keys():
+        expected = {key:value for key,value in expected.items() if key not in private_objects}
+    if version<206 and ("table","desk_events") not in actual:
+        expected.pop(("table","desk_events"),None)
+    offline_objects = {("table", name) for name in ("sales_forms", "member_profiles")}
+    if version < 205 and not offline_objects & actual.keys():
+        expected = {key: value for key, value in expected.items() if key not in offline_objects}
+    if version < 204:
+        for table, addition in (("products", ",price_basisINTEGERNOTNULLDEFAULT1CHECK(price_basisIN(1,100))"), ("document_lines", ",price_basisINTEGERNOTNULLDEFAULT1CHECK(price_basisIN(1,100))"), ("documents", ",rounding_modeTEXTNOTNULLDEFAULT'won'CHECK(rounding_modeIN('decimal','won'))")):
+            key = ("table", table)
+            if addition not in actual.get(key, ""):
+                expected[key] = expected[key].replace(addition, "")
+    supplier_objects = {("table", name) for name in ("supplier_profiles", "supplier_groups", "supplier_group_members")}
+    if version < 203 and not supplier_objects & actual.keys():
+        expected = {key: value for key, value in expected.items() if key not in supplier_objects}
     if version == 200:
         expected = {key: value for key, value in expected.items() if key not in {
             (kind, name) for kind, name in (("table", "restore_state"), ("table", "code_sequences"), ("table", "product_categories"), ("index", "category_root_name"), ("table", "supplier_settlements")) if (kind, name) not in actual}}
@@ -71,6 +93,11 @@ def _validate_database(db):
         raise ValueError("백업 파일이 손상되어 복원할 수 없습니다.")
     if db.execute("PRAGMA foreign_key_check").fetchone():
         raise ValueError("백업의 거래·상품 연결 이력이 손상되어 복원할 수 없습니다.")
+    if ("table", "supplier_profiles") in actual:
+        if db.execute("SELECT 1 FROM supplier_profiles p JOIN partners s ON s.id=p.partner_id WHERE s.kind<>'supplier' LIMIT 1").fetchone() or db.execute("SELECT 1 FROM supplier_group_members m JOIN partners s ON s.id=m.partner_id WHERE s.kind<>'supplier' LIMIT 1").fetchone():
+            raise ValueError("백업의 공급사 정보에 판매처가 연결되어 있습니다.")
+        if db.execute("SELECT m.partner_id FROM supplier_group_members m JOIN supplier_groups g ON g.id=m.group_id WHERE g.kind='settlement' GROUP BY m.partner_id HAVING COUNT(*)>1 LIMIT 1").fetchone():
+            raise ValueError("백업의 공급사 결제유형이 중복되어 있습니다.")
     if ("table", "product_categories") in actual and db.execute("SELECT c.id FROM product_categories c LEFT JOIN product_categories p ON p.id=c.parent_id WHERE (c.parent_id IS NULL AND c.level<>1) OR (c.parent_id IS NOT NULL AND (p.id IS NULL OR c.level<>p.level+1)) LIMIT 1").fetchone():
         raise ValueError("백업의 상품 분류 연결이 올바르지 않습니다.")
     if ("table", "supplier_settlements") in actual:
@@ -103,6 +130,11 @@ def _validate_database(db):
             raise ValueError("invalid settings")
         if "backup_schedule" in settings:
             validate_schedule(settings["backup_schedule"])
+        if "online_info" in settings:
+            from .online_info import validate_online
+            validate_online(settings["online_info"])
+        if settings.get("rounding_mode", "decimal") not in {"decimal", "won"}:
+            raise ValueError("invalid rounding policy")
         if ("table", "restore_state") in actual:
             states = db.execute("SELECT token FROM restore_state").fetchall()
             if len(states) != 1:
@@ -203,6 +235,8 @@ class RecoveryMixin:
             safety = Path(self.create_backup(before_restore=True))
             reauthenticate()
             initialize(staged)
+            from types import SimpleNamespace
+            upgrade_currency(SimpleNamespace(db=staged, path=None), info["schema_version"])
             staged.executescript(RESTORE_SCHEMA)
             # Keep code high-water marks even when restoring an older snapshot.
             staged.execute("CREATE TABLE IF NOT EXISTS code_sequences (name TEXT PRIMARY KEY, last_value INTEGER NOT NULL CHECK(last_value>=0))")

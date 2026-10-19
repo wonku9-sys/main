@@ -8,7 +8,7 @@ import secrets
 import tempfile
 
 
-BACKUP_NAME = re.compile(r"^(서영POS-백업|복원전-자동백업|서영POS-자동백업|서영POS-종료백업)_\d{8}_\d{6}_[0-9a-f]{8}\.db$")
+BACKUP_NAME = re.compile(r"^(서영POS-백업|복원전-자동백업|서영POS-자동백업|서영POS-종료백업|형식변경전-자동백업)_\d{8}_\d{6}_[0-9a-f]{8}\.db$")
 KEEP = 15
 
 

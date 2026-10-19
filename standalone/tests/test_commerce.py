@@ -1,6 +1,7 @@
 """New independent journal guarantees; no legacy implementation is imported."""
 
 from datetime import date, timedelta
+from decimal import Decimal
 
 import pytest
 
@@ -43,7 +44,8 @@ def returned(shop, source, quantity, paid=0, **extra):
 
 
 def stock(shop):
-    return shop[0].db.execute("SELECT stock_qty,stock_cost FROM products WHERE id=?", (shop[3],)).fetchone()
+    row = shop[0].db.execute("SELECT stock_qty,stock_cost FROM products WHERE id=?", (shop[3],)).fetchone()
+    return row[0], Decimal(row[1]) / 100
 
 
 def test_draft_is_persistent_editable_and_has_no_accounting_effect(shop):
@@ -80,8 +82,8 @@ def test_delete_only_unposted_draft_and_post_requires_lines(shop):
 
 def test_price_snapshots_do_not_change_master_prices(shop):
     document = trade(shop, quantity="1.5", price=123)
-    assert shop[0].document(document)["total"] == 185
-    assert tuple(stock(shop)) == (1500, 185)
+    assert shop[0].document(document)["total"] == Decimal("184.50")
+    assert tuple(stock(shop)) == (1500, Decimal("184.50"))
     assert shop[0].products()[0]["purchase_price"] == 100
 
 
@@ -117,7 +119,7 @@ def test_sale_duplicate_lines_allocate_cost_without_rounding_residue(shop):
     store, _, _, product = shop
     sale = trade(shop, "sale", lines=[{"product_id": product, "qty": "1", "unit_price": 1},
                                       {"product_id": product, "qty": "3", "unit_price": 1}])
-    assert [line["cost"] for line in store.document(sale)["lines"]] == [1, 2]
+    assert [line["cost"] for line in store.document(sale)["lines"]] == [Decimal("0.75"), Decimal("2.25")]
     assert tuple(stock(shop)) == (0, 0)
 
 
@@ -128,7 +130,7 @@ def test_source_returns_use_original_cost_and_sum_to_full_rounding_residue(shop)
     first = returned(shop, sale, "1")
     second = returned(shop, sale, "1")
     third = returned(shop, sale, "1")
-    assert [shop[0].document(item)["lines"][0]["cost"] for item in (first, second, third)] == [1, 0, 1]
+    assert [shop[0].document(item)["lines"][0]["cost"] for item in (first, second, third)] == [Decimal("0.75")] * 3
     assert tuple(stock(shop)) == (4000, 3)
     assert shop[0].document(sale)["lines"][0]["remaining_qty"] == "0.000"
     with pytest.raises(ValueError):
@@ -324,7 +326,7 @@ def test_supplier_tax_and_commission_are_immutable_line_snapshots(shop):
     store.save_product({"tax_mode": "taxable"}, id=product)
     return_ids = [returned(shop, sale, "1") for _ in range(3)]
     fees = [store.document(item)["lines"][0]["commission_amount"] for item in return_ids]
-    assert fees == [1, 0, 1]
+    assert fees == [Decimal("0.67"), Decimal("0.66"), Decimal("0.67")]
     assert all(store.document(item)["lines"][0]["tax_mode"] == "exempt" for item in return_ids)
     assert store.document(sale)["lines"][0]["commission_bps"] == 6667
 

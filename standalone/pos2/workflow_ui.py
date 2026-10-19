@@ -13,7 +13,8 @@ from PySide6.QtWidgets import (
 )
 
 from .widgets import DataGrid, Page, ScanField, action, amount, date_field, search_icon, won
-from .common import decimal as value_decimal, money, qty, rounded
+from .common import decimal as value_decimal, qty
+from .currency import public_input as money, round_amount as rounded
 
 
 KINDS = {"purchase": "매입", "sale": "매출", "purchase_return": "매입 반품", "sale_return": "매출 반품"}
@@ -263,6 +264,7 @@ class TradeDialog(QDialog):
         if self.record and not can_action(self.store.actor, resource, "edit"):
             self.readonly = True
         self.is_return = kind.endswith("_return")
+        self.rounding_mode = (self.record or self.source or {}).get("rounding_mode", self.store.calculation_policy()["rounding_mode"])
         self.saved_id = None
         self.line_rows = []
         self.products = self.store.products()
@@ -343,6 +345,12 @@ class TradeDialog(QDialog):
         self.quote_button = action("선택 날짜·회원 제안가 적용", self.apply_quotes)
         scanner.addWidget(self.add_button)
         scanner.addWidget(self.search_button)
+        if kind.startswith("purchase"):
+            from .permissions import has_menu
+            self.catalog_button = action("상품장", self.open_catalog)
+            self.catalog_button.setToolTip("매입전표를 유지한 채 상품장을 엽니다. 새 상품 저장 후 품목을 바로 적용할 수 있습니다.")
+            self.catalog_button.setEnabled(not self.readonly and not self.is_return and has_menu(self.store.actor, "products"))
+            scanner.addWidget(self.catalog_button)
         if kind.startswith("purchase"):
             self.edit_line_button = action("매입수정 (F6)", self.edit_selected_line)
             self.remove_line_button = action("선택행삭제 (F7)", self.remove_selected_line)
@@ -528,6 +536,8 @@ class TradeDialog(QDialog):
             control.setEnabled(not checked)
         from .permissions import can_action
         self.new_product_button.setEnabled(not checked and can_action(self.store.actor, "products", "create"))
+        from .permissions import has_menu
+        self.catalog_button.setEnabled(not checked and has_menu(self.store.actor,"products"))
         if source:
             self.partner.setCurrentIndex(self.partner.findData(source["partner_id"]))
             for line in source["lines"]:
@@ -557,11 +567,35 @@ class TradeDialog(QDialog):
             dialog.supplier.setCurrentIndex(max(0, dialog.supplier.findData(self.partner.currentData())))
             if dialog.exec() == QDialog.DialogCode.Accepted and dialog.saved_id:
                 product = next(row for row in self.store.products() if row["id"] == dialog.saved_id)
-                self.products.append(product)
-                self.product_map[product["id"]] = product
-                self.add_line(product["id"])
+                self.apply_master_product(product["id"])
         except (ValueError, PermissionError) as exc:
             _warn(self, exc)
+
+    def open_catalog(self):
+        if self.readonly or self.is_return:
+            return
+        try:
+            self.store.require_menu("products")
+            ProductCatalogDialog(self).exec()
+        except (ValueError, PermissionError) as exc:
+            _warn(self, exc)
+
+    def apply_master_product(self, identifier):
+        self.store.require_menu("products")
+        if self.readonly or self.is_return:
+            return False
+        product = next((row for row in self.store.products() if row["id"] == identifier and row["active"]), None)
+        if not product:
+            raise ValueError("유효한 상품을 다시 선택하세요.")
+        self.product_map[identifier] = product
+        self.products = [row for row in self.products if row["id"] != identifier] + [product]
+        row = next((row for row in self.line_rows if row["product"].currentData() == identifier), None)
+        if row is None:
+            row = self.add_line(identifier, quantity="0" if product["base_unit"] == "g" else "1")
+        self.table.setCurrentCell(self.line_rows.index(row), 3)
+        row["qty"].setFocus()
+        row["qty"].selectAll()
+        return True
 
     def update_partner_info(self, *_):
         party = self.party_map.get(self.partner.currentData(), {})
@@ -632,7 +666,9 @@ class TradeDialog(QDialog):
         row["unit"].clear()
         product = self.product_map.get(identifier)
         if product:
-            row["unit"].addItem(product["base_unit"], None)
+            row["unit"].addItem("g (100g당)" if product["base_unit"] == "g" and product.get("price_basis") == 100 else product["base_unit"], None)
+            if product["base_unit"] == "kg":
+                row["unit"].addItem("g (100g당 · kg 환산)", "grams")
             row["units"] = {u["id"]: u for u in self.store.units(identifier)}
             for unit in row["units"].values():
                 if unit.get("active", True):
@@ -680,12 +716,16 @@ class TradeDialog(QDialog):
             return
         product = self.product_map[identifier]
         unit = row.get("units", {}).get(row["unit"].currentData()) or {}
+        gram_input = row["unit"].currentData() == "grams"
+        row["price_basis"] = (row.get("source") or {}).get("price_basis", 100 if gram_input else 1 if unit else product.get("price_basis", 1))
         row["barcode"].setText(unit.get("barcode") or product["barcode"])
-        row["factor"].setText(amount((row.get("source") or {}).get("factor", unit.get("factor", "1"))))
+        row["factor"].setText(amount((row.get("source") or {}).get("factor", "0.001" if gram_input else unit.get("factor", "1"))))
         row["reference_sale"] = unit.get("sale_price", product["sale_price"])
         row["sale_price"].setText(won(row["reference_sale"]))
         if not row.get("source") and not self.readonly:
-            quote = self.store.quote(identifier, _date(self.date), row["unit"].currentData(), self.member.currentData())
+            quote = self.store.quote(identifier, _date(self.date), None if gram_input else row["unit"].currentData(), self.member.currentData())
+            if gram_input:
+                quote = {**quote, "price": rounded(quote["price"] / 10), "purchase_price": rounded(quote["purchase_price"] / 10)}
             row["reference_sale"] = quote["price"]
             row["sale_price"].setText(won(quote["price"]))
             row["price"].setText(str(quote["purchase_price"] if self.kind.startswith("purchase") else quote["price"]))
@@ -756,7 +796,7 @@ class TradeDialog(QDialog):
                 saved = row.get("saved_line") if self.readonly else None
                 original = row.get("source")
                 snapshot = saved or original or {}
-                factor = value_decimal(snapshot.get("factor", unit.get("factor", "1")))
+                factor = value_decimal(snapshot.get("factor", "0.001" if row["unit"].currentData() == "grams" else unit.get("factor", "1")))
                 base_qty = quantity * factor
                 row["factor"].setText(amount(factor))
                 row["base_qty"].setText(f"{amount(base_qty)} {product['base_unit']}")
@@ -767,9 +807,9 @@ class TradeDialog(QDialog):
                     denominator = value_decimal(original["input_qty"])
                     value = rounded(Decimal(original["total"]) * (before + quantity) / denominator) - rounded(Decimal(original["total"]) * before / denominator)
                 else:
-                    value = rounded(quantity * price)
+                    value = rounded(quantity * price / row.get("price_basis", 1), self.rounding_mode)
                 row["total"].setText(won(value))
-                sale = rounded(quantity * row.get("reference_sale", product["sale_price"]))
+                sale = rounded(quantity * row.get("reference_sale", product["sale_price"]) / row.get("price_basis", 1), self.rounding_mode)
                 row["margin"].setText(f"{(Decimal(sale - value) * 100 / sale):.2f}%" if sale else "—")
                 row["margin"].setToolTip("현재 판매가 기준 참고 이익률입니다. 확정 매출의 실제 이익이 아닙니다.")
                 total += value
@@ -833,14 +873,15 @@ class TradeDialog(QDialog):
             quantity = row["qty"].text().strip()
             if self.is_return and value_decimal(quantity or "0") == 0:
                 continue
-            lines.append({"product_id": product_id, "unit_id": row["unit"].currentData(), "qty": quantity, "unit_price": row["price"].text().strip(), "source_line_id": row["source"]["id"] if row.get("source") else None})
-        return {"kind": self.kind, "date": _date(self.date), "partner_id": self.partner.currentData(), "member_id": self.member.currentData(), "source_id": (self.source or self.record or {}).get("id") if self.source else (self.record or {}).get("source_id"), "lines": lines, "paid": self.paid.text(), "method": self.method.currentData(), "points_used": self.points.text() if self.kind == "sale" else 0, "memo": self.memo.text()}
+            lines.append({"product_id": product_id, "unit_id": None if row["unit"].currentData() == "grams" else row["unit"].currentData(), "gram_input": row["unit"].currentData() == "grams", "qty": quantity, "unit_price": row["price"].text().strip(), "source_line_id": row["source"]["id"] if row.get("source") else None})
+        return {"kind": self.kind, "date": _date(self.date), "partner_id": self.partner.currentData(), "member_id": self.member.currentData(), "source_id": (self.source or self.record or {}).get("id") if self.source else (self.record or {}).get("source_id"), "lines": lines, "paid": self.paid.text(), "method": self.method.currentData(), "points_used": self.points.text() if self.kind == "sale" else 0, "memo": self.memo.text(),"rounding_mode":self.rounding_mode}
 
     def save(self, post, close=True):
         if self.readonly:
             return
         try:
             data = self.payload()
+            data["rounding_mode"] = self.rounding_mode
             if not data["partner_id"]:
                 raise ValueError("거래처를 선택하세요.")
             if post and not _confirm(self, "전표 확정", "재고·결제·포인트에 반영합니다. 확정할까요?"):
@@ -902,6 +943,50 @@ class TradeDialog(QDialog):
                 self.refresh_payments()
             except (ValueError, PermissionError) as exc:
                 _warn(self, exc)
+
+
+class ProductCatalogDialog(QDialog):
+    def __init__(self, trade):
+        super().__init__(trade)
+        self.trade, self.store = trade, trade.store
+        self.setWindowTitle("상품장 · 매입전표 품목 적용")
+        self.resize(1250, 790)
+        from .catalog_ui import ProductsPage
+        from types import SimpleNamespace
+        self.initial_ids = {row["id"] for row in self.store.products()}
+        body = QVBoxLayout(self)
+        self.note = QLabel("상품장에서 새 상품을 등록하거나 기존 상품을 선택해 작성 중인 매입전표에 적용하세요. 전표는 자동 확정하지 않습니다.")
+        self.note.setWordWrap(True)
+        body.addWidget(self.note)
+        self.page = ProductsPage(SimpleNamespace(store=self.store, notify=self.note.setText))
+        body.addWidget(self.page, 1)
+        self.auto_apply = QCheckBox("새 상품 저장 후 매입전표에 바로 적용")
+        self.auto_apply.setChecked(True)
+        body.addWidget(self.auto_apply)
+        controls = QHBoxLayout()
+        controls.addWidget(action("선택 상품 매입전표에 적용", self.apply_selected, True))
+        controls.addWidget(action("닫기", self.reject))
+        body.addLayout(controls)
+        self.page.product_saved.connect(self.product_saved)
+
+    def product_saved(self, identifier):
+        if identifier not in self.initial_ids and self.auto_apply.isChecked():
+            try:
+                self.trade.apply_master_product(identifier)
+                self.note.setText("새 상품을 매입전표 품목으로 적용했습니다. 전표로 돌아가 g 수량·단가를 입력하고 저장하세요.")
+            except (ValueError, PermissionError) as exc:
+                self.note.setText(str(exc))
+        self.initial_ids.add(identifier)
+
+    def apply_selected(self):
+        try:
+            self.store.require_menu("products")
+            ids = self.page.selected_product_ids()
+            for identifier in ids:
+                self.trade.apply_master_product(identifier)
+            self.note.setText(f"{len(ids):,}개 상품을 매입전표에 적용했습니다. 전표는 아직 확정하지 않았습니다.")
+        except (ValueError, PermissionError) as exc:
+            self.note.setText(str(exc))
 
 
 class TradesPage(Page):
@@ -1315,7 +1400,7 @@ class ClosingsPage(Page):
     def preview_cash(self):
         try:
             data = self.store.cash_expected(_date(self.cash_date))
-            expected = int(self.opening.text()) + data["expected_cash"]
+            expected = money(self.opening.text()) + data["expected_cash"]
             self.cash_summary.setText(f"{data.get('user_name', '')} · 현금 수금 {won(data['cash_receipts'])}원 − 환불 {won(data['cash_refunds'])}원 · 시재 포함 예상 {won(expected)}원 (이체·포인트 제외)")
         except (ValueError, PermissionError) as exc:
             self.fail(exc)

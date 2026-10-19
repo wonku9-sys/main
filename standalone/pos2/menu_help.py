@@ -4,12 +4,20 @@ from PySide6.QtWidgets import QProxyStyle, QStyle
 
 MENU_HELP = {
     "home": "업무 첫화면으로 이동합니다. 저장하지 않은 입력이 있으면 먼저 확인합니다.",
+    "diary":"로그인 후 별도 일기장 암호로 잠금을 해제합니다. 제목·본문은 암호화 저장되며 5분 동안 사용하지 않으면 잠깁니다.",
+    "worklog":"내 업무일지를 날짜별로 작성·검색하고 인쇄·엑셀 저장합니다. 보안 일기장과 달리 별도 암호화하지 않습니다.",
+    "household":"개인 수입·지출·잔액을 관리합니다. 매장 장부와 분리되며 별도 암호를 선택할 수 있습니다.",
     "products": "상품코드·바코드·상품명·규격으로 검색하고 상품과 확장단위를 관리합니다.",
     "categories": "대·중·소분류를 관리합니다. 항목을 오른쪽 클릭하면 추가·수정·삭제할 수 있습니다.",
     "suppliers": "매입 공급사의 연락처·계좌와 초기 외상잔액을 관리합니다.",
     "customers": "판매처의 기본정보와 초기 미수잔액을 관리합니다.",
     "labels": "상품 바코드 라벨을 미리 보고 Windows 프린터로 출력합니다. 용지 크기를 지정할 수 있습니다.",
     "purchases": "기간·공급사·매입/반품 유형으로 매입전표를 조회하고 매입등록을 시작합니다.",
+    "purchase_suppliers": "기간과 공급사별 매입·반품·순매입을 조회하고 엑셀 저장·인쇄합니다.",
+    "purchase_categories": "대·중·소분류별 매입·반품 금액과 g 기준 수량을 조회합니다.",
+    "purchase_products": "상품코드·바코드·상품명·규격으로 단품별 매입 실적을 찾습니다.",
+    "purchase_documents": "기간 내 전표별 매입·반품을 조회하고 더블클릭해 원전표를 봅니다.",
+    "purchase_statement": "공급사별 과세·면세·포함 부가세를 내부 관리용으로 집계합니다. 전자세금계산서 발급은 하지 않습니다.",
     "payments": "공급사별 미지급잔액·거래·결제 이력을 조회하고 부분 지급을 기록합니다. 당일 결제는 취소할 수 있습니다.",
     "sales": "매출전표와 고객반품을 조회하고 판매·수금 내역을 기록합니다.",
     "ledger": "거래처의 기간 전 이월·거래·입출금과 누적잔액을 확인합니다.",
@@ -27,6 +35,11 @@ MENU_HELP = {
     "permissions": "직원별 메뉴 접근·등록·수정·삭제 권한을 설정합니다. 저장 즉시 다음 작업부터 적용됩니다.",
     "settings": "매장정보·자동 백업 일정을 설정하고 백업 목록에서 자료를 복원합니다.",
 }
+from .offline_menus import REPORT_VIEWS, SALES_VIEWS, BASIC_VIEWS, MEMBER_VIEWS, FORM_VIEWS
+MENU_HELP.update({key: f"{value[0]} 기준으로 확정 전표·반품을 집계하고 엑셀·인쇄합니다. 날짜·공급사·분류·상품으로 찾을 수 있습니다." for key,value in {**REPORT_VIEWS,**SALES_VIEWS}.items()})
+MENU_HELP.update({key: f"{title} 자료를 검색·인쇄·엑셀 저장합니다. 이력은 기록된 당시 내용을 보존합니다." for key,title in BASIC_VIEWS.items()})
+MENU_HELP.update({key: f"{title}를 기간·회원으로 조회하고 인쇄·엑셀 저장합니다." for key,title in MEMBER_VIEWS.items()})
+MENU_HELP.update({key: f"{value[0]}를 저장하고 인쇄·PDF·엑셀로 출력합니다. 재고와 결제를 변경하지 않으며 전자세금계산서를 발급하지 않습니다." for key,value in FORM_VIEWS.items()})
 ACTION_HELP = {
     "첫화면": MENU_HELP["home"], "상품장": MENU_HELP["products"],
     "매입전표": MENU_HELP["purchases"], "매입등록": "공급사를 선택한 뒤 상품·수량·매입가격을 입력합니다. 반품도 같은 전표 창에서 선택합니다.",

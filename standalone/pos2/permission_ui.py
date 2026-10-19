@@ -67,7 +67,7 @@ class PermissionsPage(Page):
         self._loaded_user_id = self.user.currentData()
         record = self.records.get(self.user.currentData())
         self.checks.clear()
-        rows = [(key, rule) for key, rule in MENU_POLICIES.items() if rule[1] and "admin" not in rule[1]]
+        rows = [(key, rule) for key, rule in MENU_POLICIES.items() if (rule[1] or key in {"diary","worklog","household"}) and "admin" not in rule[1]]
         self.grid.setRowCount(len(rows))
         if not record:
             return

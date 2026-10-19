@@ -145,7 +145,7 @@ class OperationsMixin:
                     raise ValueError("실사일 이후 재고이동이 있습니다. 현재 날짜로 실사하세요.")
                 counted_cost = rounded(
                     Decimal(product["stock_cost"]) * counted / expected
-                    if expected else Decimal(product["purchase_price"]) * counted / 1000
+                    if expected else Decimal(product["purchase_price"]) * counted / (1000 * product["price_basis"])
                 )
                 rows.append((product_id, product["name"], product["base_unit"], expected,
                              counted, product["stock_cost"], counted_cost, latest[0]))

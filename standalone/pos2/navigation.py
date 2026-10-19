@@ -2,10 +2,11 @@
 import weakref
 
 from PySide6.QtCore import QEvent, QObject, QTimer
-from PySide6.QtWidgets import QApplication, QCheckBox, QComboBox, QDateEdit, QDialog, QDialogButtonBox, QLineEdit, QMessageBox, QPushButton, QSpinBox, QDoubleSpinBox, QTextEdit, QWidget
+from PySide6.QtWidgets import QApplication, QCheckBox, QComboBox, QDateEdit, QDialog, QDialogButtonBox, QLineEdit, QMessageBox, QPushButton, QSpinBox, QDoubleSpinBox, QTextEdit, QWidget,QTimeEdit
 
 
 def _value(control):
+    if isinstance(control,QTimeEdit):return control.time().toString('HH:mm')
     if isinstance(control, QComboBox):
         return control.currentData(), control.currentText()
     if isinstance(control, QCheckBox):
@@ -23,17 +24,20 @@ def _value(control):
 
 def state(owner):
     name = type(owner).__name__
+    if name in {"DiaryDialog","HouseholdDialog"}:return owner.snapshot()
     if name == "TradeDialog":
         return owner.kind, (owner.source or {}).get("id"), tuple(_value(getattr(owner, key)) for key in ("date", "partner", "member", "paid", "method", "points", "memo")), tuple(tuple(_value(row[key]) for key in ("product", "unit", "qty", "price")) for row in owner.line_rows)
     if name == "CountEditor":
         return owner.title.text(), _value(owner.date), tuple((key, field.text()) for key, field in sorted(owner.inputs.items()))
     if name == "PermissionsPage":
         return owner.user.currentData(), tuple((key, tuple((op, box.isChecked()) for op, box in checks.items())) for key, checks in owner.checks.items())
+    if name == "SupplierGroupsDialog":
+        return owner.loaded_kind, owner.group_id, tuple(owner.checked_members())
     if name in {"ProductDialog", "SettingsPage"}:
-        extras = ("product_status", "tax_mode", "supplier", "unit", "tracked", "memo") if name == "ProductDialog" else ("point_enabled",)
+        extras = ("product_status", "tax_mode", "supplier", "unit", "price_basis", "tracked", "memo") if name == "ProductDialog" else ("point_enabled", "rounding_mode")
         basic = tuple((key, _value(field)) for key, field in owner.fields.items()), tuple(_value(getattr(owner, key)) for key in extras)
         return (basic, owner.backup_schedule_values()) if name == "SettingsPage" else basic
-    controls = [control for control in owner.findChildren(QWidget) if isinstance(control, (QLineEdit, QComboBox, QCheckBox, QDateEdit, QTextEdit, QSpinBox, QDoubleSpinBox))]
+    controls = [control for control in owner.findChildren(QWidget) if isinstance(control, (QLineEdit, QComboBox, QCheckBox, QDateEdit, QTextEdit, QSpinBox, QDoubleSpinBox,QTimeEdit))]
     return tuple((id(control), _value(control)) for control in controls)
 
 
@@ -93,7 +97,7 @@ class NavigationGuard(QObject):
         name = type(owner).__name__
         if name in {"LoginDialog", "PartnerPicker", "ProductPicker", "CategoryDialog", "SupplierPicker"}:
             return False
-        if name in {"SettingsPage", "PermissionsPage", "ProductDialog", "TradeDialog", "CountEditor", "SupplierPaymentDialog"}:
+        if name in {"SettingsPage", "PermissionsPage", "ProductDialog", "TradeDialog", "CountEditor", "SupplierPaymentDialog", "SupplierDialog", "SupplierGroupsDialog", "SalesFormDialog","DiaryDialog","HouseholdDialog"}:
             return not getattr(owner, "readonly", False)
         return isinstance(owner, QDialog) and bool(owner.findChildren(QDialogButtonBox)) and bool(getattr(owner, "fields", None))
 
@@ -121,7 +125,7 @@ class NavigationGuard(QObject):
                 name = type(owner).__name__
                 if name in {"ProductDialog", "TradeDialog"}:
                     result = owner.save(False)
-                elif name in {"CountEditor", "SupplierPaymentDialog", "SettingsPage", "PermissionsPage"}:
+                elif name in {"CountEditor", "SupplierPaymentDialog", "SettingsPage", "PermissionsPage", "SupplierDialog", "SupplierGroupsDialog","DiaryDialog","HouseholdDialog"}:
                     result = owner.save()
                 else:
                     result = None

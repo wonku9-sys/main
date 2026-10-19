@@ -1,4 +1,10 @@
 """New schema; deliberately independent from the legacy application's database."""
+from .suppliers import SUPPLIER_SCHEMA
+from .offline_features import OFFLINE_SCHEMA
+from .diary import DIARY_SCHEMA
+from .household import HOUSEHOLD_SCHEMA
+from .health import HEALTH_SCHEMA
+from .email_recovery import EMAIL_SCHEMA
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -32,7 +38,8 @@ CREATE TABLE IF NOT EXISTS products (
  stock_cost INTEGER NOT NULL DEFAULT 0 CHECK(stock_cost BETWEEN 0 AND 9000000000000),
  origin TEXT NOT NULL DEFAULT '', warehouse TEXT NOT NULL DEFAULT '', shelf TEXT NOT NULL DEFAULT '',
  keywords TEXT NOT NULL DEFAULT '', memo TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
- retirement_target INTEGER NOT NULL DEFAULT 0 CHECK(retirement_target IN (0,1))
+ retirement_target INTEGER NOT NULL DEFAULT 0 CHECK(retirement_target IN (0,1)),
+ price_basis INTEGER NOT NULL DEFAULT 1 CHECK(price_basis IN (1,100))
 );
 CREATE UNIQUE INDEX IF NOT EXISTS product_barcode_unique ON products(barcode) WHERE barcode<>'';
 CREATE TABLE IF NOT EXISTS product_units (
@@ -132,12 +139,11 @@ CREATE INDEX IF NOT EXISTS lines_product ON document_lines(product_id,document_i
 CREATE INDEX IF NOT EXISTS lines_source ON document_lines(source_line_id);
 CREATE INDEX IF NOT EXISTS stock_product_date ON stock_events(product_id,date,id);
 CREATE INDEX IF NOT EXISTS audit_entity ON audit(entity,entity_id,id);
-PRAGMA user_version=200;
 """
 
 
 def initialize(db):
-    db.executescript(SCHEMA)
+    db.executescript(SCHEMA + SUPPLIER_SCHEMA + OFFLINE_SCHEMA + DIARY_SCHEMA + HOUSEHOLD_SCHEMA + EMAIL_SCHEMA+HEALTH_SCHEMA)
     columns = {row[1] for row in db.execute("PRAGMA table_info(products)")}
     if "retirement_target" not in columns:
         db.execute("ALTER TABLE products ADD COLUMN retirement_target INTEGER NOT NULL DEFAULT 0 CHECK(retirement_target IN (0,1))")
@@ -147,3 +153,9 @@ def initialize(db):
     payment_columns = {row[1] for row in db.execute("PRAGMA table_info(payments)")}
     if "supplier_settlement_id" not in payment_columns:
         db.execute("ALTER TABLE payments ADD COLUMN supplier_settlement_id INTEGER REFERENCES supplier_settlements(id) ON DELETE RESTRICT")
+    if "price_basis" not in {row[1] for row in db.execute("PRAGMA table_info(products)")}:
+        db.execute("ALTER TABLE products ADD COLUMN price_basis INTEGER NOT NULL DEFAULT 1 CHECK(price_basis IN (1,100))")
+    if "price_basis" not in {row[1] for row in db.execute("PRAGMA table_info(document_lines)")}:
+        db.execute("ALTER TABLE document_lines ADD COLUMN price_basis INTEGER NOT NULL DEFAULT 1 CHECK(price_basis IN (1,100))")
+    if "rounding_mode" not in {row[1] for row in db.execute("PRAGMA table_info(documents)")}:
+        db.execute("ALTER TABLE documents ADD COLUMN rounding_mode TEXT NOT NULL DEFAULT 'won' CHECK(rounding_mode IN ('decimal','won'))")

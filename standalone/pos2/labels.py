@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
 )
 
 from .widgets import DataGrid, action, amount, won
-from .font_support import font_family
+from .font_support import font_family,regular_font
 
 
 def barcode_bits(value, mode="auto"):
@@ -70,7 +70,7 @@ def paint_label(painter, item, size, mode="auto"):
     painter.save()
     painter.translate(size.offset_x, size.offset_y)
     painter.fillRect(QRectF(0, 0, size.width, size.height), Qt.GlobalColor.white)
-    font = QFont(font_family())
+    font = regular_font()
     font.setPixelSize(3 if size.height >= 30 else 2)
     font.setBold(True)
     painter.setFont(font)
@@ -195,7 +195,7 @@ class LabelDialog(QDialog):
                 continue
             if product["barcode"]:
                 quote = store.quote(product["id"], date.today().isoformat())
-                self.items.append({"product_id": product["id"], "name": product["name"], "barcode": product["barcode"], "price": quote["price"], "unit": product["base_unit"], "origin": product["origin"]})
+                self.items.append({"product_id": product["id"], "name": product["name"], "barcode": product["barcode"], "price": quote["price"], "unit": "100g" if product.get("price_basis") == 100 else product["base_unit"], "origin": product["origin"]})
             for unit in store.units(product["id"]):
                 if unit["barcode"] and unit.get("active", True):
                     self.items.append({"product_id": product["id"], "name": product["name"], "barcode": unit["barcode"], "price": unit["sale_price"], "unit": unit["name"], "origin": product["origin"]})

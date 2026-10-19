@@ -34,6 +34,7 @@ def test_first_admin_login_has_default_hint_and_enter_authenticates(context):
     assert dialog.code.text() == "admin" and dialog.password.text() == "1234"
     assert "1234" in dialog.hint.text() and "변경" in dialog.hint.text()
     assert store.users_count() == 1 and store.actor is None
+    dialog.new_password.setText('First-Password-2026!');dialog.new_confirm.setText('First-Password-2026!')
     dialog.password.setFocus()
     QTest.keyClick(dialog.password, Qt.Key.Key_Return)
     assert store.users_count() == 1
@@ -43,6 +44,7 @@ def test_first_admin_login_has_default_hint_and_enter_authenticates(context):
 def test_default_admin_hash_mode_and_password_change_never_resets_on_restart(context):
     app, store = context
     dialog = LoginDialog(store)
+    dialog.new_password.setText('First-Password-2026!');dialog.new_confirm.setText('First-Password-2026!')
     dialog.submit()
     assert store.actor["code"] == "admin" and store.actor["role"] == "admin"
     stored = store.db.execute("SELECT password_hash FROM users WHERE code='admin'").fetchone()[0]
@@ -52,7 +54,7 @@ def test_default_admin_hash_mode_and_password_change_never_resets_on_restart(con
     assert {"users", "settings", "payments"} <= set(window.items)
     window.admin_mode_button.click()
     assert window.current_key == "settings"
-    store.change_password("1234", "Local-Only-Password-2026!")
+    store.change_password("First-Password-2026!", "Local-Only-Password-2026!")
     assert not store.default_login_available()
     again = LoginDialog(store)
     assert not again.initial and again.password.text() == "" and "1234" not in again.hint.text()
@@ -84,9 +86,13 @@ def test_scoped_menus_and_all_allowed_pages_refresh(context, permission, keys):
     app, store = context
     login_staff(store, permission)
     window = MainWindow(store)
-    assert set(window.items) == keys | {"home"}
+    purchase_views = {"purchase_suppliers", "purchase_categories", "purchase_products", "purchase_documents", "purchase_statement"} if permission == "trade" else set()
+    from pos2.offline_menus import REPORT_VIEWS,SALES_VIEWS,BASIC_VIEWS,MEMBER_VIEWS
+    added = set(REPORT_VIEWS) if permission=="reports" else set(SALES_VIEWS)|{"quotations","statements"} if permission=="trade" else set(BASIC_VIEWS)-{"user_access"} if permission=="catalog" else set(MEMBER_VIEWS)|{"member_tax"} if permission=="loyalty" else set()
+    added |= {"diary","worklog","household"}
+    assert set(window.items) == keys | {"home"} | purchase_views | added
     assert window.current_key == "home"
-    for key in keys:
+    for key in keys | purchase_views | added:
         assert window.open_page(key)
     assert not window.open_page("settings")
     if permission in {"trade", "inventory"}:

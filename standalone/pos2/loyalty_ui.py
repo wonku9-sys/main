@@ -5,7 +5,7 @@ from datetime import date
 from PySide6.QtCore import QDate, Qt
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QHBoxLayout, QLabel, QLineEdit,
-    QMessageBox, QPushButton, QTabWidget, QTableWidget, QVBoxLayout, QWidget,
+    QMessageBox, QPushButton, QTabWidget, QTableWidget, QVBoxLayout, QWidget, QFormLayout,
 )
 
 from .widgets import DataGrid, FormDialog, Page, ScanField, action, date_field, won
@@ -37,9 +37,21 @@ class MemberDialog(FormDialog):
         self.store, self.record = store, record or {}
         for key, title in (("code", "회원 코드 *"), ("name", "회원명 *"), ("phone", "전화번호"), ("birthday", "생일 (YYYY-MM-DD, 선택)"), ("memo", "메모")):
             self.field(key, title, self.record.get(key, ""))
+        if not record:
+            self.fields["code"].setText(store.next_member_code())
         self.active = QCheckBox("사용 회원")
         self.active.setChecked(self.record.get("active", True))
         self.form.addRow("상태", self.active)
+        tabs = QTabWidget()
+        profile = QWidget()
+        profile_form = QFormLayout(profile)
+        main_form,self.form = self.form,profile_form
+        for key,title in (("mobile","휴대폰"),("address","주소"),("member_type","회원유형 (일반고객·사업자 등)"),("group_name","회원그룹"),("business_no","사업자번호"),("company","상호"),("representative","대표자"),("anniversary","기념일 (YYYY-MM-DD, 선택)")):
+            self.field(key,title,self.record.get(key,"일반고객" if key=="member_type" else ""))
+        self.form = main_form
+        tabs.addTab(profile,"연락처 · 그룹 · 사업자정보")
+        self.body.addWidget(tabs)
+        self.resize(720,800)
         self.finish(self.save)
 
     def save(self):
@@ -56,6 +68,10 @@ class MembersPage(Page):
         self.search = ScanField()
         self.search.setPlaceholderText("회원 코드 · 이름 · 전화 검색, 스캔 후 Enter")
         self.search.scanned.connect(lambda _value: self.refresh())
+        self.status = QComboBox()
+        for title,value in (("유효회원",1),("전체 회원",None),("무효회원",0)): self.status.addItem(title,value)
+        filters.addWidget(self.status)
+        self.status.currentIndexChanged.connect(self.refresh)
         filters.addWidget(self.search, 1)
         filters.addWidget(action("조회", self.refresh))
         filters.addWidget(action("수정", self.edit))
@@ -91,6 +107,8 @@ class MembersPage(Page):
     def refresh(self, *_):
         previous = self.grid.selected()
         records = self.store.members(self.search.text().strip())
+        if self.status.currentData() is not None:
+            records = [r for r in records if r["active"] == self.status.currentData()]
         self.grid.blockSignals(True)
         self.grid.fill([[r["code"], r["name"], r["phone"], r["points"], "사용" if r["active"] else "중지", r["memo"]] for r in records], records)
         self.grid.blockSignals(False)

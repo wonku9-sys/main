@@ -17,7 +17,7 @@ from pos2 import __version__
 
 ROOT = Path(__file__).resolve().parent
 APP = "SeoyoungPOS-Standalone"
-DISTRIBUTIONS = ("PySide6", "PySide6-Essentials", "PySide6-Addons", "shiboken6", "openpyxl", "et-xmlfile", "python-barcode", "pyinstaller")
+DISTRIBUTIONS = ("PySide6", "PySide6-Essentials", "PySide6-Addons", "shiboken6", "openpyxl", "et-xmlfile", "python-barcode", "pyinstaller","cryptography","cffi","pycparser","korean-lunar-calendar")
 
 
 def licenses(destination):
@@ -44,7 +44,7 @@ def licenses(destination):
             if not any("license" in part or "licence" in part or part.startswith("copying") or part.startswith("notice") for part in lowered):
                 continue
             source = Path(distribution.locate_file(entry))
-            if not source.is_file() or source.suffix.lower() not in {"", ".txt", ".md", ".rst", ".html", ".json", ".python"}:
+            if not source.is_file() or source.suffix.lower() not in {"", ".txt", ".md", ".rst", ".html", ".json", ".python",".apache",".bsd",".openssl"}:
                 continue
             safe = [part for part in parts if part not in {"..", ".", "/"}]
             target = destination / name / Path(*safe)
@@ -90,7 +90,7 @@ def build(output, native=False):
         temporary = Path(scratch)
         command = [sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--onedir", "--windowed", "--name", APP,
                    "--paths", str(ROOT), "--distpath", str(output), "--workpath", str(temporary / "work"), "--specpath", str(temporary),
-                   "--add-data", f"{assets}{os.pathsep}pos2/assets", "--hidden-import", "PySide6.QtPrintSupport", "--hidden-import", "PySide6.QtSvg", "--collect-all", "barcode", "--exclude-module", "seoyoung_pos", str(ROOT / "launch.py")]
+                   "--add-data", f"{assets}{os.pathsep}pos2/assets", "--hidden-import", "PySide6.QtPrintSupport", "--hidden-import", "PySide6.QtSvg", "--hidden-import","PySide6.QtMultimedia", "--collect-all", "barcode", "--exclude-module", "seoyoung_pos", str(ROOT / "launch.py")]
         build_environment = dict(os.environ)
         build_environment["PYINSTALLER_CONFIG_DIR"] = str(temporary / "cache")
         subprocess.run(command, cwd=ROOT, env=build_environment, check=True)
@@ -103,7 +103,7 @@ def build(output, native=False):
     subprocess.run([str(executable), "--smoke-test", "--screenshot", str(screenshot)], cwd=bundle, env=environment, check=True, timeout=180)
     if not screenshot.is_file() or screenshot.stat().st_size < 1000:
         raise RuntimeError("The real frozen executable did not produce its desktop screenshot.")
-    for suffix in ("-home", "-purchase", "-return", "-product-search", "-categories", "-backup", "-payments", "-login", "-permissions"):
+    for suffix in ("-home", "-purchase", "-return", "-product-search", "-categories", "-backup", "-payments", "-login", "-permissions","-suppliers","-supplier-groups","-product-units","-reports","-quotation","-diary","-household","-health","-schedule","-alerts","-mail-settings"):
         capture = screenshot.with_name(screenshot.stem + suffix + screenshot.suffix)
         if not capture.is_file() or capture.stat().st_size < 1000:
             raise RuntimeError(f"The frozen executable did not validate its new workflow screen: {suffix}")
@@ -119,8 +119,12 @@ def build(output, native=False):
         + ("Windows 10/11 x64용 무설치 프로그램입니다.\n" if label == "Windows" else f"주의: 이 파일은 {label} 검증용이며 Windows 프로그램이 아닙니다.\n")
         + f"ZIP 전체를 쓰기 가능한 폴더에 압축 해제하고 {executable.name}을 실행하세요.\n"
         "Python 설치·서버·인터넷·카드 연동이 필요하지 않습니다.\n"
+        "날씨·인터넷 시각 표시는 선택 기능입니다. 첫화면에서 지역을 직접 정하고 켜세요. 자동 위치 조회는 하지 않습니다.\n"
+        "일정 알림은 실행 중 표시하며 놓친 알림은 다음 실행 때 확인합니다. 양력·음력 연간 반복 및 경과 일수를 지원합니다.\n"
+        "일기장·가계부는 별도 팝업입니다. 이메일 복구는 암호를 잊기 전에 등록해야 하며 개인 자료는 최초 등록 이메일의 복구키도 필요합니다.\n"
+        "금액은 소수점 두 자리로 보존합니다. 2.2 이하 장부는 처음 열 때 보호 백업 후 형식을 업그레이드합니다. 업그레이드 후에는 이전 EXE로 열지 마세요.\n"
         "새 장부의 초기 아이디 admin / 초기 비밀번호 1234 (로그인 창 하단에도 표시).\n"
-        "공개된 초기 비밀번호입니다. 로그인 후 비밀번호 변경에서 8자 이상의 새 비밀번호로 바꾸세요.\n"
+        "공개된 초기 비밀번호입니다. 최초 로그인 시 8~128자의 새 로그인 암호를 반드시 설정해야 합니다.\n"
         "자료는 실행 파일 옆 data-v2 폴더의 seoyoung-standalone-v2.db에 보존됩니다.\n"
         "프로그램 폴더를 옮길 때 data-v2 폴더를 함께 옮기고, 정기적으로 설정의 백업을 이용하세요.\n"
         "설정에서 백업 목록을 선택해 복원할 수 있습니다. 적용하면 현재 자료가 교체되고 프로그램이 종료됩니다.\n"

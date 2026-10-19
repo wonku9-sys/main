@@ -107,14 +107,14 @@ def test_purchase_grid_reference_fields_pack_conversion_and_partial_payment(shop
     assert row["barcode"].text() == "000098765"
     assert row["factor"].text() == "5"
     assert row["base_qty"].text() == "12.5 kg"
-    assert row["total"].text() == "120,000"
-    assert "미지급잔액  120,000원" in dialog.balance_label.text()
+    assert row["total"].text() == "120,000.00"
+    assert "미지급잔액  120,000.00원" in dialog.balance_label.text()
     assert dialog.payment_status.text() == "미결제"
     dialog.paid.setText("20,000")
-    assert "100,000원" in dialog.balance_label.text()
+    assert "100,000.00원" in dialog.balance_label.text()
     assert dialog.payment_status.text() == "부분결제"
     dialog.paid.setText("120000")
-    assert "0원" in dialog.balance_label.text()
+    assert "0.00원" in dialog.balance_label.text()
     assert "결제완료" in dialog.payment_status.text() and "확정 전" in dialog.payment_status.text()
     dialog.paid.setText("120001")
     assert "입력" in dialog.balance_label.text()
@@ -127,8 +127,8 @@ def test_posted_balance_includes_later_payment_and_return_credits(shop):
     returned = store.post_document({"kind": "purchase_return", "date": date.today().isoformat(), "partner_id": supplier, "source_id": original, "lines": [{"product_id": product, "source_line_id": store.document(original)["lines"][0]["id"], "qty": "2"}], "paid": 0})
     dialog = TradeDialog(window, "purchase", original)
     assert dialog.readonly
-    assert dialog.line_rows[0]["total"].text() == "50,000"
-    assert "20,000원" in dialog.balance_label.text()
+    assert dialog.line_rows[0]["total"].text() == "50,000.00"
+    assert "20,000.00원" in dialog.balance_label.text()
     assert dialog.payment_status.text() == "부분결제"
     assert store.document(returned)["balance"] == 0
 
@@ -143,10 +143,10 @@ def test_mixed_units_quantity_not_added_and_integer_won_rounding_matches_post(sh
     dialog.products = shop[1].products()
     dialog.product_map = {p["id"]: p for p in dialog.products}
     dialog.add_line(other, quantity="2")
-    assert row["total"].text() == "1,250"
+    assert row["total"].text() == "1,250.08"
     assert "0.125 kg" in dialog.quantity_label.text() and "2 개" in dialog.quantity_label.text()
     preview = shop[1].save_draft(dialog.payload())
-    assert shop[1].document(preview)["total"] == 2250
+    assert shop[1].document(preview)["total"] == Decimal("2250.08")
 
 
 def test_purchase_excel_uses_numeric_values_and_saved_balances_not_catalog_prices(shop, monkeypatch):

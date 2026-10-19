@@ -13,15 +13,17 @@ from PySide6.QtWidgets import (
     QFrame, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMessageBox,
     QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
-from .font_support import font_family
+from .font_support import font_family,regular_font
 
 
 def won(value):
-    return f"{int(value or 0):,}"
+    return f"{Decimal(str(value or 0)):,.2f}"
 
 
 def amount(value):
     value = Decimal(str(value or 0))
+    if value.as_tuple().exponent == -2:
+        return f"{value:,.2f}"
     return f"{value:,.3f}".rstrip("0").rstrip(".")
 
 
@@ -173,15 +175,18 @@ def export_rows(parent, title, headers, rows, access_widget=None):
         sheet = book.active
         sheet.title = "조회 자료"
         sheet.append(list(headers))
+        money_cells=set()
         for values in rows:
+            values=list(values)
             sheet.append([float(v) if isinstance(v, Decimal) else v for v in values])
+            money_cells.update((sheet.max_row,index+1) for index,value in enumerate(values) if isinstance(value,Decimal) and value.as_tuple().exponent==-2)
         for row in sheet.iter_rows():
             for cell in row:
                 # User-supplied text must never become a spreadsheet formula.
                 if isinstance(cell.value, str):
                     cell.data_type = "s"
                 elif isinstance(cell.value, (int, float)):
-                    cell.number_format = "#,##0.###"
+                    cell.number_format = "#,##0.00" if (cell.row,cell.column) in money_cells else "#,##0.###"
                 cell.alignment = Alignment(vertical="center")
         for cell in sheet[1]:
             cell.fill = PatternFill("solid", fgColor="21485F")
@@ -202,7 +207,7 @@ def export_rows(parent, title, headers, rows, access_widget=None):
 class Cell(QTableWidgetItem):
     def __init__(self, value):
         self.value = value
-        text = won(value) if isinstance(value, int) and not isinstance(value, bool) else amount(value) if isinstance(value, Decimal) else str(value if value is not None else "")
+        text = f"{value:,}" if isinstance(value, int) and not isinstance(value, bool) else amount(value) if isinstance(value, Decimal) else str(value if value is not None else "")
         super().__init__(text)
         self.setData(Qt.ItemDataRole.UserRole + 1, value)
         if isinstance(value, (int, float, Decimal)):
@@ -274,7 +279,7 @@ class DataGrid(QTableWidget):
         if not authorize_output(self, parent):
             return False
         document = QTextDocument()
-        document.setDefaultFont(QFont(font_family(), 9))
+        document.setDefaultFont(regular_font(9))
         document.setHtml(self.document_html(title, info))
         if not authorize_output(self, parent):
             return False

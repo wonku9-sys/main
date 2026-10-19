@@ -4,7 +4,7 @@ from datetime import date
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMessageBox, QTabWidget, QVBoxLayout, QWidget
 
-from .common import money
+from .currency import public_input as money
 from .widgets import DataGrid, Page, action, date_field, search_icon, won
 from .workflow_ui import KINDS, PartnerPicker, TradeDialog, _confirm, _date, _warn
 
@@ -65,6 +65,8 @@ class SupplierPaymentDialog(QDialog):
             self.snapshot = self.store.supplier_outstanding(self.partner_id, _date(self.date))
             data = self.snapshot
             party = data["partner"]
+            if previous is None:
+                self.method.setCurrentIndex(max(0, self.method.findData(party.get("settlement_method", "cash"))))
             self.balance.setText(f"{party['code']} · {party['name']}\n현재 미지급 {won(data['balance'])}원 · 선택일 결제 가능 {won(data['cap'])}원")
             if not self.amount.text() or previous and self.amount.text().replace(",", "") == str(previous["cap"]):
                 self.amount.setText(str(data["cap"]))

@@ -9,6 +9,7 @@ import sqlite3
 from decimal import Decimal
 
 from .common import LIMIT, day, decimal, money, now, rounded, text
+from .currency import amount as currency_amount
 
 
 LOYALTY_SCHEMA = """
@@ -135,9 +136,13 @@ class LoyaltyMixin:
     def members(self, search=""):
         self._loyalty_require_any("loyalty", "reports")
         search = f"%{text(search)}%"
-        return [dict(row) for row in self.db.execute(
-            "SELECT * FROM members WHERE code LIKE ? OR name LIKE ? OR phone LIKE ? ORDER BY name,id",
-            (search, search, search))]
+        rows = [dict(row) for row in self.db.execute(
+            "SELECT m.* FROM members m LEFT JOIN member_profiles p ON p.member_id=m.id WHERE m.code LIKE ? OR m.name LIKE ? OR m.phone LIKE ? OR p.mobile LIKE ? OR p.address LIKE ? OR p.group_name LIKE ? ORDER BY m.name,m.id",
+            (search,)*6)]
+        for row in rows:
+            profile = self.db.execute("SELECT * FROM member_profiles WHERE member_id=?",(row["id"],)).fetchone()
+            if profile: row.update({k:profile[k] for k in profile.keys() if k != "member_id"})
+        return rows
 
     def trade_members(self, search=""):
         self._loyalty_require_any("trade", "loyalty", "reports")
@@ -149,7 +154,7 @@ class LoyaltyMixin:
     def loyalty_products(self):
         self._loyalty_require_any("loyalty", "catalog", "trade")
         return [dict(row) for row in self.db.execute(
-            "SELECT id,code,name,base_unit,purchase_price,sale_price,active FROM products ORDER BY name,id")]
+            "SELECT id,code,name,base_unit,price_basis,purchase_price,sale_price,active FROM products ORDER BY name,id")]
 
     def save_member(self, data, id=None):
         with self._tx():
@@ -172,8 +177,19 @@ class LoyaltyMixin:
                                          dict(values, stamp=stamp)).lastrowid
             except sqlite3.IntegrityError:
                 raise ValueError("이미 사용 중인 회원 코드입니다.") from None
+            profile_old = self.db.execute("SELECT * FROM member_profiles WHERE member_id=?",(id,)).fetchone()
+            fields = ("mobile","address","member_type","business_no","company","representative","group_name","anniversary")
+            profile = {key:text(data.get(key,profile_old[key] if profile_old else "일반고객" if key=="member_type" else ""),key) for key in fields}
+            if profile["anniversary"]: profile["anniversary"] = day(profile["anniversary"])
+            columns = ",".join(fields)
+            self.db.execute(f"INSERT INTO member_profiles(member_id,{columns}) VALUES(?,{','.join('?' for _ in fields)}) ON CONFLICT(member_id) DO UPDATE SET " + ",".join(f"{key}=excluded.{key}" for key in fields),(id,*profile.values()))
             self._audit("update" if old else "create", "member", id, values)
             return id
+
+    def next_member_code(self):
+        self.require_menu("members")
+        values = [int(r[0][1:]) for r in self.db.execute("SELECT code FROM members WHERE code LIKE 'M%'") if r[0][1:].isdigit()]
+        return f"M{max(values,default=0)+1:07d}"
 
     def delete_member(self, id):
         """Unused members may be removed; financial history is never orphaned."""
@@ -278,6 +294,10 @@ class LoyaltyMixin:
             self._require("loyalty")
             self._require_capability("promotions", "create")
             data = self.promotion(id)
+            for item in data["items"]:
+                for key in ("purchase_price", "sale_price"):
+                    if item[key] is not None:
+                        item[key] = currency_amount(item[key])
             data.update(start=new_start, end=new_end, title=data["title"] + " (복사)", active=True)
             return self._save_promotion(data)
 
@@ -286,6 +306,10 @@ class LoyaltyMixin:
             self._require("loyalty")
             self._require_capability("promotions", "edit")
             data = self.promotion(id)
+            for item in data["items"]:
+                for key in ("purchase_price", "sale_price"):
+                    if item[key] is not None:
+                        item[key] = currency_amount(item[key])
             if day(new_end) < data["end"]:
                 raise ValueError("기간 연장은 현재 종료일 이후로 지정하세요.")
             data["end"] = new_end
@@ -400,7 +424,9 @@ class LoyaltyMixin:
         return bps, minimum, step, enabled
 
     def _sale_points(self, document_id, member_id, total, points_used):
-        total, used = money(total), integer(points_used, "사용 포인트")
+        if type(total) is not int or type(points_used) is not int or points_used % 100:
+            raise ValueError("내부 금액과 포인트 단위를 확인하세요.")
+        used = integer(points_used // 100, "사용 포인트")
         if member_id is None:
             if used:
                 raise ValueError("포인트를 사용하려면 회원을 지정하세요.")
@@ -409,13 +435,13 @@ class LoyaltyMixin:
         if self.db.execute("SELECT 1 FROM loyalty_sale_actions WHERE document_id=?", (document_id,)).fetchone():
             raise ValueError("이미 포인트 처리가 완료된 매출입니다.")
         bps, minimum, step, enabled = self._point_policy()
-        if used > total:
+        if used * 100 > total:
             raise ValueError("사용 포인트는 거래 합계를 초과할 수 없습니다.")
         if used and (not enabled or used < minimum or used % step):
             raise ValueError(f"포인트 사용은 허용 상태에서 최소 {minimum:,}점, {step:,}점 단위로 가능합니다.")
         if used > member["points"]:
             raise ValueError("사용 가능한 포인트가 부족합니다.")
-        earned = rounded(Decimal(total - used) * bps / 10000)
+        earned = rounded(Decimal(total - used * 100) * bps / 1000000)
         document = self.db.execute("SELECT date FROM documents WHERE id=?", (document_id,)).fetchone()
         if document is None:
             raise ValueError("매출 전표를 찾을 수 없습니다.")
@@ -434,14 +460,14 @@ class LoyaltyMixin:
             return 0, 0
         if self.db.execute("SELECT 1 FROM loyalty_return_actions WHERE document_id=?", (document_id,)).fetchone():
             raise ValueError("이미 포인트 반환 처리가 완료된 전표입니다.")
-        returning = money(return_total)
+        returning = return_total
         previous = self.db.execute("SELECT COALESCE(SUM(a.return_total),0),COALESCE(SUM(a.restored_used),0),COALESCE(SUM(a.reversed_earned),0) FROM loyalty_return_actions a JOIN documents d ON d.id=a.document_id WHERE a.source_document_id=? AND a.kind='return' AND d.status='posted'", (source_document_id,)).fetchone()
         cumulative = previous[0] + returning
         if cumulative > source["total"]:
             raise ValueError("반품 합계가 원매출 합계를 초과합니다.")
         if source["total"]:
             ratio = Decimal(cumulative) / source["total"]
-            restored = rounded(Decimal(source["points_used"]) * ratio) - previous[1]
+            restored = rounded(Decimal(source["points_used"]) / 100 * ratio) - previous[1]
             reversed_earned = rounded(Decimal(source["points_earned"]) * ratio) - previous[2]
         else:
             restored = reversed_earned = 0
@@ -457,7 +483,7 @@ class LoyaltyMixin:
             self._point_entry(source["member_id"], restored, "cancel_restore" if cancel else "return_restore", "사용 포인트 반환", document_id, source_document_id, date=current["date"])
         if reversed_earned:
             self._point_entry(source["member_id"], -reversed_earned, "cancel_revoke" if cancel else "return_revoke", "적립 포인트 회수", document_id, source_document_id, date=current["date"])
-        return restored, reversed_earned
+        return restored * 100, reversed_earned
 
     def member_history(self, member_id, start="", end=""):
         self._loyalty_require_any("loyalty", "reports")

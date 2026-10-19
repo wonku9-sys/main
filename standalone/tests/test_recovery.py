@@ -55,6 +55,20 @@ def test_old_v201_release_backup_is_accepted_without_modifying_it(shop, tmp_path
     shop.backup(legacy)
     connection = sqlite3.connect(legacy, isolation_level=None)
     connection.execute("PRAGMA foreign_keys=OFF")
+    from pos2.currency import MONEY_COLUMNS
+    triggers = connection.execute("SELECT name,sql FROM sqlite_master WHERE type='trigger' AND tbl_name IN ('inventory_closes','inventory_close_lines','cash_closes')").fetchall()
+    for name, _ in triggers:
+        connection.execute(f'DROP TRIGGER "{name}"')
+    for table, columns in MONEY_COLUMNS.items():
+        connection.execute(f'UPDATE "{table}" SET ' + ",".join(f'"{column}"="{column}"/100' for column in columns))
+    for _, sql in triggers:
+        connection.execute(sql)
+    connection.execute("ALTER TABLE products DROP COLUMN price_basis")
+    connection.execute("ALTER TABLE document_lines DROP COLUMN price_basis")
+    connection.execute("ALTER TABLE documents DROP COLUMN rounding_mode")
+    connection.execute("DROP TABLE supplier_group_members")
+    connection.execute("DROP TABLE supplier_groups")
+    connection.execute("DROP TABLE supplier_profiles")
     connection.execute("DROP TABLE restore_state")
     connection.execute("DROP TABLE code_sequences")
     connection.execute("DROP TABLE product_categories")

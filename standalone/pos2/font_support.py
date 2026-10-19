@@ -20,9 +20,17 @@ def font_family():
 
 
 def verify_glyphs():
-    font = QFont(font_family(), 10)
+    font = regular_font(10)
     metrics = QFontMetrics(font)
     sample = "서영상품매입매출재고한글ABC0123456789"
     if not all(metrics.inFontUcs4(ord(character)) for character in sample):
         raise RuntimeError("한글/영문 글꼴 출력 검증에 실패했습니다.")
+    return font
+
+
+def regular_font(size=10):
+    font=QFont(font_family(),size)
+    # Qt 6.8 can register this variable font's named instances only as "Thin".
+    # Select its weight axis explicitly so body text remains readable offline.
+    font.setVariableAxis(QFont.Tag.fromString('wght'),400)
     return font

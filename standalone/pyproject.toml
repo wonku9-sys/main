@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "seoyoung-pos-standalone"
-version = "2.2.0"
+version = "2.3.0rc1"
 description = "Offline Korean desktop retail management, independently designed from manual workflows"
 requires-python = ">=3.12,<3.13"
 dependencies = [
@@ -12,6 +12,8 @@ dependencies = [
   "openpyxl==3.1.5",
   "et-xmlfile==2.0.0",
   "python-barcode==0.16.1",
+  "cryptography>=46,<48",
+  "korean-lunar-calendar==0.3.1",
 ]
 
 [project.optional-dependencies]

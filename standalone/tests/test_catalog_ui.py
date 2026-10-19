@@ -186,7 +186,7 @@ def test_products_page_filters_summary_numeric_sort_and_page_exports(app, shop):
     page.grid.sortItems(8, Qt.SortOrder.AscendingOrder)
     assert page.grid.item(0, 0).data(Qt.ItemDataRole.UserRole)["id"] == other
     assert "2품목" in page.summary.text()
-    assert isinstance(page.grid.export_rows()[0][8], int)
+    assert isinstance(page.grid.export_rows()[0][8], Decimal)
 
 
 def test_catalog_only_staff_can_view_scoped_history_without_admin_audit(app, shop):

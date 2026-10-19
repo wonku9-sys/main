@@ -1,6 +1,7 @@
 """Evidence for physical stock, month locking, cashier and reporting boundaries."""
 
 from datetime import date
+from decimal import Decimal
 import sqlite3
 
 import pytest
@@ -52,7 +53,8 @@ def physical(shop, expected="10", counted="8", **extra):
 
 
 def balance(shop):
-    return tuple(shop[0].db.execute("SELECT stock_qty,stock_cost FROM products WHERE id=?", (shop[3],)).fetchone())
+    row = shop[0].db.execute("SELECT stock_qty,stock_cost FROM products WHERE id=?", (shop[3],)).fetchone()
+    return row[0], Decimal(row[1]) / 100
 
 
 def test_count_is_frozen_preview_then_persistent_once_only_application(shop):
@@ -149,9 +151,9 @@ def test_count_zeroes_stock_and_zero_balance_stock_gain_uses_master_cost(shop):
     store.apply_count(physical(shop, counted="0"))
     assert balance(shop) == (0, 0)
     count_id = physical(shop, expected="0", counted="1.333")
-    assert store.count(count_id)["items"][0]["counted_cost"] == 133
+    assert store.count(count_id)["items"][0]["counted_cost"] == Decimal("133.30")
     store.apply_count(count_id)
-    assert balance(shop) == (1333, 133)
+    assert balance(shop) == (1333, Decimal("133.30"))
 
 
 def test_count_deletion_only_draft_and_backdated_future_count_rejected(shop):
@@ -301,7 +303,7 @@ def test_commission_report_uses_original_rates_supplier_and_exact_partial_return
     trade(shop)
     sale = trade(shop, "sale", quantity="3", price=101)
     original = store.document(sale)
-    assert original["lines"][0]["commission_amount"] == 38
+    assert original["lines"][0]["commission_amount"] == Decimal("37.88")
     store.save_partner({"commission_bps": 9000}, supplier)
     other = store.save_partner({"kind": "supplier", "name": "다른 공급사"})
     store.save_product({"supplier_id": other}, product)
@@ -309,9 +311,9 @@ def test_commission_report_uses_original_rates_supplier_and_exact_partial_return
     result = store.commission_report("2025-01-01", "2025-01-31")
     row = result["rows"][0]
     assert row["supplier_id"] == supplier and row["commission_bps"] == 1250
-    assert row["sale_total"] == 202 and row["commission_fee"] == 25
+    assert row["sale_total"] == 202 and row["commission_fee"] == Decimal("25.25")
     assert row["items"][0]["sale_qty"] == "2.000"
-    assert row["payable"] == 177
+    assert row["payable"] == Decimal("176.75")
     returned(shop, sale, "1")
     returned(shop, sale, "1")
     assert store.commission_report("2025-01-01", "2025-01-31")["totals"] == {

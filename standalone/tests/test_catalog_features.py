@@ -101,7 +101,7 @@ def test_invalid_category_cascades_but_keeps_existing_product_history(shop):
     child = store.save_category({"name": "한우", "parent_id": root})
     product = store.save_product({"name": "등심", "category": "정육", "category_mid": "한우"})
     store.save_category({"name": "정육", "active": False}, root)
-    assert all(not r["active"] for r in store.categories())
+    assert all(not r["active"] for r in store.categories() if r["path"][0] == "정육")
     with pytest.raises(ValueError, match="상위"):
         store.save_category({"name": "한우", "active": True}, child)
     with pytest.raises(ValueError, match="무효"):

@@ -20,9 +20,20 @@ from .recovery import RecoveryMixin, SCHEMA_VERSION
 from .schema import initialize
 from .settlement import SettlementMixin
 from .backup_schedule import BackupScheduleMixin, DEFAULT_BACKUP_SCHEDULE, validate_schedule
+from .suppliers import SupplierMixin
+from .currency import currency_boundary, convert_result, upgrade_currency
+from .purchase_reports import PurchaseReportingMixin
+from .offline_features import OfflineFeaturesMixin
+from .online_info import DEFAULT_ONLINE, validate_online
+from .diary import DiaryMixin
+from .household import HouseholdMixin
+from .email_recovery import EmailRecoveryMixin
+from .health import HealthMixin
 
 APPLICATION_ID = 1398362162
 DEFAULT_SETTINGS = {
+    "online_info": DEFAULT_ONLINE,
+    "rounding_mode": "decimal",
     "backup_schedule": DEFAULT_BACKUP_SCHEDULE,
     "store_name": "서영 POS", "business_no": "", "phone": "", "address": "",
     "earn_bps": 100, "point_min": 1000, "point_step": 100, "point_enabled": True,
@@ -55,7 +66,8 @@ def password_matches(password, encoded):
         return False
 
 
-class Store(CatalogMixin, CommerceMixin, OperationsMixin, LoyaltyMixin, RecoveryMixin, BackupPolicyMixin, SettlementMixin, BackupScheduleMixin):
+@currency_boundary
+class Store(CatalogMixin, CommerceMixin, OperationsMixin, LoyaltyMixin, RecoveryMixin, BackupPolicyMixin, SettlementMixin, BackupScheduleMixin, SupplierMixin, PurchaseReportingMixin, OfflineFeaturesMixin, DiaryMixin,HouseholdMixin,EmailRecoveryMixin,HealthMixin):
     def __init__(self, path):
         self.path = Path(path).expanduser().resolve() if str(path) != ":memory:" else None
         if self.path:
@@ -63,11 +75,14 @@ class Store(CatalogMixin, CommerceMixin, OperationsMixin, LoyaltyMixin, Recovery
         self.db = sqlite3.connect(str(self.path) if self.path else ":memory:", isolation_level=None, timeout=15)
         self.db.row_factory = sqlite3.Row
         self.actor = None
+        self._session_password_hash=None
+        self.migration_backup_path = None
         try:
             self.db.execute("PRAGMA foreign_keys=ON")
             self.db.execute("PRAGMA busy_timeout=15000")
             tables = self.db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").fetchall()
             marker = self.db.execute("PRAGMA application_id").fetchone()[0]
+            self._opening_version = self.db.execute("PRAGMA user_version").fetchone()[0]
             if tables and marker != APPLICATION_ID:
                 raise ValueError("이 파일은 새 독립판 업무 DB가 아닙니다. 기존 프로그램 데이터는 열거나 변경하지 않습니다.")
             if tables and self.db.execute("PRAGMA user_version").fetchone()[0] > SCHEMA_VERSION:
@@ -78,8 +93,10 @@ class Store(CatalogMixin, CommerceMixin, OperationsMixin, LoyaltyMixin, Recovery
             self.db.execute(f"PRAGMA application_id={APPLICATION_ID}")
             self._init_loyalty()
             self._init_operations()
+            upgrade_currency(self, self._opening_version)
             self._init_recovery()
             self._init_catalog()
+            self._init_supplier_management()
             self._dummy_password = password_hash(secrets.token_urlsafe(24))
         except BaseException:
             self.db.close()
@@ -123,6 +140,10 @@ class Store(CatalogMixin, CommerceMixin, OperationsMixin, LoyaltyMixin, Recovery
         if not row or not row["active"]:
             self.actor = None
             raise PermissionError("로그인이 필요합니다.")
+        if self._session_password_hash is not None and self._session_password_hash!=row["password_hash"]:
+            self.actor=None
+            self.lock_diary();self.lock_household()
+            raise PermissionError("비밀번호가 변경되었습니다. 다시 로그인하세요.")
         self.actor = self._public_user(row)
         if permissions and row["role"] != "admin" and not (set(permissions) - {"admin"}) & set(self.actor["permissions"]):
             raise PermissionError("이 업무를 사용할 권한이 없습니다.")
@@ -152,7 +173,7 @@ class Store(CatalogMixin, CommerceMixin, OperationsMixin, LoyaltyMixin, Recovery
     def _audit(self, action, entity, entity_id=None, detail=None):
         self.db.execute("INSERT INTO audit(at,user_id,action,entity,entity_id,detail) VALUES(?,?,?,?,?,?)", (
             now(), self.actor["id"] if self.actor else None, action, entity, entity_id,
-            json.dumps(detail or {}, ensure_ascii=False, sort_keys=True, default=str),
+            json.dumps(convert_result(detail or {}), ensure_ascii=False, sort_keys=True, default=str),
         ))
 
     def users_count(self):
@@ -166,18 +187,21 @@ class Store(CatalogMixin, CommerceMixin, OperationsMixin, LoyaltyMixin, Recovery
                 raise ValueError("최초 관리자 설정은 한 번만 가능합니다.")
             identifier = self.db.execute("INSERT INTO users(code,name,password_hash,role,permissions) VALUES(?,?,?,'admin',?)", (code, name, encoded, json.dumps(sorted(PERMISSIONS)))).lastrowid
             self.actor = self._public_user(self.db.execute("SELECT * FROM users WHERE id=?", (identifier,)).fetchone())
+            self._session_password_hash=encoded
             self._audit("create", "user", identifier, {"code": code, "name": name, "role": "admin"})
             self.db.execute("INSERT INTO partners(kind,code,name,opening_date) VALUES('customer','WALKIN','일반고객',date('now','localtime'))")
         return identifier
 
     def login(self, code, password):
         self.actor = None
+        self.lock_diary();self.lock_household()
         row = self.db.execute("SELECT * FROM users WHERE code=?", (text(code),)).fetchone()
         valid = password_matches(password, row["password_hash"] if row else self._dummy_password)
         if not row or not valid or not row["active"]:
             raise ValueError("사용자 코드 또는 비밀번호를 확인하세요.")
         self._restore_token = self._current_restore_token()
         self.actor = self._public_user(row)
+        self._session_password_hash=row["password_hash"]
         with self._tx():
             self._audit("login", "user", row["id"], {})
         return self.actor
@@ -201,6 +225,8 @@ class Store(CatalogMixin, CommerceMixin, OperationsMixin, LoyaltyMixin, Recovery
         return bool(row and password_matches("1234", row[0]))
 
     def logout(self):
+        self.lock_diary()
+        self.lock_household()
         if self.actor:
             with self._tx():
                 self._audit("logout", "user", self.actor["id"], {})
@@ -239,6 +265,7 @@ class Store(CatalogMixin, CommerceMixin, OperationsMixin, LoyaltyMixin, Recovery
             else:
                 id = self.db.execute("INSERT INTO users(code,name,password_hash,role,permissions,active) VALUES(?,?,?,?,?,?)", values).lastrowid
             self._audit("update" if existing else "create", "user", id, {"code": code, "name": name, "role": role, "permissions": json.loads(values[4]), "active": bool(active)})
+            if self.actor and id==self.actor["id"]:self._session_password_hash=encoded
         return id
 
     def delete_user(self, id):
@@ -260,8 +287,10 @@ class Store(CatalogMixin, CommerceMixin, OperationsMixin, LoyaltyMixin, Recovery
             row = self.db.execute("SELECT * FROM users WHERE id=?", (self.actor["id"],)).fetchone()
             if not password_matches(old, row["password_hash"]):
                 raise ValueError("현재 비밀번호가 일치하지 않습니다.")
-            self.db.execute("UPDATE users SET password_hash=? WHERE id=?", (password_hash(new), row["id"]))
+            encoded=password_hash(new)
+            self.db.execute("UPDATE users SET password_hash=? WHERE id=?", (encoded, row["id"]))
             self._audit("password", "user", row["id"], {})
+        self._session_password_hash=encoded
 
     def _settings_values(self):
         result = deepcopy(DEFAULT_SETTINGS)
@@ -271,6 +300,14 @@ class Store(CatalogMixin, CommerceMixin, OperationsMixin, LoyaltyMixin, Recovery
     def settings(self):
         self._require("admin")
         return self._settings_values()
+
+    def calculation_policy(self):
+        self._require()
+        return {"rounding_mode": self._settings_values()["rounding_mode"]}
+
+    def online_preferences(self):
+        self._require()
+        return validate_online(self._settings_values()["online_info"])
 
     def save_settings(self, values):
         if not isinstance(values, dict) or set(values) - set(DEFAULT_SETTINGS):
@@ -288,8 +325,13 @@ class Store(CatalogMixin, CommerceMixin, OperationsMixin, LoyaltyMixin, Recovery
                 limit = 10000 if key == "earn_bps" else 9_000_000_000_000
                 if value < (1 if key == "point_step" else 0) or value > limit:
                     raise ValueError("포인트 정책 허용 범위를 확인하세요.")
+            elif key == "rounding_mode":
+                if value not in {"decimal", "won"}:
+                    raise ValueError("반올림 설정을 선택하세요.")
             elif key == "backup_schedule":
                 value = validate_schedule(value)
+            elif key == "online_info":
+                value = validate_online(value)
             elif key == "point_enabled":
                 if not isinstance(value, bool):
                     raise ValueError("포인트 사용 여부는 체크 값이어야 합니다.")

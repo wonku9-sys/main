@@ -13,7 +13,7 @@ class SettlementMixin:
         row = self.db.execute("SELECT * FROM partners WHERE id=? AND kind='supplier'", (identifier,)).fetchone()
         if not row:
             raise ValueError("공급사를 선택하세요.")
-        return dict(row)
+        return {**dict(row), **self._supplier_profile(identifier)}
 
     def supplier_summary(self, start, end, search="", only_purchases=False, partner_id=None):
         self._require("trade")

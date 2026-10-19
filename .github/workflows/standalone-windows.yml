@@ -74,4 +74,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          gh release create "$RELEASE_TAG" --verify-tag --latest --title "서영 POS 독립판 ${RELEASE_TAG#standalone-}" --notes-file standalone/RELEASE_NOTES.md release-assets/*.zip release-assets/*.zip.sha256
+          if [[ "$RELEASE_TAG" == *rc* ]]; then
+            gh release create "$RELEASE_TAG" --verify-tag --prerelease --latest=false --title "서영 POS 미리보기 ${RELEASE_TAG#standalone-}" --notes-file standalone/RELEASE_NOTES.md release-assets/*.zip release-assets/*.zip.sha256
+          else
+            gh release create "$RELEASE_TAG" --verify-tag --latest --title "서영 POS 독립판 ${RELEASE_TAG#standalone-}" --notes-file standalone/RELEASE_NOTES.md release-assets/*.zip release-assets/*.zip.sha256
+          fi

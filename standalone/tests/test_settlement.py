@@ -166,7 +166,7 @@ def test_payment_page_menu_drilldown_current_tab_export_and_real_dialog_commit(s
     page.export()
     assert captured == ["ledger"]
     dialog = SupplierPaymentDialog(window, supplier)
-    assert dialog.amount.text() == "4000" and dialog.grid.rowCount() == 3
+    assert dialog.amount.text() == "4000.00" and dialog.grid.rowCount() == 3
     dialog.amount.setText("2500")
     dialog.method.setCurrentIndex(1)
     monkeypatch.setattr("pos2.payment_ui._confirm", lambda *_: True)

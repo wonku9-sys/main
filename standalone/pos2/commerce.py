@@ -10,6 +10,7 @@ from decimal import Decimal
 from uuid import uuid4
 
 from .common import LIMIT, day, money, now, qtext, qty, rounded, text
+from .currency import amount as currency_amount
 
 
 KINDS = {"purchase", "sale", "purchase_return", "sale_return"}
@@ -177,6 +178,9 @@ class CommerceMixin:
         if kind not in KINDS:
             raise ValueError("전표 유형이 올바르지 않습니다.")
         result = {"kind": kind, "date": day(data.get("date")), "memo": text(data.get("memo", ""), "메모")}
+        result["rounding_mode"] = data.get("rounding_mode", self._settings_values().get("rounding_mode", "decimal"))
+        if result["rounding_mode"] not in {"decimal", "won"}:
+            raise ValueError("반올림 설정을 확인하세요.")
         partner_id = data.get("partner_id")
         partner = self.db.execute("SELECT * FROM partners WHERE id=?", (partner_id,)).fetchone()
         expected = "supplier" if kind.startswith("purchase") else "customer"
@@ -190,6 +194,7 @@ class CommerceMixin:
         source = None
         if is_return:
             source = self._trade_row(result["source_id"])
+            result["rounding_mode"] = source["rounding_mode"]
             if source["status"] != "posted" or source["kind"] != kind.removesuffix("_return"):
                 raise ValueError("확정된 올바른 원전표를 선택하세요.")
             if source["partner_id"] != partner_id:
@@ -207,6 +212,8 @@ class CommerceMixin:
                 raise ValueError("사용 중인 회원을 선택하세요.")
         result["paid"] = money(data.get("paid", 0))
         result["points_used"] = money(data.get("points_used", 0))
+        if result["points_used"] % 100:
+            raise ValueError("사용 포인트는 정수 점수로 입력하세요.")
         result["method"] = data.get("method", "cash")
         if result["method"] not in {"cash", "transfer"}:
             raise ValueError("결제 수단은 현금 또는 계좌이체만 가능합니다.")
@@ -225,6 +232,7 @@ class CommerceMixin:
             item = {"product_id": product["id"], "unit_id": raw.get("unit_id") or None,
                     "input_qty": qty(raw.get("qty")), "source_line_id": raw.get("source_line_id") or None,
                     "product_name": product["name"], "unit_name": product["base_unit"], "factor": 1000,
+                    "price_basis": product["price_basis"],
                     "tracked": bool(product["tracked"]), "product": dict(product),
                     "supplier_id": product["supplier_id"], "tax_mode": product["tax_mode"],
                     "commission_bps": 0, "commission_amount": 0}
@@ -235,9 +243,9 @@ class CommerceMixin:
                     raise ValueError("원전표의 상품 행을 선택하세요.")
                 if item["unit_id"] != original["unit_id"]:
                     raise ValueError("반품 단위는 원거래 단위와 같아야 합니다.")
-                if money(raw.get("unit_price", original["unit_price"])) != original["unit_price"]:
+                if "unit_price" in raw and money(raw["unit_price"]) != original["unit_price"]:
                     raise ValueError("반품 가격은 원거래 가격을 변경할 수 없습니다.")
-                item.update({key: original[key] for key in ("unit_name", "factor", "unit_price", "product_name")})
+                item.update({key: original[key] for key in ("unit_name", "factor", "unit_price", "product_name", "price_basis")})
                 item.update({key: original[key] for key in ("supplier_id", "tax_mode", "commission_bps")})
                 prior = self.db.execute(
                     "SELECT COALESCE(SUM(l.input_qty),0) q,COALESCE(SUM(l.total),0) t,"
@@ -264,10 +272,16 @@ class CommerceMixin:
                     if not unit:
                         raise ValueError("사용 중인 올바른 확장단위를 선택하세요.")
                     item.update(unit_name=unit["name"], factor=unit["factor"])
+                    item["price_basis"] = 1
+                if raw.get("gram_input"):
+                    if item["unit_id"] or product["base_unit"] != "kg":
+                        raise ValueError("g 입력 환산은 kg 기본상품에서만 가능합니다.")
+                    item.update(unit_name="g", factor=1, price_basis=100)
                 if "unit_price" not in raw:
                     raise ValueError("확인한 거래 단가를 입력하세요.")
                 item["unit_price"] = money(raw["unit_price"])
-                item["total"] = rounded(Decimal(item["input_qty"]) * item["unit_price"] / 1000)
+                calculated = Decimal(item["input_qty"]) * item["unit_price"] / (1000 * item["price_basis"])
+                item["total"] = rounded(calculated / 100) * 100 if result["rounding_mode"] == "won" else rounded(calculated)
                 item["cost"] = item["total"] if kind == "purchase" else 0
                 if kind == "sale" and item["supplier_id"]:
                     supplier = self.db.execute("SELECT supplier_mode,commission_bps FROM partners WHERE id=?",
@@ -317,11 +331,12 @@ class CommerceMixin:
             self.db.execute(
                 "INSERT INTO document_lines(document_id,product_id,unit_id,product_name,unit_name,factor,"
                 "input_qty,base_qty,unit_price,total,cost,source_line_id,supplier_id,tax_mode,commission_bps,"
-                "commission_amount) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "commission_amount,price_basis) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (identifier,) + tuple(item[key] for key in ("product_id", "unit_id", "product_name", "unit_name",
                  "factor", "input_qty", "base_qty", "unit_price", "total", "cost", "source_line_id",
-                 "supplier_id", "tax_mode", "commission_bps", "commission_amount")),
+                 "supplier_id", "tax_mode", "commission_bps", "commission_amount", "price_basis")),
             )
+        self.db.execute("UPDATE documents SET rounding_mode=? WHERE id=?", (prepared["rounding_mode"], identifier))
         return identifier
 
     def save_draft(self, data, id=None):
@@ -347,7 +362,7 @@ class CommerceMixin:
         for item in prepared["lines"]:
             product = item["product"]
             if not item["tracked"]:
-                item["cost"] = rounded(Decimal(product["purchase_price"]) * item["base_qty"] / 1000)
+                item["cost"] = rounded(Decimal(product["purchase_price"]) * item["base_qty"] / (1000 * product["price_basis"]))
                 continue
             before = cumulative[item["product_id"]]
             after = before + item["base_qty"]
@@ -427,7 +442,8 @@ class CommerceMixin:
         self._assert_open(payment_date)
         if method not in {"cash", "transfer"}:
             raise ValueError("결제 수단은 현금 또는 계좌이체만 가능합니다.")
-        amount = money(amount, positive=True)
+        if type(amount) is not int or amount <= 0 or amount > LIMIT:
+            raise ValueError("정산금액은 0.01원 이상이어야 합니다.")
         if record["source_id"]:
             already = -self._trade_payment_sum(document_id)
             cap = min(record["total"] - record["points_used"] - already,
@@ -453,7 +469,7 @@ class CommerceMixin:
     def add_payment(self, document_id, amount, date, method="cash", memo=""):
         with self._tx():
             self._require("trade")
-            return self._insert_trade_payment(document_id, amount, date, method, memo)
+            return self._insert_trade_payment(document_id, money(amount, positive=True), date, method, memo)
 
     def void_payment(self, identifier, reason):
         with self._tx():

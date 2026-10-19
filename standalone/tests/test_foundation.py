@@ -44,7 +44,7 @@ def test_exact_quantities_money_and_bounds():
     assert qty("0", allow_zero=True) == 0
     assert qtext(1250) == "1.250"
     assert rounded(Decimal("-1.5")) == -2
-    assert money("1,234.5") == 1235
+    assert money("1,234.5") == 123450
     for value in ("0.0001", "-1", "0", str(LIMIT)):
         with pytest.raises(ValueError):
             qty(value)

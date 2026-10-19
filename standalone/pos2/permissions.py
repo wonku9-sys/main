@@ -6,19 +6,27 @@ explicit deny entries for unchecked menus/actions; absence never adds an area.
 
 MENU_POLICIES = {
     "home": ("첫화면", (), ()),
+    "diary": ("보안 일기장", (), ()),
+    "worklog": ("업무일지", (), ("create","edit","delete")),
+    "household": ("가계부", (), ("create","edit","delete")),
     "products": ("상품장 · 확장단위", ("catalog",), ("create", "edit", "delete")),
     "categories": ("상품 분류", ("catalog",), ("create", "edit", "delete")),
-    "suppliers": ("공급사", ("catalog",), ("create", "edit", "delete")),
+    "suppliers": ("공급사관리", ("catalog",), ("create", "edit", "delete")),
     "customers": ("판매처", ("catalog",), ("create", "edit", "delete")),
     "labels": ("라벨 출력", ("catalog",), ()),
     "purchases": ("매입전표", ("trade",), ("create", "edit", "delete")),
+    "purchase_suppliers": ("공급사별 매입현황", ("trade",), ()),
+    "purchase_categories": ("분류별 매입현황", ("trade",), ()),
+    "purchase_products": ("단품별 매입현황", ("trade",), ()),
+    "purchase_documents": ("전표별 매입현황", ("trade",), ()),
+    "purchase_statement": ("매입계산서", ("trade",), ()),
     "payments": ("결제관리", ("trade",), ("create", "delete")),
     "sales": ("매출장 · 고객반품", ("trade",), ("create", "edit", "delete")),
     "ledger": ("거래처 원장", ("trade",), ()),
     "inventory": ("현재고 · 입출고", ("inventory",), ()),
     "counts": ("실사 입력 · 적용", ("inventory",), ("create", "edit", "delete")),
     "closings": ("현금 · 월재고 마감", ("inventory", "trade"), ("create",)),
-    "members": ("회원 · 포인트 · 지정가", ("loyalty",), ("create", "edit", "delete")),
+    "members": ("회원조회/등록", ("loyalty",), ("create", "edit", "delete")),
     "promotions": ("특매 그룹", ("loyalty",), ("create", "edit", "delete")),
     "prices": ("가격 변경 예약", ("loyalty",), ("create", "edit", "delete")),
     "gifts": ("사은품 · 교환", ("loyalty",), ("create", "edit", "delete")),
@@ -29,8 +37,13 @@ MENU_POLICIES = {
     "permissions": ("권한 설정", ("admin",), ()),
     "settings": ("매장 설정 · 백업", ("admin",), ()),
 }
+from .offline_menus import REPORT_VIEWS, SALES_VIEWS, BASIC_VIEWS, MEMBER_VIEWS, FORM_VIEWS
+MENU_POLICIES.update({key: (value[0], (value[3],), ()) for key, value in {**REPORT_VIEWS, **SALES_VIEWS}.items()})
+MENU_POLICIES.update({key: (title, ("admin" if key == "user_access" else "catalog",), ()) for key, title in BASIC_VIEWS.items()})
+MENU_POLICIES.update({key: (title, ("loyalty",), ()) for key, title in MEMBER_VIEWS.items()})
+MENU_POLICIES.update({key: (value[0], ("loyalty" if key == "member_tax" else "trade",), ("create", "edit", "delete")) for key, value in FORM_VIEWS.items()})
 ACTIONS = {"create": "등록", "edit": "수정·편집", "delete": "삭제·취소"}
-DENIAL_PERMISSIONS = frozenset(value for key, (_, bases, actions) in MENU_POLICIES.items() if bases and "admin" not in bases
+DENIAL_PERMISSIONS = frozenset(value for key, (_, bases, actions) in MENU_POLICIES.items() if (bases or key in {"diary","worklog","household"}) and "admin" not in bases
                                for value in (f"deny:{key}", *(f"deny:{key}.{action}" for action in actions)))
 
 
@@ -44,6 +57,8 @@ def has_menu(actor, key):
     if actor.get("role") == "admin":
         return True
     permissions = set(actor.get("permissions", []))
+    if key in {"diary","worklog","household"}:
+        return f"deny:{key}" not in permissions
     return bool(set(MENU_POLICIES[key][1]) - {"admin"}) and bool(set(MENU_POLICIES[key][1]) & permissions) and f"deny:{key}" not in permissions
 
 
@@ -62,6 +77,8 @@ def menu_key_for(widget):
         return "purchases" if getattr(widget, "kind", "purchase").startswith("purchase") else "sales"
     return {
         "ProductsPage": "products", "ProductDialog": "products", "CategoriesPage": "categories", "CategoryDialog": "categories",
+        "ProductCatalogDialog": "products",
+        "SuppliersPage": "suppliers", "SupplierDialog": "suppliers", "SupplierGroupsDialog": "suppliers",
         "SupplierPaymentsPage": "payments", "SupplierPaymentDialog": "payments", "LedgerPage": "ledger",
         "CountsPage": "counts", "CountEditor": "counts", "InventoryPage": "inventory", "ClosingsPage": "closings",
         "MembersPage": "members", "MemberDialog": "members", "PromotionsPage": "promotions", "PromotionDialog": "promotions",

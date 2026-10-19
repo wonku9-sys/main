@@ -4,15 +4,19 @@ from datetime import date
 import json
 
 from .common import day, money, now, qtext, qty, rounded, text
+from .currency import money_input
 
 PRODUCT_TEXT = ("code", "barcode", "name", "receipt_name", "category", "category_mid", "category_small", "specification", "base_unit", "origin", "warehouse", "shelf", "keywords", "memo")
 PARTNER_TEXT = ("code", "name", "business_no", "contact", "phone", "bank", "account", "account_holder", "memo")
+DEFAULT_PRODUCT_CATEGORY = ("미분류", "미분류", "신상품")
+CATEGORY_FIELDS = ("category", "category_mid", "category_small")
 
 
 class CatalogMixin:
     def _init_catalog(self):
         for row in self.db.execute("SELECT DISTINCT category,category_mid,category_small FROM products"):
             self._ensure_category_path(*row, allow_inactive=True)
+        self._ensure_category_path(*DEFAULT_PRODUCT_CATEGORY, allow_inactive=True)
 
     def _ensure_category_path(self, category, middle="", small="", allow_inactive=False, check_create=False):
         parent = None
@@ -139,6 +143,8 @@ class CatalogMixin:
         for row in self.db.execute("SELECT * FROM partners WHERE kind=? AND (name LIKE ? OR code LIKE ? OR phone LIKE ? OR business_no LIKE ?) ORDER BY code", (kind, term, term, term, term)):
             item = dict(row)
             item["balance"] = self._partner_balance(row["id"])
+            if kind == "supplier":
+                item.update(self._supplier_profile(row["id"]))
             result.append(item)
         return result
 
@@ -159,7 +165,7 @@ class CatalogMixin:
                 raise ValueError("공급사와 판매처 유형은 변경할 수 없습니다.")
             values["code"] = values["code"] or self._next_code("partners", "S" if values["kind"] == "supplier" else "C", values["kind"])
             values["active"] = int(bool(data.get("active", old["active"] if old else True)))
-            values["opening_balance"] = rounded(data.get("opening_balance", old["opening_balance"] if old else 0))
+            values["opening_balance"] = money_input(data["opening_balance"], signed=True) if "opening_balance" in data else old["opening_balance"] if old else 0
             values["opening_date"] = day(data.get("opening_date", old["opening_date"] if old else date.today().isoformat()))
             values["supplier_mode"] = data.get("supplier_mode", old["supplier_mode"] if old else "direct")
             if values["supplier_mode"] not in {"direct", "commission"}:
@@ -179,6 +185,8 @@ class CatalogMixin:
                 self.db.execute("UPDATE partners SET " + ",".join(f"{key}=?" for key in columns) + " WHERE id=?", tuple(values[key] for key in columns) + (id,))
             else:
                 id = self.db.execute("INSERT INTO partners(" + ",".join(columns) + ") VALUES(" + ",".join("?" for _ in columns) + ")", tuple(values[key] for key in columns)).lastrowid
+            if values["kind"] == "supplier":
+                self._save_supplier_profile(id, data)
             self._audit("update" if old else "create", "partner", id, {"name": values["name"], "kind": values["kind"]})
         return id
 
@@ -232,12 +240,20 @@ class CatalogMixin:
             values.update({key: text(data.get(key, values[key]), key, key == "name", 4000 if key == "memo" else 300) for key in PRODUCT_TEXT})
             values["code"] = values["code"] or (old["code"] if old else self._next_product_code())
             self._record_product_code(values["code"])
-            values["category"] = values["category"] or "미분류"
+            automatic_category = not any(values[key] for key in CATEGORY_FIELDS) and (not old or any(key in data for key in CATEGORY_FIELDS))
+            if automatic_category:
+                values.update(zip(CATEGORY_FIELDS, DEFAULT_PRODUCT_CATEGORY))
+            elif not old:
+                values["category"] = values["category"] or "미분류"
             if values["category_small"] and not values["category_mid"]:
                 raise ValueError("소분류를 정하려면 중분류를 먼저 선택하세요.")
             unchanged = bool(old and all(values[key] == old[key] for key in ("category", "category_mid", "category_small")))
-            self._ensure_category_path(values["category"], values["category_mid"], values["category_small"], allow_inactive=unchanged, check_create=True)
+            self._ensure_category_path(values["category"], values["category_mid"], values["category_small"], allow_inactive=unchanged, check_create=not automatic_category)
             values["base_unit"] = values["base_unit"] or "kg"
+            basis = data.get("price_basis", old["price_basis"] if old else 1)
+            if type(basis) is not int or basis not in (1, 100) or basis == 100 and values["base_unit"] != "g":
+                raise ValueError("100g당 단가는 기본단위가 g인 상품에서 선택하세요.")
+            values["price_basis"] = basis
             values["supplier_id"] = data.get("supplier_id", old["supplier_id"] if old else None) or None
             if values["supplier_id"]:
                 supplier = self.db.execute("SELECT * FROM partners WHERE id=?", (values["supplier_id"],)).fetchone()
@@ -250,16 +266,18 @@ class CatalogMixin:
                 values[key] = int(bool(data.get(key, old[key] if old else True)))
             values["retirement_target"] = int(bool(data.get("retirement_target", old["retirement_target"] if old else False)) and values["active"])
             for key in ("purchase_price", "sale_price"):
-                values[key] = money(data.get(key, old[key] if old else 0))
+                values[key] = money(data[key]) if key in data else old[key] if old else 0
             values["min_qty"] = qty(data["min_qty"], allow_zero=True) if "min_qty" in data else old["min_qty"] if old else 0
             if old:
                 used = self._product_used(id)
+                if values["price_basis"] != old["price_basis"] and (used or self.db.execute("SELECT 1 FROM product_units WHERE product_id=?", (id,)).fetchone()):
+                    raise ValueError("거래·확장단위가 있는 상품의 단가 기준은 바꿀 수 없습니다. 새 상품으로 등록하세요.")
                 if values["base_unit"] != old["base_unit"] and (used or self.db.execute("SELECT 1 FROM product_units WHERE product_id=?", (id,)).fetchone()):
                     raise ValueError("이력 또는 확장단위가 있는 상품의 기본단위는 변경할 수 없습니다.")
                 if values["tracked"] != old["tracked"] and (used or old["stock_qty"] or old["stock_cost"]):
                     raise ValueError("재고 또는 이력이 있는 상품의 재고관리 설정은 변경할 수 없습니다.")
             values["updated_at"] = now()
-            columns = PRODUCT_TEXT + ("supplier_id", "tax_mode", "tracked", "active", "retirement_target", "purchase_price", "sale_price", "min_qty", "updated_at")
+            columns = PRODUCT_TEXT + ("supplier_id", "tax_mode", "tracked", "active", "retirement_target", "purchase_price", "sale_price", "min_qty", "updated_at", "price_basis")
             if old:
                 self.db.execute("UPDATE products SET " + ",".join(f"{key}=?" for key in columns) + " WHERE id=?", tuple(values[key] for key in columns) + (id,))
             else:
@@ -306,7 +324,9 @@ class CatalogMixin:
             factor = qty(data["factor"]) if "factor" in data else old["factor"] if old else 1000
             if old and factor != old["factor"] and self.db.execute("SELECT 1 FROM document_lines WHERE unit_id=?", (id,)).fetchone():
                 raise ValueError("거래에 사용된 확장단위의 환산량은 변경할 수 없습니다.")
-            values = (product_id, text(data.get("name", old["name"] if old else ""), "단위명", True, 80), text(data.get("barcode", old["barcode"] if old else ""), "바코드", maximum=100), factor, money(data.get("purchase_price", old["purchase_price"] if old else 0)), money(data.get("sale_price", old["sale_price"] if old else 0)), int(bool(data.get("active", old["active"] if old else True))))
+            purchase = money(data["purchase_price"]) if "purchase_price" in data else old["purchase_price"] if old else 0
+            sale = money(data["sale_price"]) if "sale_price" in data else old["sale_price"] if old else 0
+            values = (product_id, text(data.get("name", old["name"] if old else ""), "단위명", True, 80), text(data.get("barcode", old["barcode"] if old else ""), "바코드", maximum=100), factor, purchase, sale, int(bool(data.get("active", old["active"] if old else True))))
             if old:
                 self.db.execute("UPDATE product_units SET product_id=?,name=?,barcode=?,factor=?,purchase_price=?,sale_price=?,active=? WHERE id=?", values + (id,))
             else:
@@ -354,6 +374,66 @@ class CatalogMixin:
                 self._ensure_category_path(category, current[0], current[1], check_create=True)
                 self.db.execute("UPDATE products SET category=?,updated_at=? WHERE id=?", (category, now(), identifier))
                 self._audit("bulk_category", "product", identifier, {"changes": {"category": {"old": row[0], "new": category}}})
+
+    def bulk_update_products(self, identifiers, changes):
+        allowed = {"purchase_price", "sale_price", "supplier_id", "origin", "min_qty", "active", "retirement_target", "tracked", "tax_mode", *CATEGORY_FIELDS}
+        if not isinstance(changes, dict) or not changes or set(changes) - allowed:
+            raise ValueError("일괄 변경 항목을 확인하세요.")
+        if not isinstance(identifiers, (list, tuple)) or any(type(value) is not int for value in identifiers):
+            raise ValueError("상품을 목록에서 선택하세요.")
+        ids = sorted(set(identifiers))
+        if not ids or len(ids) > 2000:
+            raise ValueError("1~2,000개 상품을 선택하세요.")
+        with self._tx():
+            self._require_capability("products", "edit")
+            parsed = dict(changes)
+            for key in ("purchase_price", "sale_price"):
+                if key in parsed:
+                    parsed[key] = money(parsed[key])
+            if "min_qty" in parsed:
+                parsed["min_qty"] = qty(parsed["min_qty"], allow_zero=True)
+            if "origin" in parsed:
+                parsed["origin"] = text(parsed["origin"], "원산지", maximum=300)
+            for key in ("active", "retirement_target", "tracked"):
+                if key in parsed and type(parsed[key]) is not bool:
+                    raise ValueError("상품 상태는 체크 값이어야 합니다.")
+            if "tax_mode" in parsed and parsed["tax_mode"] not in {"taxable", "exempt"}:
+                raise ValueError("과세 또는 면세를 선택하세요.")
+            if "supplier_id" in parsed and parsed["supplier_id"] is not None:
+                if not self.db.execute("SELECT 1 FROM partners WHERE id=? AND kind='supplier' AND active=1", (parsed["supplier_id"],)).fetchone():
+                    raise ValueError("유효 공급사를 선택하세요.")
+            if set(parsed) & set(CATEGORY_FIELDS):
+                if not set(CATEGORY_FIELDS) <= set(parsed):
+                    raise ValueError("대·중·소분류 경로를 함께 선택하세요.")
+                path = [text(parsed[key], "분류", maximum=300) for key in CATEGORY_FIELDS]
+                parent = None
+                for name in path:
+                    if not name:
+                        break
+                    category = self.db.execute("SELECT id,active FROM product_categories WHERE parent_id IS ? AND name=?", (parent, name)).fetchone()
+                    if not category or not category["active"]:
+                        raise ValueError("등록된 유효 분류를 먼저 선택하세요.")
+                    parent = category["id"]
+                if not path[0] or path[2] and not path[1]:
+                    raise ValueError("올바른 분류 경로를 선택하세요.")
+                parsed.update(zip(CATEGORY_FIELDS, path))
+            records = []
+            for identifier in ids:
+                row = self.db.execute("SELECT * FROM products WHERE id=?", (identifier,)).fetchone()
+                if not row:
+                    raise ValueError("선택한 상품이 삭제되었습니다. 다시 조회하세요.")
+                if "tracked" in parsed and bool(row["tracked"]) != parsed["tracked"] and (self._product_used(identifier) or row["stock_qty"] or row["stock_cost"]):
+                    raise ValueError(f"{row['name']}: 거래·재고 이력이 있어 재고관리 여부를 바꿀 수 없습니다. 전체 변경을 취소합니다.")
+                records.append(row)
+            for row in records:
+                values = {**parsed, "updated_at": now()}
+                if values.get("active") is False:
+                    values["retirement_target"] = False
+                if values.get("retirement_target"):
+                    values["active"] = True
+                self.db.execute("UPDATE products SET " + ",".join(f"{key}=?" for key in values) + " WHERE id=?", (*values.values(), row["id"]))
+                self._audit("bulk_update_product", "product", row["id"], {"changes": {key: {"old": row[key], "new": value} for key, value in values.items() if key != "updated_at" and row[key] != value}})
+        return len(ids)
 
     def product_history(self, product_id):
         self._require("catalog", "reports")

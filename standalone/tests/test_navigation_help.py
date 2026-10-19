@@ -124,7 +124,8 @@ def test_all_menu_surfaces_have_specific_hover_help(shop):
         assert window.nav_actions[key].associatedObjects()
     assert all(action.toolTip() for action in window.toolbar.actions())
     buttons = window.pages["home"].links.findChildren(QPushButton)
-    assert len(buttons) == len(MENU_HELP) - 1 and all(button.toolTip() for button in buttons)
+    assert len(buttons) == 7 and all(button.toolTip() for button in buttons)
+    assert all(button.toolTip() for button in window.personal_panel.findChildren(QPushButton))
     style = MenuHelpStyle()
     assert style.styleHint(QStyle.StyleHint.SH_ToolTip_WakeUpDelay) == 700
     style.deleteLater()

@@ -54,7 +54,7 @@ def test_hid_scan_deduplicates_retains_leading_zero_and_never_saves(app, shop):
     assert dialog.line_rows[0]["qty"].text() == "2"
     assert dialog.line_rows[1]["unit"].currentData() == pack
     assert dialog.line_rows[1]["qty"].text() == "2"
-    assert dialog.line_rows[1]["price"].text() == "48000"
+    assert dialog.line_rows[1]["price"].text() == "48000.00"
     assert store.documents() == []
     assert dialog.saved_id is None and dialog.isVisible()
     dialog.reject()
@@ -125,7 +125,7 @@ def test_date_change_preserves_manual_price_until_confirmed_quote_apply(app, sho
     assert row["price"].text() == "12345"
     monkeypatch.setattr("pos2.workflow_ui._confirm", lambda *_: True)
     dialog.apply_quotes()
-    assert row["price"].text() == "10000"
+    assert row["price"].text() == "10000.00"
 
 
 def test_partial_return_draft_reopen_preserves_original_line_link(app, shop, monkeypatch):
