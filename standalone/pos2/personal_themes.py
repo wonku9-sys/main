@@ -13,7 +13,8 @@ THEMES={
 def apply_theme(widget,key):
     _,background,paper,border,ink=THEMES[key]
     widget.setStyleSheet(f"""
-    QDialog {{background:{background};color:{ink};}}
+    QDialog,QWidget#personalSurface {{background:{background};color:{ink};}}
+    QScrollArea {{background:{background};border:0;}}
     QLabel,QCheckBox {{color:{ink};background:transparent;}}
     QFrame#cashCard,QFrame#memoCard {{background:{paper};border:1px solid {border};border-radius:12px;}}
     QTextEdit,QLineEdit,QDateEdit,QTimeEdit,QComboBox,QTableWidget,QCalendarWidget {{background:{paper};color:{ink};border:1px solid {border};border-radius:7px;}}

@@ -26,7 +26,7 @@ MONEY_COLUMNS = {
     "cash_closes": ("opening_cash", "cash_receipts", "cash_refunds", "cash_net", "expected_cash", "counted_cash", "difference"),
 }
 MONEY_KEYS = frozenset(key for columns in MONEY_COLUMNS.values() for key in columns) | {
-    "income_total","expense_total","closing_balance",
+    "income_total","expense_total","closing_balance","previous_total","comparable_total",
     "balance", "net_balance", "refundable", "unrefunded_credit", "charge", "payment", "closing", "opening",
     "purchase", "returns", "cap", "as_of", "cost_difference", "sale_receipts", "refunds", "profit",
     "purchase_total", "sale_total", "taxable_sale_total", "exempt_sale_total", "transfer_receipts", "transfer_refunds", "transfer_net",
@@ -80,8 +80,14 @@ def currency_boundary(cls):
         def call(self, *args, **kwargs):
             depth = getattr(self, "_currency_depth", 0)
             self._currency_depth = depth + 1
+            own_read=name in {'products','trade_products','lookup_barcode','document'} and not self.db.in_transaction
+            if own_read:self.db.execute('BEGIN')
             try:
                 result = function(self, *args, **kwargs)
+                if own_read:self.db.commit()
+            except BaseException:
+                if own_read:self.db.rollback()
+                raise
             finally:
                 self._currency_depth = depth
             return convert_result(result) if depth == 0 and name not in {"point_history"} else result

@@ -20,6 +20,8 @@ class ScheduleAlertDialog(QDialog):
             heading=QLabel(record['title']);heading.setTextFormat(Qt.TextFormat.PlainText);heading.setWordWrap(True);heading.setStyleSheet('font-size:20px;font-weight:650;');body.addWidget(heading)
             detail=QLabel(record['notes'][:1000]);detail.setTextFormat(Qt.TextFormat.PlainText);detail.setWordWrap(True);body.addWidget(detail)
             if record.get('counter'):body.addWidget(QLabel(record['counter']))
+            from .personal_schedule_ui import open_message_draft
+            body.addWidget(action('문자 초안 · 복사',lambda checked=False,r=dict(record):open_message_draft(r,self)))
             cards.addWidget(card)
         cards.addStretch();scroll.setWidget(container);layout.addWidget(scroll,1)
         note=QLabel('닫아도 일정은 첫화면 달력에 남습니다. 해마다 반복 일정은 다음 해에 다시 알려드립니다.');note.setWordWrap(True);layout.addWidget(note)

@@ -453,3 +453,11 @@ class FormDialog(QDialog):
 
     def error(self, exc):
         QMessageBox.warning(self, "입력 확인", str(exc))
+
+    def scroll_form(self):
+        """Keep long desktop editors usable on a 768px-high laptop display."""
+        from PySide6.QtWidgets import QScrollArea
+        self.body.removeItem(self.form);self.form.setParent(None)
+        container=QWidget();container.setLayout(self.form)
+        scroll=QScrollArea(self);scroll.setWidgetResizable(True);scroll.setWidget(container)
+        self.body.insertWidget(1,scroll,1);return scroll

@@ -140,6 +140,7 @@ class HomePage(Page):
         right.addWidget(self.event_detail)
         operations = QHBoxLayout()
         operations.addWidget(action("수정",self.edit_event)); operations.addWidget(action("완료·해제",self.toggle_done)); operations.addWidget(action("삭제",self.delete_event,danger=True))
+        operations.addWidget(action('문자 초안',self.message_draft))
         right.addLayout(operations)
         alert_note = QLabel("알림은 프로그램 실행 중에 표시됩니다.\n일정·장부는 인터넷이 끊겨도 계속 사용할 수 있습니다."); alert_note.setObjectName("muted"); alert_note.setWordWrap(True)
         right.addWidget(alert_note)
@@ -154,6 +155,13 @@ class HomePage(Page):
         self.clock_anchor=None
         self.last_online_fetch=None
         self.update_clock()
+
+    def message_draft(self):
+        record=self.events.selected()
+        if record:
+            from .personal_schedule_ui import open_message_draft
+            open_message_draft(record,self)
+        else:QMessageBox.information(self,'일정 선택','일정을 선택하면 문자 초안을 만들 수 있습니다.')
 
     def update_clock(self):
         current = QDateTime.currentDateTime()

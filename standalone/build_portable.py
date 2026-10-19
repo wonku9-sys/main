@@ -103,7 +103,7 @@ def build(output, native=False):
     subprocess.run([str(executable), "--smoke-test", "--screenshot", str(screenshot)], cwd=bundle, env=environment, check=True, timeout=180)
     if not screenshot.is_file() or screenshot.stat().st_size < 1000:
         raise RuntimeError("The real frozen executable did not produce its desktop screenshot.")
-    for suffix in ("-home", "-purchase", "-return", "-product-search", "-categories", "-backup", "-payments", "-login", "-permissions","-suppliers","-supplier-groups","-product-units","-reports","-quotation","-diary","-household","-health","-schedule","-alerts","-mail-settings"):
+    for suffix in ("-home", "-purchase", "-return", "-product-search", "-categories", "-backup", "-payments", "-login", "-permissions","-suppliers","-supplier-groups","-product-units","-reports","-quotation","-diary","-household","-health","-schedule","-alerts","-mail-settings","-accounts","-fixed-costs","-vehicles","-attachments","-personal-schedule","-inspiration","-pc-connection","-health-report","-vehicle-report","-vehicle-payments","-classification"):
         capture = screenshot.with_name(screenshot.stem + suffix + screenshot.suffix)
         if not capture.is_file() or capture.stat().st_size < 1000:
             raise RuntimeError(f"The frozen executable did not validate its new workflow screen: {suffix}")
@@ -126,6 +126,11 @@ def build(output, native=False):
         "새 장부의 초기 아이디 admin / 초기 비밀번호 1234 (로그인 창 하단에도 표시).\n"
         "공개된 초기 비밀번호입니다. 최초 로그인 시 8~128자의 새 로그인 암호를 반드시 설정해야 합니다.\n"
         "자료는 실행 파일 옆 data-v2 폴더의 seoyoung-standalone-v2.db에 보존됩니다.\n"
+        "단독 사용이 기본입니다. PC 연결 설정에서 기준 PC를 선택하면 같은 내부망의 연결 PC와 업무 장부만 공유합니다. 기준 PC가 켜져 있어야 합니다.\n"
+        "연결 PC 개인 자료는 data-v2/personal 아래에 별도로 저장됩니다. 일기장·가계부·건강·첨부파일은 다른 PC에 보내지 않습니다.\n"
+        "가계부의 통장 잔액은 직접 기록한 자료이며 은행과 자동 연동하지 않습니다. 고정비는 잠금 해제 후 미반영분을 기록할 뿐 실제 송금하지 않습니다.\n"
+        "차량 유지비는 가계부 지출 1건으로 연결됩니다. 첨부한 사진·문서도 장부 백업에 포함됩니다.\n"
+        "기념일 문자는 복사 가능한 초안만 제공하며 실제 SMS 발송·요금은 발생하지 않습니다.\n"
         "프로그램 폴더를 옮길 때 data-v2 폴더를 함께 옮기고, 정기적으로 설정의 백업을 이용하세요.\n"
         "설정에서 백업 목록을 선택해 복원할 수 있습니다. 적용하면 현재 자료가 교체되고 프로그램이 종료됩니다.\n"
         "백업 폴더는 자동 생성합니다. 7일마다 오래된 관리 백업을 삭제하되 최신 15개를 남기고 알립니다.\n"

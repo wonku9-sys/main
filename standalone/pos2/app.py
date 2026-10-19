@@ -107,7 +107,7 @@ SECTIONS = [
 
 
 class LoginDialog(FormDialog):
-    def __init__(self, store, parent=None):
+    def __init__(self, store, parent=None,network_path=None):
         self.store, self.initial = store, store.users_count() == 0
         if self.initial:
             store.bootstrap_default_admin()
@@ -138,6 +138,9 @@ class LoginDialog(FormDialog):
         save.setDefault(False)
         self.password.returnPressed.connect(self.submit)
         self.body.addWidget(action("로그인 암호 찾기 · 이메일 인증",self.reset_by_email))
+        if network_path:
+            from .shared_ui import NetworkSettingsDialog
+            self.body.addWidget(action('PC 연결 설정',lambda:NetworkSettingsDialog(network_path,store,self).exec()))
         from .personal_icons import personal_icon
         self.login_choices={}
         contents=QVBoxLayout()
@@ -283,14 +286,15 @@ class LabelsPage(Page):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, store, demo=False):
+    def __init__(self, store, demo=False,network_path=None):
         super().__init__()
         self.store, self.demo = store, demo
+        self.network_path=network_path;self.shared_service=None;self.shared_refresh=None
         self.pages, self.items, self.nav_actions, self.scrollers = {}, {}, {}, {}
         self.purchase_navigation_item = None
         self.current_page, self.current_key = None, None
         self._backup_runtime_enabled, self._exit_backup_done = False, False
-        self.setWindowTitle(f"서영 POS 독립판 {__version__} · 서버 없는 매장 관리" + (" [체험]" if demo else ""))
+        self.setWindowTitle(f"서영 POS 독립판 {__version__} · 단독 사용 / 선택형 PC 공유" + (" [체험]" if demo else ""))
         self.resize(1500, 930)
         self.setMinimumSize(1060, 680)
         central = QWidget()
@@ -341,6 +345,8 @@ class MainWindow(QMainWindow):
             top.addWidget(self.admin_mode_button)
         top.addWidget(action("비밀번호 변경", self.password))
         top.addWidget(action("복구 이메일",self.recovery_email))
+        top.addWidget(action('오늘의 글귀',self.show_inspiration))
+        if self.network_path:top.addWidget(action('PC 연결 · 공유',self.configure_network))
         top.addWidget(action("로그아웃", self.logout))
         right.addWidget(header)
         if demo:
@@ -351,6 +357,7 @@ class MainWindow(QMainWindow):
             banner = QLabel("초기 비밀번호를 사용 중입니다. 상단 ‘비밀번호 변경’에서 새 비밀번호로 변경해 주세요.")
             banner.setObjectName("notice")
             right.addWidget(banner)
+        self.shared_notice=QLabel();self.shared_notice.setObjectName('notice');self.shared_notice.setWordWrap(True);self.shared_notice.hide();right.addWidget(self.shared_notice)
         self.stack = QStackedWidget()
         right.addWidget(self.stack, 1)
         layout.addLayout(right, 1)
@@ -439,6 +446,12 @@ class MainWindow(QMainWindow):
                 if self.current_key=="home": self.current_page.refresh_events()
         except (ValueError,PermissionError) as exc:self.notify(f"일정 알림 확인 실패: {exc}")
 
+    def show_inspiration(self,new=False):
+        from .inspiration import InspirationDialog
+        try:
+            dialog=InspirationDialog(self.store,new,self);dialog.exec();dialog.deleteLater()
+        except (ValueError,PermissionError,OSError) as exc:self.notify(str(exc))
+
     def scheduled_backup(self):
         if not self._backup_runtime_enabled or not self.isVisible() or QApplication.activeModalWidget() is not None:
             return
@@ -454,6 +467,7 @@ class MainWindow(QMainWindow):
     def prepare_exit(self):
         if not self.navigation.allow_leave(self.current_page):
             return False
+        if self.shared_service:self.shared_service.begin_close()
         if self._backup_runtime_enabled and not self._exit_backup_done and self.store.actor:
             try:
                 self.store.backup_on_exit()
@@ -461,6 +475,7 @@ class MainWindow(QMainWindow):
             except (ValueError, PermissionError, OSError) as exc:
                 answer = QMessageBox.question(self, "종료 백업 실패", f"종료 백업을 저장하지 못했습니다.\n{exc}\n\n백업 없이 종료할까요?", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
                 if answer != QMessageBox.StandardButton.Yes:
+                    if self.shared_service:self.shared_service.cancel_close()
                     return False
                 self._exit_backup_done = True
         return True
@@ -488,6 +503,8 @@ class MainWindow(QMainWindow):
         self.backup_timer.stop()
         self.alert_timer.stop()
         self.navigation.disable()
+        if self.shared_refresh:self.shared_refresh.stop()
+        if self.shared_service:self.shared_service.stop()
         super().closeEvent(event)
 
     def go_home(self):
@@ -496,6 +513,13 @@ class MainWindow(QMainWindow):
     def recovery_email(self):
         from .email_ui import RecoveryEmailDialog
         RecoveryEmailDialog(self.store,self).exec()
+
+    def configure_network(self):
+        from .shared_ui import NetworkSettingsDialog
+        dialog=NetworkSettingsDialog(self.network_path,self.store,self)
+        try:dialog.exec()
+        finally:
+            dialog.code.clear();self.navigation.snapshots.pop(dialog,None);dialog.deleteLater()
 
     def reset_navigation(self):
         self.tree.collapseAll()
@@ -692,15 +716,34 @@ def main(argv=None):
     scratch = tempfile.TemporaryDirectory(prefix="seoyoung-v2-") if args.smoke_test else None
     directory = Path(scratch.name) if scratch else args.data_dir or data_directory()
     is_demo = args.demo or args.smoke_test
+    connection_path=directory/'pc-connection.json';network_config={'mode':'standalone'}
     path = directory / ("seoyoung-standalone-demo.db" if is_demo else "seoyoung-standalone-v2.db")
     store, backdrop, window, process_lock = None, None, None, None
     try:
         directory.mkdir(parents=True, exist_ok=True)
+        if not is_demo:
+            from .shared_config import load_config
+            try:network_config=load_config(connection_path)
+            except ValueError as exc:
+                QMessageBox.warning(None,'PC 연결 설정',str(exc))
+                from .shared_ui import NetworkSettingsDialog
+                NetworkSettingsDialog(connection_path).exec();return 0
+            if network_config['mode']=='client':
+                from hashlib import sha256
+                path=directory/'personal'/sha256(network_config['certificate'].encode()).hexdigest()[:24]/'personal.db'
+                path.parent.mkdir(parents=True,exist_ok=True)
         process_lock = QLockFile(str(path) + ".lock")
         process_lock.setStaleLockTime(0)
         if not process_lock.tryLock(0):
             raise ValueError("이 장부를 사용하는 프로그램이 이미 실행 중입니다. 기존 창을 종료한 뒤 다시 실행하세요.")
-        store = Store(path)
+        if network_config['mode']=='client':
+            from .shared_client import ClientStore
+            try:store=ClientStore(network_config,path)
+            except (ValueError,OSError) as exc:
+                QMessageBox.warning(None,'기준 PC에 연결할 수 없습니다',str(exc))
+                from .shared_ui import NetworkSettingsDialog
+                NetworkSettingsDialog(connection_path).exec();return 0
+        else:store = Store(path)
         login_target='home'
         if is_demo:
             from .demo import seed
@@ -712,11 +755,21 @@ def main(argv=None):
             for section, _ in SECTIONS:
                 backdrop.menuBar().addMenu(section).setEnabled(False)
             backdrop.show()
-            login=LoginDialog(store,backdrop)
+            login=LoginDialog(store,backdrop,connection_path)
             if login.exec() != QDialog.DialogCode.Accepted:
                 return 0
             login_target=login.selected_target;login.password.clear()
-        window = MainWindow(store, is_demo)
+        window = MainWindow(store, is_demo,None if is_demo else connection_path)
+        if network_config['mode']=='host':
+            from .shared_server import SharedService
+            service=SharedService(path,network_config)
+            try:service.start();window.shared_service=service;store._shared_host_running=True
+            except (OSError,ValueError) as exc:
+                QMessageBox.warning(window,'장부 공유 시작 실패',f'{exc}\n\n이 PC 단독 업무는 계속 사용할 수 있습니다. PC 연결 설정과 주소·포트를 확인하세요.')
+        if network_config['mode'] in {'host','client'}:
+            from .shared_ui import SharedRefresh
+            window.shared_refresh=SharedRefresh(window)
+            window.setWindowTitle(window.windowTitle()+(' · 기준 PC' if network_config['mode']=='host' else f" · 연결 PC {network_config['address']}"))
         if not args.smoke_test:
             window.enable_runtime()
         if app.platformName() != "offscreen" and app.primaryScreen():
@@ -725,10 +778,12 @@ def main(argv=None):
         window.show()
         if login_target in {'household','diary'}:
             def open_personal():
+                if not args.smoke_test:window.show_inspiration(True)
                 if window.open_page(login_target):
                     page=window.current_page
                     (page.open_book if login_target=='household' else page.open_diary)()
             QTimer.singleShot(0,open_personal)
+        elif not args.smoke_test:QTimer.singleShot(0,lambda:window.show_inspiration(True))
         if backdrop:
             backdrop.close()
         if args.smoke_test or args.screenshot:
@@ -736,6 +791,9 @@ def main(argv=None):
                 try:
                     if args.smoke_test:
                         verify_glyphs()
+                        if sys.platform=='win32':
+                            from .shared_smoke import run as shared_smoke
+                            assert shared_smoke(directory/'isolated-network-proof')
                         assert len(store.products()) == 6
                         assert len(store.documents(status="posted")) >= 9
                         for key in window.items:
@@ -824,10 +882,37 @@ def main(argv=None):
                             store.save_household_entry(cash_key,{'date':today,'kind':'income','title':'생활비 예시','category':'생활','amount':'250000.00'})
                             store.save_household_entry(cash_key,{'date':today,'kind':'expense','title':'장보기 예시','category':'식비','amount':'25300.50','memo':'화면 검증용 가상 자료'})
                             store.save_household_memo(cash_key,today,'이번 달에는 작은 소비부터 차근차근 기록해 봐요.')
+                            account=store.save_household_account(cash_key,{'name':'생활비 통장 (예시)','bank':'가상 은행','opening_date':today,'opening_balance':'1000000.55'})
+                            car=store.save_household_vehicle(cash_key,{'name':'가족 자동차 (예시)','plate':'00가0000','model':'가상 차량','next_service_date':today,'next_service_km':'30000'})
+                            receipt=store.save_household_entry(cash_key,{'date':today,'kind':'expense','title':'주유 (예시)','category':'차량','amount':'65000.25','account_id':account,'vehicle_id':car,'vehicle_type':'fuel','liters':'35.5','odometer':'30000','vehicle_vendor':'가상 주유소','fuel_kind':'휘발유','full_tank':True})
+                            store.save_household_fixed_cost(cash_key,{'title':'통신비 (예시)','amount':'35000.55','monthly_day':str(date.today().day),'start_date':today,'account_id':account})
+                            store.save_household_budget(cash_key,today[:7],'300000.00')
+                            store.add_personal_attachment(cash_key,'household','entry',receipt,'화면검사.txt',b'Fictional receipt for screenshot validation only.')
                             cashbook=HouseholdDialog(store,cash_key,window);capture('-household',cashbook)
+                            for index,suffix in [(1,'-accounts'),(3,'-fixed-costs'),(4,'-vehicles')]:cashbook.finances.setCurrentIndex(index);capture(suffix,cashbook)
+                            from .attachment_ui import AttachmentDialog
+                            attachment=AttachmentDialog(store,cash_key,'household','entry',receipt,cashbook);capture('-attachments',attachment);attachment.reject()
+                            from .personal_schedule_ui import PersonalScheduleDialog
+                            personal_schedule=PersonalScheduleDialog(store,cashbook);capture('-personal-schedule',personal_schedule);personal_schedule.reject()
+                            from .inspiration import InspirationDialog
+                            inspiration=InspirationDialog(store,True,window);capture('-inspiration',inspiration);inspiration.accept()
+                            from .shared_ui import NetworkSettingsDialog
+                            connection=NetworkSettingsDialog(directory/'smoke-connection.json',store,window);capture('-pc-connection',connection);connection.close()
                             store.save_health_entry('household',cash_key,{'category':'growth','date':today,'title':'성장 기록 예시','subject':'아이 (예시)','height':'96.7','weight':'14.23','birth_date':f'{date.today().year-3}-01-01','notes':'실제 개인 정보가 아닌 화면 검증용 가상 자료'})
+                            store.save_health_entry('household',cash_key,{'category':'weight','date':today,'title':'체중 예시','subject':'나 (예시)','height':'170','weight':'68.25'})
+                            store.save_health_entry('household',cash_key,{'category':'goal','date':today,'title':'개인 목표 예시','subject':'나 (예시)','target_weight':'67','target_water_ml':'1800'})
+                            store.save_health_entry('household',cash_key,{'category':'meal','date':today,'title':'점심 예시','subject':'나 (예시)','meal_slot':'lunch','calories':'650.25','protein_g':'25.5','carbs_g':'70.2','fat_g':'20','food_items':'직접 입력한 예시 식단'})
+                            store.save_health_entry('household',cash_key,{'category':'water','date':today,'title':'물 한 잔 예시','subject':'나 (예시)','water_ml':'250'})
                             from .health_ui import HealthDialog
                             health=HealthDialog(store,'household',cash_key,cashbook);capture('-health',health);health.reject()
+                            from .health_report_ui import HealthReportDialog
+                            health_report=HealthReportDialog(store,'household',cash_key,cashbook);capture('-health-report',health_report);health_report.reject()
+                            from .vehicle_management_ui import VehicleReportDialog,VehicleObligationsDialog
+                            store.save_household_vehicle_obligation(cash_key,{'vehicle_id':car,'title':'보험 갱신 (예시)','obligation_kind':'insurance','due_date':today,'amount':'150000.55'})
+                            vehicle_report=VehicleReportDialog(store,cash_key,car,cashbook);capture('-vehicle-report',vehicle_report);vehicle_report.reject()
+                            obligations=VehicleObligationsDialog(store,cash_key,car,cashbook);capture('-vehicle-payments',obligations);obligations.reject()
+                            from .household_categories_ui import CategoryRulesDialog
+                            rules=CategoryRulesDialog(store,cash_key,cashbook);capture('-classification',rules);rules.reject()
                             from .home_ui import ScheduleDialog
                             schedule=ScheduleDialog(store,today,parent=window);schedule.title.setText('가족 생일 (예시)');schedule.kind.setCurrentIndex(schedule.kind.findData('birthday'));schedule.repeat.setCurrentIndex(schedule.repeat.findData('yearly'));schedule.alarm.setChecked(True)
                             capture('-schedule',schedule);schedule.close()

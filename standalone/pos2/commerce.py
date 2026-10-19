@@ -171,6 +171,7 @@ class CommerceMixin:
             "SELECT p.*,u.name user_name FROM payments p JOIN users u ON u.id=p.user_id "
             "WHERE p.document_id=? ORDER BY p.date,p.id", (identifier,),
         )]
+        result['_edit_token']=self._edit_snapshot('documents',identifier)
         return result
 
     def _prepare_trade(self, data, posting=False):
@@ -343,6 +344,7 @@ class CommerceMixin:
         with self._tx():
             self._require("trade")
             self._require_trade_write(data, id)
+            self._check_edit_snapshot('documents',id,data)
             prepared = self._prepare_trade(data)
             identifier = self._write_trade(prepared, "draft", id)
             self._audit("save_draft", "document", identifier, {"kind": prepared["kind"], "total": prepared["total"]})
@@ -376,6 +378,7 @@ class CommerceMixin:
         with self._tx():
             self._require("trade")
             self._require_trade_write(data, draft_id)
+            self._check_edit_snapshot('documents',draft_id,data)
             prepared = self._prepare_trade(data, posting=True)
             if prepared["date"] > calendar_date.today().isoformat():
                 raise ValueError("미래 거래는 확정할 수 없습니다. 예정 거래는 초안으로 보관하세요.")

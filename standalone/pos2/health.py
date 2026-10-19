@@ -5,8 +5,11 @@ from datetime import datetime
 from cryptography.exceptions import InvalidTag
 from .diary import _seal,_open
 from .common import day,text,money,now,decimal
+from .health_tracking import HealthTrackingMixin,tracking_data
 
 HEALTH_TYPES={'growth':'아이 성장 기록','weight':'체중·다이어트','meal':'식사 기록','exercise':'운동 기록','health':'건강 메모','treatment':'병원 진료·치료','appointment':'병원 예약','pharmacy':'약국 구매'}
+HEALTH_TYPES.update({'goal':'체중·수분·칼로리 목표','water':'수분 섭취','metric':'건강 지표','routine':'운동·요가 루틴','diet_plan':'식단 계획표'})
+HEALTH_TYPES.update({'sleep':'수면 패턴','meditation':'스트레스·명상','supplement':'영양제 복용 알림 설정','supplement_taken':'비타민·영양제 복용 기록','body':'바디 체크 · 사진·치수'})
 
 HEALTH_SCHEMA="""
 CREATE TABLE IF NOT EXISTS personal_health_entries (
@@ -15,10 +18,14 @@ CREATE TABLE IF NOT EXISTS personal_health_entries (
  alarm_event_id INTEGER REFERENCES desk_events(id) ON DELETE SET NULL,
  created_at TEXT NOT NULL,updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS personal_health_receipts (
+ id TEXT PRIMARY KEY,user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+ entry_id TEXT NOT NULL REFERENCES personal_health_entries(id) ON DELETE CASCADE,kind TEXT NOT NULL,notified_at TEXT NOT NULL
+);
 """
 
 
-class HealthMixin:
+class HealthMixin(HealthTrackingMixin):
     def _health_key(self,kind,key):
         if kind=='diary':self._diary_require_key(key)
         elif kind=='household':self._require_household_key(key)
@@ -33,9 +40,9 @@ class HealthMixin:
         try:
             for row in self.db.execute('SELECT * FROM personal_health_entries WHERE user_id=? AND kind=?',(self.actor['id'],kind)):
                 item=json.loads(_open(key,row['ciphertext'],self._health_aad(kind,row['id'])))
-                if start<=item['date']<=end and (not category or item['category']==category):records.append(dict(item,id=row['id'],alarm=bool(row['alarm_event_id'])))
+                if start<=item['date']<=end and (not category or item['category']==category):records.append(dict(item,id=row['id'],created_at=row['created_at'],updated_at=row['updated_at'],alarm=bool(row['alarm_event_id']) or item.get('reminder_enabled',False)))
         except (InvalidTag,ValueError,TypeError,KeyError):raise ValueError('건강 기록을 열 수 없습니다. 암호나 파일 손상 여부를 확인하세요.') from None
-        return sorted(records,key=lambda r:(r['date'],r['time'],r['id']))
+        return sorted(records,key=lambda r:(r['date'],r['time'],r['updated_at'],r['id']))
 
     def save_health_entry(self,kind,key,data,identifier=None):
         with self._tx():
@@ -59,12 +66,14 @@ class HealthMixin:
                 'place':text(data.get('place',''),'병원·약국',maximum=200),'weight':weight,'height':height,
                 'subject':text(data.get('subject','나'),'기록 대상',True,100),'birth_date':born,
                 'amount':money(data.get('amount',0)),'notes':text(data.get('notes',''),'설명',maximum=20000)}
+            content.update(tracking_data(data,category))
             alarm=bool(data.get('alarm',False))
-            if alarm and category!='appointment':raise ValueError('알림은 병원 예약에서 설정하세요.')
+            if alarm and category not in {'appointment','supplement'}:raise ValueError('알림은 병원 예약·영양제 알림 설정에서 사용하세요.')
+            content['reminder_enabled']=alarm and category=='supplement'
             previous=old['alarm_event_id'] if old else None
             if previous:self.db.execute('DELETE FROM desk_events WHERE id=? AND user_id=?',(previous,self.actor['id']))
-            stamp=now();event_id=None
-            if alarm:
+            stamp=datetime.now().isoformat(timespec='microseconds');event_id=None
+            if alarm and category=='appointment':
                 self.require_menu('home')
                 event_id=self.db.execute("INSERT INTO desk_events(user_id,date,time,title,notes,alarm,created_at,updated_at) VALUES(?,?,?,'개인 일정 알림','개인 창의 건강·병원 기록에서 예약 내용을 확인하세요.',1,?,?)",(self.actor['id'],when,clock,stamp,stamp)).lastrowid
             identifier=identifier or uuid4().hex
@@ -81,5 +90,22 @@ class HealthMixin:
             row=self.db.execute('SELECT alarm_event_id FROM personal_health_entries WHERE id=? AND user_id=? AND kind=?',(identifier,self.actor['id'],kind)).fetchone()
             if not row:raise ValueError('건강 기록을 찾을 수 없습니다.')
             self.db.execute('DELETE FROM personal_health_entries WHERE id=?',(identifier,))
+            self.db.execute("DELETE FROM personal_attachments WHERE user_id=? AND kind=? AND record_type='health' AND record_id=?",(self.actor['id'],kind,identifier))
             if row[0]:self.db.execute('DELETE FROM desk_events WHERE id=? AND user_id=?',(row[0],self.actor['id']))
             self._audit('delete','personal_health',None,{})
+
+    def due_health_alerts(self,kind,key,at=None):
+        import hmac
+        current=datetime.fromisoformat(at) if at else datetime.now();today=current.date().isoformat();clock=current.strftime('%H:%M')
+        with self._tx():
+            self._health_key(kind,key);rows=[]
+            for record in self.health_entries(kind,key,'1900-01-01',today,'supplement'):
+                if not record.get('reminder_enabled') or record.get('supplement_end') and today>record['supplement_end'] or current.isoweekday() not in record.get('supplement_days',[]):continue
+                for value in record.get('supplement_times',[]):
+                    if value>clock:continue
+                    receipt=hmac.digest(bytes(key),f'health/{kind}/{self.actor["id"]}/{record["id"]}/{today}/{value}'.encode(),'sha256').hex()
+                    if self.db.execute('SELECT 1 FROM personal_health_receipts WHERE id=?',(receipt,)).fetchone():continue
+                    rows.append(dict(title=record['title'],time=value,dose=record.get('supplement_dose',''),date=today))
+                    self.db.execute('INSERT INTO personal_health_receipts VALUES(?,?,?,?,?)',(receipt,self.actor['id'],record['id'],kind,now()))
+                    if len(rows)>=10:return rows
+            return rows

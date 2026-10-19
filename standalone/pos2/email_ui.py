@@ -77,6 +77,12 @@ class EmailCodeDialog(FormDialog):
         info=QLabel(information);info.setWordWrap(True);self.body.addWidget(info)
         self.finish(self.verify)
         self.buttons.button(QDialogButtonBox.StandardButton.Save).setText("인증 후 적용")
+        if getattr(store,'is_shared_client',False) and (store.actor or {}).get('host_admin'):
+            self.body.addWidget(action('이 PC 개인 자료용 메일 발송 설정',self.local_mail_settings))
+    def local_mail_settings(self):
+        dialog=MailSettingsDialog(self.store.private,self)
+        try:dialog.exec()
+        finally:dialog.password.clear();dialog.deleteLater()
     def send(self):
         if self.sending:return
         try:

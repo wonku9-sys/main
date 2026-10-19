@@ -881,6 +881,7 @@ class TradeDialog(QDialog):
             return
         try:
             data = self.payload()
+            data['_expected_token']=(self.record or {}).get('_edit_token')
             data["rounding_mode"] = self.rounding_mode
             if not data["partner_id"]:
                 raise ValueError("거래처를 선택하세요.")

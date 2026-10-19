@@ -686,7 +686,8 @@ class ProductDialog(QDialog):
 
     def save(self, close=True):
         try:
-            self.saved_id = self.store.save_product(self.values(), self.record.get("id"))
+            data=self.values();data['_expected_token']=self.record.get('_edit_token')
+            self.saved_id = self.store.save_product(data, self.record.get("id"))
             self.record = next(r for r in self.store.products() if r["id"] == self.saved_id)
             self.fields["code"].setText(self.record["code"])
             self.reload_categories()

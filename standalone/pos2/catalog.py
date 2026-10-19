@@ -204,6 +204,7 @@ class CatalogMixin:
 
     def _public_product(self, row):
         result = dict(row)
+        result['_edit_token']=self._edit_snapshot('products',row['id'])
         result["stock_qty"], result["min_qty"] = qtext(row["stock_qty"]), qtext(row["min_qty"])
         return result
 
@@ -236,6 +237,7 @@ class CatalogMixin:
             old = self.db.execute("SELECT * FROM products WHERE id=?", (id,)).fetchone() if id else None
             if id and not old:
                 raise ValueError("상품을 찾을 수 없습니다.")
+            self._check_edit_snapshot('products',id,data)
             values = dict(old) if old else {key: "" for key in PRODUCT_TEXT}
             values.update({key: text(data.get(key, values[key]), key, key == "name", 4000 if key == "memo" else 300) for key in PRODUCT_TEXT})
             values["code"] = values["code"] or (old["code"] if old else self._next_product_code())

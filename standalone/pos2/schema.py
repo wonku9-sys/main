@@ -3,7 +3,11 @@ from .suppliers import SUPPLIER_SCHEMA
 from .offline_features import OFFLINE_SCHEMA
 from .diary import DIARY_SCHEMA
 from .household import HOUSEHOLD_SCHEMA
+from .household_finance import FINANCE_SCHEMA
+from .personal_attachments import ATTACHMENT_SCHEMA
+from .inspiration import INSPIRATION_SCHEMA
 from .health import HEALTH_SCHEMA
+from .shared_protocol import SHARED_SCHEMA
 from .email_recovery import EMAIL_SCHEMA
 
 SCHEMA = """
@@ -143,7 +147,7 @@ CREATE INDEX IF NOT EXISTS audit_entity ON audit(entity,entity_id,id);
 
 
 def initialize(db):
-    db.executescript(SCHEMA + SUPPLIER_SCHEMA + OFFLINE_SCHEMA + DIARY_SCHEMA + HOUSEHOLD_SCHEMA + EMAIL_SCHEMA+HEALTH_SCHEMA)
+    db.executescript(SCHEMA + SUPPLIER_SCHEMA + OFFLINE_SCHEMA + DIARY_SCHEMA + HOUSEHOLD_SCHEMA + EMAIL_SCHEMA+HEALTH_SCHEMA+SHARED_SCHEMA+FINANCE_SCHEMA+ATTACHMENT_SCHEMA+INSPIRATION_SCHEMA)
     columns = {row[1] for row in db.execute("PRAGMA table_info(products)")}
     if "retirement_target" not in columns:
         db.execute("ALTER TABLE products ADD COLUMN retirement_target INTEGER NOT NULL DEFAULT 0 CHECK(retirement_target IN (0,1))")

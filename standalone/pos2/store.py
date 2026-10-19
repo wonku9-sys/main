@@ -29,6 +29,8 @@ from .diary import DiaryMixin
 from .household import HouseholdMixin
 from .email_recovery import EmailRecoveryMixin
 from .health import HealthMixin
+from .personal_attachments import AttachmentMixin
+from .inspiration import InspirationMixin
 
 APPLICATION_ID = 1398362162
 DEFAULT_SETTINGS = {
@@ -67,7 +69,7 @@ def password_matches(password, encoded):
 
 
 @currency_boundary
-class Store(CatalogMixin, CommerceMixin, OperationsMixin, LoyaltyMixin, RecoveryMixin, BackupPolicyMixin, SettlementMixin, BackupScheduleMixin, SupplierMixin, PurchaseReportingMixin, OfflineFeaturesMixin, DiaryMixin,HouseholdMixin,EmailRecoveryMixin,HealthMixin):
+class Store(CatalogMixin, CommerceMixin, OperationsMixin, LoyaltyMixin, RecoveryMixin, BackupPolicyMixin, SettlementMixin, BackupScheduleMixin, SupplierMixin, PurchaseReportingMixin, OfflineFeaturesMixin, DiaryMixin,HouseholdMixin,EmailRecoveryMixin,HealthMixin,AttachmentMixin,InspirationMixin):
     def __init__(self, path):
         self.path = Path(path).expanduser().resolve() if str(path) != ":memory:" else None
         if self.path:
@@ -109,6 +111,9 @@ class Store(CatalogMixin, CommerceMixin, OperationsMixin, LoyaltyMixin, Recovery
     @contextmanager
     def _tx(self):
         if self.db.in_transaction:
+            if getattr(self,'_shared_outer_transaction',False):
+                yield self.db
+                return
             raise RuntimeError("중첩 업무 트랜잭션은 허용되지 않습니다.")
         try:
             self.db.execute("BEGIN IMMEDIATE")
@@ -129,6 +134,24 @@ class Store(CatalogMixin, CommerceMixin, OperationsMixin, LoyaltyMixin, Recovery
         result["active"] = bool(result["active"])
         result["permissions"] = sorted(PERMISSIONS) if row["role"] == "admin" else json.loads(row["permissions"])
         return result
+
+    def audit_revision(self):
+        self._require()
+        return self._current_restore_token(),self.db.execute('SELECT COALESCE(MAX(id),0) FROM audit').fetchone()[0]
+
+    def _edit_snapshot(self,table,identifier):
+        if table not in {'products','documents'}:raise ValueError('편집 대상이 잘못되었습니다.')
+        from .shared_protocol import fingerprint
+        row=self.db.execute(f'SELECT * FROM {table} WHERE id=?',(identifier,)).fetchone()
+        value={'record':dict(row) if row else None}
+        if table=='documents':value['lines']=[dict(r) for r in self.db.execute('SELECT * FROM document_lines WHERE document_id=? ORDER BY id',(identifier,))]
+        return fingerprint(value)
+
+    def _check_edit_snapshot(self,table,identifier,data):
+        token=data.get('_expected_token')
+        if identifier and (token or getattr(self,'_shared_enforce_snapshots',False)):
+            if not token or not hmac.compare_digest(str(token),self._edit_snapshot(table,identifier)):
+                raise ValueError('다른 PC에서 이 자료가 변경되었습니다. 입력 내용을 따로 메모하고 최신 자료를 다시 열어 수정하세요.')
 
     def _require(self, *permissions):
         if set(permissions) - PERMISSIONS:
@@ -263,10 +286,21 @@ class Store(CatalogMixin, CommerceMixin, OperationsMixin, LoyaltyMixin, Recovery
             if existing:
                 self.db.execute("UPDATE users SET code=?,name=?,password_hash=?,role=?,permissions=?,active=? WHERE id=?", values + (id,))
             else:
-                id = self.db.execute("INSERT INTO users(code,name,password_hash,role,permissions,active) VALUES(?,?,?,?,?,?)", values).lastrowid
+                # Client-only personal vaults may outlive a host-side staff
+                # account. Never assign a former numeric owner ID to a new
+                # person, including after an older backup is restored.
+                id=self._user_high_water()+1
+                self.db.execute("INSERT INTO code_sequences VALUES('user',?) ON CONFLICT(name) DO UPDATE SET last_value=excluded.last_value",(id,))
+                self.db.execute("INSERT INTO users(id,code,name,password_hash,role,permissions,active) VALUES(?,?,?,?,?,?,?)",(id,)+values)
             self._audit("update" if existing else "create", "user", id, {"code": code, "name": name, "role": role, "permissions": json.loads(values[4]), "active": bool(active)})
             if self.actor and id==self.actor["id"]:self._session_password_hash=encoded
         return id
+
+    def _user_high_water(self):
+        current=self.db.execute('SELECT COALESCE(MAX(id),0) FROM users').fetchone()[0]
+        historical=self.db.execute("SELECT COALESCE(MAX(entity_id),0) FROM audit WHERE entity='user'").fetchone()[0]
+        sequence=self.db.execute("SELECT last_value FROM code_sequences WHERE name='user'").fetchone()
+        return max(0,current,historical,sequence[0] if sequence else 0)
 
     def delete_user(self, id):
         with self._tx():

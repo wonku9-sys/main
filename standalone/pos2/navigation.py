@@ -121,7 +121,7 @@ class NavigationGuard(QObject):
         if choice == QMessageBox.StandardButton.Save:
             self.saving = True
             try:
-                before = self.window.store.db.execute("SELECT COALESCE(MAX(id),0) FROM audit").fetchone()[0]
+                before = self.window.store.audit_revision()
                 name = type(owner).__name__
                 if name in {"ProductDialog", "TradeDialog"}:
                     result = owner.save(False)
@@ -133,7 +133,7 @@ class NavigationGuard(QObject):
                     save = next((box.button(QDialogButtonBox.StandardButton.Save) for box in buttons if box.button(QDialogButtonBox.StandardButton.Save)), None)
                     if save:
                         save.click()
-                after = self.window.store.db.execute("SELECT COALESCE(MAX(id),0) FROM audit").fetchone()[0]
+                after = self.window.store.audit_revision()
                 if after == before and result is not True:
                     return False
             except (ValueError, PermissionError, OSError) as exc:

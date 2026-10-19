@@ -25,10 +25,10 @@ CREATE TABLE IF NOT EXISTS restore_state (
  id INTEGER PRIMARY KEY CHECK(id=1), token TEXT NOT NULL
 );
 INSERT OR IGNORE INTO restore_state(id,token) VALUES(1,'');
-PRAGMA user_version=208;
+PRAGMA user_version=209;
 """
-SUPPORTED_VERSIONS = {200, 201, 202, 203, 204, 205, 206, 207, 208}
-SCHEMA_VERSION = 208
+SUPPORTED_VERSIONS = {200, 201, 202, 203, 204, 205, 206, 207, 208,209}
+SCHEMA_VERSION = 209
 APPLICATION_ID = 1398362162
 
 
@@ -57,6 +57,11 @@ def _validate_database(db):
         raise ValueError("지원하지 않는 백업 버전입니다. 같은 독립판 버전의 백업을 선택하세요.")
     expected = dict(_expected_objects())
     actual = _objects(db)
+    if version<209 and ('table','shared_requests') not in actual:expected.pop(('table','shared_requests'),None)
+    if version<209 and ('table','personal_health_receipts') not in actual:expected.pop(('table','personal_health_receipts'),None)
+    finance_objects={('table','household_'+name) for name in ('accounts','transfers','fixed_costs','fixed_runs','fixed_alerts','vehicles','vehicle_logs','vehicle_obligations','vehicle_alerts','budgets','category_rules')}|{('table','personal_attachments'),('table','inspiration_history')}
+    if version<209 and not finance_objects & actual.keys():
+        expected={key:value for key,value in expected.items() if key not in finance_objects}
     email_objects={("table",name) for name in ("email_smtp","recovery_emails","email_challenges","email_private_recovery","household_vaults","household_entries","household_memos","personal_preferences","personal_themes","personal_popup_preferences","desk_event_rules","desk_event_receipts","personal_health_entries")}
     if version<208 and not email_objects & actual.keys():
         expected={key:value for key,value in expected.items() if key not in email_objects}
@@ -216,6 +221,8 @@ class RecoveryMixin:
     def restore_backup(self, filename, password, expected_digest=None):
         from .store import password_matches
         self._require("admin")
+        if getattr(self,'_shared_host_running',False):
+            raise ValueError('기준 PC가 공유 중입니다. PC 연결 설정을 단독 사용으로 바꾸고 종료·재실행한 뒤 복원하세요. 다른 PC도 장부 작업을 멈춰야 합니다.')
         if not self.path:
             raise ValueError("파일로 저장되는 장부에서만 복원할 수 있습니다.")
         if self.db.in_transaction:
@@ -243,6 +250,7 @@ class RecoveryMixin:
             live_sequence = self.db.execute("SELECT last_value FROM code_sequences WHERE name='product'").fetchone()
             if live_sequence:
                 staged.execute("INSERT INTO code_sequences(name,last_value) VALUES('product',?) ON CONFLICT(name) DO UPDATE SET last_value=MAX(last_value,excluded.last_value)", (live_sequence[0],))
+            staged.execute("INSERT INTO code_sequences(name,last_value) VALUES('user',?) ON CONFLICT(name) DO UPDATE SET last_value=MAX(last_value,excluded.last_value)",(self._user_high_water(),))
             token = secrets.token_hex(32)
             staged.execute("UPDATE restore_state SET token=? WHERE id=1", (token,))
             staged.execute("INSERT INTO audit(at,user_id,action,entity,entity_id,detail) VALUES(?,NULL,'restore','settings',NULL,?)", (

@@ -72,6 +72,7 @@ class DiaryPage(Page):
 
 class DiaryDialog(FormDialog):
     def __init__(self,store,key,parent=None):
+        if getattr(store,'is_shared_client',False):store=store.private
         super().__init__("나의 하루 · 보안 일기장",parent)
         self.store,self.key=store,key
         self.resize(1080,820);self.setMinimumSize(800,600)
@@ -97,6 +98,7 @@ class DiaryDialog(FormDialog):
         row.addWidget(self.editor,2);self.body.addLayout(row,1)
         tools=QHBoxLayout();tools.addWidget(action("새 일기",self.new_entry));tools.addWidget(action("일기 삭제",self.delete_entry,danger=True))
         tools.addWidget(action('건강·병원 기록',self.health));tools.addStretch();tools.addWidget(QLabel("5분 미사용 시 암호화 저장 후 잠금 · 인쇄·엑셀 내보내기 없음"));self.body.addLayout(tools)
+        tools.insertWidget(2,action('사진·문서 첨부',self.attach))
         self.finish(self.save)
         from .personal_themes import theme_picker
         self.theme=theme_picker(store,'diary',self);self.form.addRow('화면 분위기',self.theme)
@@ -109,6 +111,13 @@ class DiaryDialog(FormDialog):
         self.refresh_entries();self.saved_snapshot=self.snapshot()
 
     def snapshot(self):return self.identifier,self.title.text(),self.date.date().toString("yyyy-MM-dd"),self.mood.currentText(),self.editor.toPlainText()
+
+    def attach(self):
+        if self.changed() or not self.identifier:
+            if QMessageBox.question(self,'일기 저장','일기를 저장한 뒤 파일을 첨부할까요?',QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No,QMessageBox.StandardButton.No)!=QMessageBox.StandardButton.Yes:return
+            if not self.save():return
+        from .attachment_ui import attachments
+        attachments(self.store,self.key,'diary','entry',self.identifier,self)
 
     def health(self):
         from .health_ui import HealthDialog
@@ -173,6 +182,9 @@ class DiaryDialog(FormDialog):
         return False
 
     def check_idle(self):
+        if not self.closed_securely:
+            from .health_report_ui import show_health_alerts
+            show_health_alerts(self.store,'diary',self.key,self)
         if time.monotonic()-self.last_activity>=300:
             self.hide()
             if self.changed() and not self.save():QMessageBox.warning(self,"일기 자동 잠금","일기를 저장하지 못했습니다. 저장장치 상태를 확인하세요. 개인 정보 보호를 위해 창을 잠급니다.")
@@ -185,6 +197,8 @@ class DiaryDialog(FormDialog):
         self.closed_securely=True;self.lock_timer.stop();self.music.stop();QApplication.instance().removeEventFilter(self)
         from .health_ui import scrub_health
         scrub_health(self)
+        from .attachment_ui import scrub_attachments
+        scrub_attachments(self)
         self.key[:]=bytes(len(self.key));self.store.lock_diary()
         self.selecting=True;self.entries.fill([]);self.title.clear();self.editor.clear();self.saved_snapshot=None
         guard=getattr(self,"_navigation_guard",None)

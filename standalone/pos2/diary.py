@@ -144,6 +144,7 @@ class DiaryMixin:
             try:_open(key,row["ciphertext"],_aad(self.actor["id"],identifier))
             except (InvalidTag,ValueError,TypeError):raise ValueError("일기장 잠금을 다시 해제하세요.") from None
             self.db.execute("DELETE FROM diary_entries WHERE id=?",(identifier,))
+            self.db.execute("DELETE FROM personal_attachments WHERE user_id=? AND kind='diary' AND record_type='entry' AND record_id=?",(self.actor['id'],identifier))
 
     def change_diary_password(self,old_password,new_password,confirm):
         key = self.unlock_diary(old_password)

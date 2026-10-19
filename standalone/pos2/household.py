@@ -10,6 +10,7 @@ from cryptography.exceptions import InvalidTag
 
 from .common import day, money, now, text
 from .diary import _password_key, _seal, _open
+from .household_finance import HouseholdFinanceMixin
 
 HOUSEHOLD_SCHEMA = """
 CREATE TABLE IF NOT EXISTS personal_popup_preferences (
@@ -47,7 +48,7 @@ CREATE TABLE IF NOT EXISTS personal_preferences (
 """
 
 
-class HouseholdMixin:
+class HouseholdMixin(HouseholdFinanceMixin):
     def popup_sound_enabled(self):
         self._require()
         row=self.db.execute('SELECT sound_enabled FROM personal_popup_preferences WHERE user_id=?',(self.actor['id'],)).fetchone()
@@ -145,17 +146,18 @@ class HouseholdMixin:
         except (InvalidTag,ValueError,TypeError,KeyError):raise ValueError("가계부를 열 수 없습니다. 암호나 파일 손상 여부를 확인하세요.") from None
         return sorted(records,key=lambda r:(r["date"],r["created_at"],r["id"]))
 
-    def household_report(self,key,start,end,category="",search=""):
+    def household_report(self,key,start,end,category="",search="",account_id=None):
         self._require_household_key(key)
         start,end=day(start),day(end)
         if start>end:raise ValueError("조회 기간을 확인하세요.")
-        records=self._household_records(key)
-        selected=[r for r in records if (not category or r["category"]==category) and (not search or str(search).casefold() in (r["title"]+r["memo"]+r["category"]).casefold())]
-        opening=sum(r["amount"]*(1 if r["kind"]=="income" else -1) for r in selected if r["date"]<start)
+        records=self._household_ledger(key)
+        selected=[r for r in records if (account_id is None or r['account_id']==account_id) and (not category or r["category"]==category) and (not search or str(search).casefold() in (r["title"]+r["memo"]+r["category"]+' '.join(r.get('tags',[]))).casefold())]
+        delta=lambda r:r['amount']*(-1 if r['kind'] in {'expense','transfer_out'} else 1)
+        opening=sum(delta(r) for r in selected if r["date"]<start or r['kind']=='opening' and r['date']==start)
         balance=opening;income=expense=0;rows=[]
         for r in selected:
-            if not start<=r["date"]<=end:continue
-            balance+=r["amount"]*(1 if r["kind"]=="income" else -1)
+            if not start<=r["date"]<=end or r['kind']=='opening' and r['date']==start:continue
+            balance+=delta(r)
             income+=r["amount"] if r["kind"]=="income" else 0
             expense+=r["amount"] if r["kind"]=="expense" else 0
             rows.append(dict(r,balance=balance))
@@ -165,23 +167,27 @@ class HouseholdMixin:
         with self._tx():
             self._require_household_key(key)
             self._require_capability("household","edit" if identifier else "create")
-            old=self.db.execute("SELECT * FROM household_entries WHERE id=? AND user_id=?",(identifier,self.actor["id"])).fetchone() if identifier else None
+            old=next((r for r in self._household_records(key) if r['id']==identifier),None) if identifier else None
             if identifier and not old:raise ValueError("가계부 항목을 찾을 수 없습니다.")
+            if old and old.get('vehicle_obligation_id'):raise ValueError('차량 납부관리에서 납부를 취소한 뒤 다시 기록하세요.')
             kind=data.get("kind")
             if kind not in {"income","expense"}:raise ValueError("수입 또는 지출을 선택하세요.")
-            stamp=now()
-            content={"date":day(data.get("date")),"kind":kind,"title":text(data.get("title"),"내용",True,200),"category":text(data.get("category","기타"),"분류",True,100),"amount":money(data.get("amount"),positive=True),"memo":text(data.get("memo",""),"메모",maximum=10000),"created_at":old["created_at"] if old else stamp}
-            identifier=identifier or uuid4().hex
-            cipher=_seal(key,json.dumps(content,ensure_ascii=False).encode(),self._household_aad(self.actor["id"],identifier))
-            if old:self.db.execute("UPDATE household_entries SET ciphertext=?,updated_at=? WHERE id=?",(cipher,stamp,identifier))
-            else:self.db.execute("INSERT INTO household_entries(id,user_id,ciphertext,created_at,updated_at) VALUES(?,?,?,?,?)",(identifier,self.actor["id"],cipher,stamp,stamp))
-            self._audit("save","household_entry",None,{})
-            return identifier
+            from .household_parse import normalize_tags
+            data=dict(data)
+            if data.get('auto_category') and str(data.get('category','')).strip() in {'','기타'}:
+                suggestion=self.suggest_household_category(key,str(data.get('title',''))+' '+str(data.get('memo','')),kind)
+                if suggestion['category']:data['category']=suggestion['category']
+            content={"date":day(data.get("date")),"kind":kind,"title":text(data.get("title"),"내용",True,200),"category":text(data.get("category","기타"),"분류",True,100),"amount":money(data.get("amount"),positive=True),"memo":text(data.get("memo",""),"메모",maximum=10000),'tags':normalize_tags(data.get('tags',[]))}
+            content.update(self._finance_entry_metadata(key,data,old))
+            if old and old.get('fixed_rule_id'):content['fixed_rule_id']=old['fixed_rule_id']
+            return self._household_put_entry(key,content,identifier,old)
 
     def delete_household_entry(self,key,identifier):
         with self._tx():
             self._require_household_key(key);self._require_capability("household","delete")
+            if any(r['id']==identifier and r.get('vehicle_obligation_id') for r in self._household_records(key)):raise ValueError('차량 납부관리에서 납부를 취소하면 연결된 가계부 기록도 삭제됩니다.')
             if not self.db.execute("DELETE FROM household_entries WHERE id=? AND user_id=?",(identifier,self.actor["id"])).rowcount:raise ValueError("가계부 항목을 찾을 수 없습니다.")
+            self.db.execute("DELETE FROM personal_attachments WHERE user_id=? AND kind='household' AND record_type='entry' AND record_id=?",(self.actor['id'],identifier))
             self._audit("delete","household_entry",None,{})
 
     def household_memos(self,key,value=""):

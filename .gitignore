@@ -32,3 +32,6 @@ demo-data/
 *.sqlite3-journal
 *.xlsx
 *.bak
+*.pending
+*.poslan
+pc-connection.json
