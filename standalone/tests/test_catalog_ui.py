@@ -44,6 +44,8 @@ def get_product(store, identifier):
 
 def test_product_dialog_real_tabs_and_persistent_apply_does_not_duplicate(app, shop):
     store, _, supplier, _, _, _ = shop
+    root = store.save_category({"name": "한우"})
+    store.save_category({"name": "냉장육", "parent_id": root})
     dialog = ProductDialog(store)
     assert [dialog.tabs.tabText(i) for i in range(dialog.tabs.count())] == ["상품정보", "매입이력", "판매이력", "재고이력", "변경기록", "확장단위"]
     assert not any(button.isEnabled() for button in dialog.unit_buttons)
@@ -275,9 +277,8 @@ def test_settings_save_and_backup_use_supported_named_keys(app, shop, tmp_path, 
     assert store.settings()["store_name"] == "서영 축산"
     assert store.settings()["earn_bps"] == 250
     assert messages and "저장" in messages[-1]
-    target = tmp_path / "backup.db"
-    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *_a, **_k: (str(target), ""))
     page.backup()
+    target = store.backup_files()[0]["path"]
     other = Store(target)
     other.login("manager", "FreshAdmin2026!")
     assert other.settings()["store_name"] == "서영 축산"

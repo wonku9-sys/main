@@ -6,13 +6,17 @@ No network lookup or old application dependency is used by these screens.
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 import json
+from types import SimpleNamespace
 
 from PySide6.QtCore import QDate, Qt
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
+    QApplication,
     QAbstractItemView, QCheckBox, QComboBox, QDateEdit, QDialog,
     QDialogButtonBox, QFileDialog, QFormLayout, QFrame, QGridLayout,
     QGroupBox, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMessageBox,
     QPushButton, QScrollArea, QTabWidget, QTextEdit, QVBoxLayout, QWidget,
+    QMenu, QStyle, QTreeWidget, QTreeWidgetItem,
 )
 
 from .widgets import DataGrid, Page, ScanField
@@ -31,6 +35,23 @@ PRODUCT_LABELS = {
     "origin": "원산지", "warehouse": "창고", "shelf": "진열위치", "keywords": "검색어",
     "memo": "메모", "factor": "기본단위 환산수량",
 }
+
+
+def product_status(record):
+    return "무효" if not record.get("active", True) else "퇴출대상" if record.get("retirement_target") else "유효"
+
+
+class CategoryChoice(QComboBox):
+    """A master-data selector with text helpers used by the product form."""
+    def text(self):
+        return self.currentText() if self.currentData() != "" else ""
+
+    def setText(self, value):
+        index = self.findText(value) if value else 0
+        if index < 0:
+            self.addItem(value, value)
+            index = self.count() - 1
+        self.setCurrentIndex(index)
 
 
 def _won(value):
@@ -126,6 +147,180 @@ class EntryDialog(QDialog):
 
     def values(self):
         return {key: field.text().strip() for key, field in self.fields.items()}
+
+
+class CategoriesPage(Page):
+    def __init__(self, window):
+        super().__init__(window, "상품 분류체계 관리", "분류를 먼저 등록한 뒤 상품 등록창에서 선택하세요.")
+        self.read_permissions = ("catalog",)
+        for title, callback in (("대분류 추가", self.add_root), ("하위분류 추가", self.add_child), ("수정", self.edit), ("삭제", self.delete)):
+            _button(title, callback, self.actions)
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("분류명 검색 · 대분류 / 중분류 / 소분류")
+        self.search.textChanged.connect(self.filter_tree)
+        self.body.addWidget(self.search)
+        self.tree = QTreeWidget()
+        self.tree.setHeaderHidden(True)
+        self.tree.setIndentation(22)
+        self.tree.setMinimumHeight(350)
+        self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.tree.customContextMenuRequested.connect(self.context_menu)
+        self.body.addWidget(self.tree, 1)
+        note = QLabel("항목 선택 후 마우스 오른쪽 버튼: 추가·수정·삭제·유효/무효·하위분류 보기/감추기\n상품이 연결되었거나 하위 분류가 있는 항목은 삭제할 수 없습니다.")
+        note.setWordWrap(True)
+        self.body.addWidget(note)
+        self.refresh()
+
+    def selected(self):
+        item = self.tree.currentItem()
+        return item.data(0, Qt.ItemDataRole.UserRole) if item else None
+
+    def refresh(self):
+        previous = self.selected()
+        self.tree.clear()
+        self.root = QTreeWidgetItem(self.tree, ["전체분류"])
+        self.root.setIcon(0, self.style().standardIcon(QStyle.StandardPixmap.SP_ComputerIcon))
+        self.items = {}
+        for record in self.store.categories():
+            parent = self.items.get(record["parent_id"], self.root)
+            item = QTreeWidgetItem(parent, [record["name"] + (" (무효)" if not record["active"] else "")])
+            item.setIcon(0, self.style().standardIcon(QStyle.StandardPixmap.SP_DirIcon))
+            item.setData(0, Qt.ItemDataRole.UserRole, record)
+            item.setToolTip(0, f"{' / '.join(record['path'])} · 연결 상품 {record['product_count']:,}개")
+            if not record["active"]:
+                item.setForeground(0, QColor("#8A9298"))
+            self.items[record["id"]] = item
+        self.tree.expandAll()
+        self.tree.setCurrentItem(self.items.get(previous["id"], self.root) if previous else self.root)
+        self.filter_tree()
+
+    def filter_tree(self, *_):
+        if not hasattr(self, "items"):
+            return
+        term = self.search.text().strip().casefold()
+        for item in reversed(list(self.items.values())):
+            record = item.data(0, Qt.ItemDataRole.UserRole)
+            match = term in " / ".join(record["path"]).casefold()
+            visible = match or any(not item.child(index).isHidden() for index in range(item.childCount()))
+            item.setHidden(not visible)
+            if term and visible:
+                item.setExpanded(True)
+
+    def editor(self, record=None, parent_id=None):
+        dialog = EntryDialog("분류 수정" if record else "분류 추가", self)
+        dialog.field("name", "분류명", record["name"] if record else "")
+        identifier = []
+        def save():
+            identifier.append(self.store.save_category({"name": dialog.fields["name"].text(), "parent_id": record["parent_id"] if record else parent_id}, record["id"] if record else None))
+        dialog.finish(save)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.refresh()
+            if identifier:
+                self.tree.setCurrentItem(self.items[identifier[0]])
+
+    def add_root(self):
+        self.editor()
+
+    def add_child(self):
+        record = self.selected()
+        if record and record["level"] == 3:
+            return self.notify("소분류 아래에는 추가할 수 없습니다.")
+        self.editor(parent_id=record["id"] if record else None)
+
+    def edit(self):
+        record = self.selected()
+        if record:
+            self.editor(record)
+        else:
+            self.notify("수정할 분류를 선택하세요.")
+
+    def delete(self):
+        record = self.selected()
+        if record and _confirm(self, "분류 삭제", f"'{record['name']}' 분류를 삭제할까요?"):
+            try:
+                self.store.delete_category(record["id"])
+                self.refresh()
+            except (ValueError, PermissionError) as exc:
+                _error(self, exc)
+
+    def set_active(self, active):
+        record = self.selected()
+        if record:
+            try:
+                self.store.save_category({"name": record["name"], "active": active}, record["id"])
+                self.refresh()
+            except (ValueError, PermissionError) as exc:
+                _error(self, exc)
+
+    def make_context_menu(self):
+        record = self.selected()
+        item = self.tree.currentItem() or self.root
+        menu = QMenu(self)
+        def option(text, callback, enabled=True):
+            entry = menu.addAction(text)
+            entry.setEnabled(enabled)
+            entry.triggered.connect(lambda _checked=False: callback())
+        option("분류 등록정보 / 수정", self.edit, bool(record))
+        menu.addSeparator()
+        option("분류 추가", self.add_child, not record or record["level"] < 3 and bool(record["active"]))
+        option("분류 삭제", self.delete, bool(record))
+        menu.addSeparator()
+        option("분류를 무효화", lambda: self.set_active(False), bool(record and record["active"]))
+        option("분류를 유효화", lambda: self.set_active(True), bool(record and not record["active"]))
+        menu.addSeparator()
+        def expand(expanded):
+            def walk(node):
+                node.setExpanded(expanded)
+                for index in range(node.childCount()):
+                    walk(node.child(index))
+            walk(item)
+        option("하위분류 보기", lambda: expand(True))
+        option("하위분류 감추기", lambda: expand(False))
+        return menu
+
+    def context_menu(self, position):
+        item = self.tree.itemAt(position)
+        if item:
+            self.tree.setCurrentItem(item)
+        self.make_context_menu().exec(self.tree.viewport().mapToGlobal(position))
+
+
+class CategoryDialog(QDialog):
+    def __init__(self, store, parent=None, select=False):
+        super().__init__(parent)
+        self.store, self.record = store, None
+        self.read_permissions = ("catalog",)
+        self.setWindowTitle("상품분류체계 관리")
+        self.resize(650, 700)
+        body = QVBoxLayout(self)
+        context = SimpleNamespace(store=store, notify=lambda text: QMessageBox.information(self, "상품 분류", text))
+        self.page = CategoriesPage(context)
+        body.addWidget(self.page)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.button(QDialogButtonBox.StandardButton.Close).setText("닫기")
+        buttons.rejected.connect(self.reject)
+        if select:
+            self.page.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
+            for index in range(self.page.actions.count()):
+                widget = self.page.actions.itemAt(index).widget()
+                if widget:
+                    widget.hide()
+            choose = buttons.addButton("선택 적용", QDialogButtonBox.ButtonRole.AcceptRole)
+            choose.clicked.connect(self.choose)
+            self.page.tree.itemDoubleClicked.connect(lambda *_: self.choose())
+        body.addWidget(buttons)
+
+    def choose(self):
+        record = self.page.selected()
+        if record and record["active"]:
+            records = {row["id"]: row for row in self.store.categories()}
+            ancestor = record
+            while ancestor["parent_id"]:
+                ancestor = records[ancestor["parent_id"]]
+                if not ancestor["active"]:
+                    return
+            self.record = record
+            self.accept()
 
 
 class PartnerPicker(QDialog):
@@ -236,18 +431,22 @@ class ProductDialog(QDialog):
         top.setContentsMargins(4, 4, 4, 4)
         top.setHorizontalSpacing(7)
         top.setVerticalSpacing(6)
-        self.active = QCheckBox("사용 상품")
-        self.active.setChecked(bool(self.record.get("active", True)))
-        top.addWidget(self.active, 0, 0)
+        self.product_status = _combo([("유효", "유효"), ("무효", "무효"), ("퇴출대상", "퇴출대상")], product_status(self.record))
+        self.product_status.setToolTip("무효: 신규 거래 제외 / 퇴출대상: 재고 정리용 판매 가능")
+        top.addWidget(self.product_status, 0, 0)
         self.tax_mode = _combo([("면세", "exempt"), ("과세", "taxable")], self.record.get("tax_mode", "exempt"))
         top.addWidget(QLabel("과세"), 0, 1)
         top.addWidget(self.tax_mode, 0, 2)
         for col, (key, label) in enumerate((("category", "대분류"), ("category_mid", "중분류"), ("category_small", "소분류"))):
             top.addWidget(QLabel(label), 0, col * 2 + 3)
-            field = QLineEdit(self.record.get(key, ""))
+            field = CategoryChoice()
+            field.addItem("선택 안 함", "")
             field.setPlaceholderText(label)
             self.fields[key] = field
             top.addWidget(field, 0, col * 2 + 4)
+        self.fields["category"].currentIndexChanged.connect(self.reload_middle)
+        self.fields["category_mid"].currentIndexChanged.connect(self.reload_small)
+        self.reload_categories()
         suppliers = self.store.partners("supplier")
         options = [("공급사 미지정", None)] + [(f"{p['name']} · {p['code']}", p["id"]) for p in suppliers]
         self.supplier = _combo(options, self.record.get("supplier_id"))
@@ -256,6 +455,9 @@ class ProductDialog(QDialog):
         supplier_search = QPushButton("공급사 검색")
         supplier_search.clicked.connect(self.pick_supplier)
         top.addWidget(supplier_search, 1, 7, 1, 2)
+        classification_button = QPushButton("분류 선택 / 검색")
+        classification_button.clicked.connect(self.choose_category)
+        top.addWidget(classification_button, 2, 0, 1, 3)
         layout.addWidget(classification)
         columns = QHBoxLayout()
         left, right = QVBoxLayout(), QVBoxLayout()
@@ -263,6 +465,8 @@ class ProductDialog(QDialog):
         for key, label in (("code", "상품코드 *"), ("barcode", "바코드"), ("name", "상품명 *"),
                            ("receipt_name", "표시명"), ("specification", "규격")):
             self._field(form, key, label)
+        self.fields["code"].setReadOnly(True)
+        self.fields["code"].setPlaceholderText("저장 시 순차 자동 생성")
         units = ["kg", "g", "개", "박스", "팩", "EA", "mg", "L", "mL", "P", "m", "cm", "mm", "W"]
         current = self.record.get("base_unit", "kg")
         self.unit = _combo([(u, u) for u in units], current, editable=True)
@@ -387,6 +591,42 @@ class ProductDialog(QDialog):
             index = self.supplier.findData(picker.record["id"])
             self.supplier.setCurrentIndex(index)
 
+    def _fill_category(self, key, records, current=""):
+        field = self.fields[key]
+        field.blockSignals(True)
+        field.clear()
+        field.addItem("선택 안 함", "")
+        for row in records:
+            old_path = [self.record.get(key, "") for key in ("category", "category_mid", "category_small")[:row["level"]]]
+            if row["active"] or row["path"] == old_path:
+                field.addItem(row["name"], row["id"])
+        field.setText(current)
+        field.blockSignals(False)
+
+    def reload_categories(self):
+        self.category_records = self.store.categories()
+        self._fill_category("category", [r for r in self.category_records if r["level"] == 1], self.record.get("category", ""))
+        self.reload_middle()
+        self.fields["category_mid"].setText(self.record.get("category_mid", ""))
+        self.reload_small()
+        self.fields["category_small"].setText(self.record.get("category_small", ""))
+
+    def reload_middle(self, *_):
+        path = [self.fields["category"].text()]
+        self._fill_category("category_mid", [r for r in self.category_records if r["level"] == 2 and r["path"][:-1] == path])
+        self.reload_small()
+
+    def reload_small(self, *_):
+        path = [self.fields["category"].text(), self.fields["category_mid"].text()]
+        self._fill_category("category_small", [r for r in self.category_records if r["level"] == 3 and r["path"][:-1] == path])
+
+    def choose_category(self):
+        dialog = CategoryDialog(self.store, self, select=True)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.reload_categories()
+            for key, value in zip(("category", "category_mid", "category_small"), dialog.record["path"]):
+                self.fields[key].setText(value)
+
     def update_margin(self):
         try:
             cost = Decimal(self.purchase_price.text().replace(",", ""))
@@ -399,15 +639,19 @@ class ProductDialog(QDialog):
 
     def values(self):
         data = {key: field.text().strip() for key, field in self.fields.items()}
+        for key in ("category", "category_mid", "category_small"):
+            if data[key] and not isinstance(self.fields[key].currentData(), int):
+                raise ValueError("기초관리 → 상품 분류에서 먼저 등록한 분류를 선택하세요.")
         data.update(base_unit=self.unit.currentText().strip(), supplier_id=self.supplier.currentData(),
                     tax_mode=self.tax_mode.currentData(), tracked=self.tracked.isChecked(),
-                    active=self.active.isChecked(), memo=self.memo.toPlainText().strip())
+                    active=self.product_status.currentData() != "무효", retirement_target=self.product_status.currentData() == "퇴출대상", memo=self.memo.toPlainText().strip())
         return data
 
     def save(self, close=True):
         try:
             self.saved_id = self.store.save_product(self.values(), self.record.get("id"))
             self.record = next(r for r in self.store.products() if r["id"] == self.saved_id)
+            self.fields["code"].setText(self.record["code"])
             self.error_label.clear()
             self.refresh_details()
         except (ValueError, PermissionError) as exc:
@@ -553,21 +797,20 @@ class ProductsPage(Page):
         super().__init__(window, "상품장", "상품 · 기준단가 · 확장단위 · 입출고 이력을 한곳에서 관리합니다.")
         self.window = window
         self.search = QLineEdit()
-        self.search.setPlaceholderText("상품명 · 코드 · 바코드 · 검색어")
+        self.search.setPlaceholderText("상품코드 · 바코드 · 상품명 · 규격")
         self.search.setMinimumWidth(230)
         self.scan = ScanField()
         self.scan.setMinimumWidth(200)
         self.scan.scanned.connect(self.scan_barcode)
         self.category = QComboBox()
         self.supplier = QComboBox()
-        self.active_only = QCheckBox("사용 상품만")
-        self.active_only.setChecked(True)
+        self.status_filter = _combo([("전체 상태", ""), ("유효", "유효"), ("무효", "무효"), ("퇴출대상", "퇴출대상")], "유효")
         self.low_only = QCheckBox("최소재고 이하")
         filters = QHBoxLayout()
         for label, widget in (("검색", self.search), ("분류", self.category), ("공급사", self.supplier)):
             filters.addWidget(QLabel(label))
             filters.addWidget(widget)
-        filters.addWidget(self.active_only)
+        filters.addWidget(self.status_filter)
         filters.addWidget(self.low_only)
         self.body.addLayout(filters)
         tools = QHBoxLayout()
@@ -594,7 +837,7 @@ class ProductsPage(Page):
         self.search.textChanged.connect(self.refresh)
         for control in (self.category, self.supplier):
             control.currentIndexChanged.connect(self.refresh)
-        self.active_only.toggled.connect(self.refresh)
+        self.status_filter.currentIndexChanged.connect(self.refresh)
         self.low_only.toggled.connect(self.refresh)
         self.refresh()
 
@@ -618,12 +861,14 @@ class ProductsPage(Page):
         self.category.blockSignals(False)
         self.supplier.blockSignals(False)
         rows = self.store.products(search=self.search.text(), supplier_id=self.supplier.currentData(),
-                                   category=self.category.currentData() or "", active_only=self.active_only.isChecked())
+                                   category=self.category.currentData() or "", active_only=False)
+        if self.status_filter.currentData():
+            rows = [r for r in rows if product_status(r) == self.status_filter.currentData()]
         if self.low_only.isChecked():
             rows = [r for r in rows if r["tracked"] and Decimal(r["stock_qty"]) <= Decimal(r["min_qty"])]
         self.grid.fill([[r["code"], r["name"], r["category"], r["category_mid"], r["specification"], r["barcode"],
                          supplier_map.get(r["supplier_id"], "—"), r["purchase_price"], r["sale_price"],
-                         Decimal(r["stock_qty"]), r["base_unit"], r["stock_cost"], "사용" if r["active"] else "중지"] for r in rows], rows)
+                         Decimal(r["stock_qty"]), r["base_unit"], r["stock_cost"], product_status(r)] for r in rows], rows)
         totals = {}
         for r in rows:
             if r["tracked"]:
@@ -668,6 +913,7 @@ class ProductsPage(Page):
             self.category.setCurrentIndex(0)
             self.supplier.setCurrentIndex(0)
             self.low_only.setChecked(False)
+            self.status_filter.setCurrentIndex(0)
             self.search.setText(barcode)
             self.refresh()
             identifier = result["product"]["id"]
@@ -888,17 +1134,26 @@ class SettingsPage(Page):
         self.data_location.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.data_location.setWordWrap(True)
         backup_layout.addWidget(self.data_location)
-        note = QLabel("백업은 사용 중인 데이터베이스를 일관된 별도 SQLite 파일로 저장합니다.\n복원은 프로그램을 종료한 뒤 원본 파일을 별도 보관하고 진행하세요. ZIP 배포파일에는 거래자료가 포함되지 않습니다.")
+        note = QLabel("백업은 전체 장부를 별도 SQLite 파일로 저장합니다.\n복원은 선택한 백업 시점으로 전체 자료를 되돌리며, 현재 자료를 자동 백업한 뒤 진행합니다.\n복원 후 프로그램을 다시 실행해 백업 당시 계정으로 로그인하세요. 다른 버전의 프로그램은 먼저 종료하세요.")
         note.setWordWrap(True)
         backup_layout.addWidget(note)
+        self.backup_grid = DataGrid(["생성일시", "백업 파일명", "종류", "크기 (KB)"])
+        self.backup_grid.read_permissions = ("admin",)
+        backup_layout.addWidget(self.backup_grid)
+        policy = QLabel("전용 폴더에 자동 저장 · 주 1회 정리 · 최신 15개는 유지 · 삭제 시 알림\n처음 실행한 날부터 7일 후 확인하며, 꺼져 있던 기간은 다음 실행 시 확인합니다.")
+        policy.setWordWrap(True)
+        backup_layout.addWidget(policy)
         actions = QHBoxLayout()
-        _button("백업 파일 저장", self.backup, actions, True)
+        _button("지금 백업", self.backup, actions, True)
+        self.restore_button = _button("선택한 백업 적용", self.restore_selected, actions)
+        _button("다른 폴더의 백업 선택", self.restore, actions)
+        _button("목록 새로고침", self.refresh_backups, actions)
         actions.addStretch()
         backup_layout.addLayout(actions)
         self.body.addWidget(backup)
         self.body.addStretch()
         _button("설정 저장", self.save, self.actions, True)
-        _button("다시 불러오기", self.refresh, self.actions)
+        _button("현재 설정 다시 조회", self.refresh, self.actions)
         self.refresh()
 
     def refresh(self):
@@ -908,6 +1163,21 @@ class SettingsPage(Page):
             field.setText(str(settings.get(key, defaults.get(key, ""))))
         self.point_enabled.setChecked(bool(settings.get("point_enabled", True)))
         self.data_location.setText(f"업무 데이터: {getattr(self.store, 'path', '현재 로컬 데이터베이스')}")
+        self.refresh_backups()
+
+    def refresh_backups(self):
+        records = self.store.backup_files()
+        self.backup_grid.fill([[row["created"], row["name"], row["kind"], Decimal(row["size"]) / 1024] for row in records], records)
+        self.backup_grid.sortItems(0, Qt.SortOrder.DescendingOrder)
+        if records:
+            self.backup_grid.selectRow(0)
+
+    def restore_selected(self):
+        record = self.backup_grid.selected()
+        if not record:
+            self.notify("목록에서 적용할 백업 파일을 선택하세요.")
+            return
+        self.restore(record["path"])
 
     def save(self):
         try:
@@ -923,10 +1193,43 @@ class SettingsPage(Page):
             _error(self, exc)
 
     def backup(self):
-        filename, _ = QFileDialog.getSaveFileName(self, "업무자료 백업", f"서영POS-백업-{date.today().isoformat()}.db", "SQLite 백업 (*.db)")
-        if filename:
+        try:
+            filename = self.store.create_backup()
+            self.refresh_backups()
+            self.notify(f"백업을 저장했습니다: {filename}")
+        except (ValueError, PermissionError, OSError) as exc:
+            _error(self, exc)
+
+    def restore(self, filename=None):
+        try:
+            self.store._require("admin")
+            finish = getattr(self.window, "finish_restore", None)
+            if not callable(finish):
+                raise ValueError("메인 화면의 관리자 설정에서 복원을 실행하세요.")
+            if not filename:
+                filename, _ = QFileDialog.getOpenFileName(self, "복원할 백업 파일 선택", "", "SQLite 백업 (*.db *.sqlite *.sqlite3);;모든 파일 (*)")
+            if not filename:
+                return
+            info = self.store.inspect_backup(filename)
+            counts = info["counts"]
+            message = (f"주의: 현재 자료가 선택한 백업으로 바뀝니다.\n상품 {counts['products']:,}개 · 전표 {counts['documents']:,}건 · 회원 {counts['members']:,}명\n"
+                       "현재 자료는 자동 백업됩니다. 적용 후 프로그램이 종료됩니다.\n재실행 후 백업 당시 계정으로 로그인하세요.\n\n적용할까요?")
+            if not _confirm(self, "백업 복원 확인", message):
+                return
+            password, accepted = QInputDialog.getText(self, "관리자 확인", "현재 로그인한 관리자의 비밀번호", QLineEdit.EchoMode.Password)
+            if not accepted:
+                return
+            self.restore_button.setEnabled(False)
+            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
             try:
-                self.store.backup(filename)
-                self.notify(f"백업을 저장했습니다: {filename}")
-            except (ValueError, PermissionError, OSError) as exc:
-                _error(self, exc)
+                result = self.store.restore_backup(filename, password, expected_digest=info["digest"])
+            finally:
+                QApplication.restoreOverrideCursor()
+                self.restore_button.setEnabled(True)
+            finish(result)
+        except (ValueError, PermissionError, OSError) as exc:
+            _error(self, exc)
+        except RuntimeError as exc:
+            QMessageBox.critical(self, "복원 중단", str(exc))
+            self.window.close()
+            QApplication.instance().quit()

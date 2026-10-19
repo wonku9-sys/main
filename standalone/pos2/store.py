@@ -9,11 +9,14 @@ import secrets
 import sqlite3
 
 from .catalog import CatalogMixin
+from .backup_policy import BackupPolicyMixin
 from .commerce import CommerceMixin
 from .common import PERMISSIONS, now, text
 from .loyalty import LoyaltyMixin
 from .operations import OperationsMixin
+from .recovery import RecoveryMixin, SCHEMA_VERSION
 from .schema import initialize
+from .settlement import SettlementMixin
 
 APPLICATION_ID = 1398362162
 DEFAULT_SETTINGS = {
@@ -26,6 +29,10 @@ def password_hash(password):
     password = str(password)
     if len(password) < 8 or len(password) > 128:
         raise ValueError("비밀번호는 8~128자로 입력하세요.")
+    return _scrypt_hash(password)
+
+
+def _scrypt_hash(password):
     salt = secrets.token_bytes(16)
     digest = scrypt(password.encode("utf-8"), salt=salt, n=16384, r=8, p=1, dklen=32)
     return f"scrypt$16384$8$1${salt.hex()}${digest.hex()}"
@@ -44,7 +51,7 @@ def password_matches(password, encoded):
         return False
 
 
-class Store(CatalogMixin, CommerceMixin, OperationsMixin, LoyaltyMixin):
+class Store(CatalogMixin, CommerceMixin, OperationsMixin, LoyaltyMixin, RecoveryMixin, BackupPolicyMixin, SettlementMixin):
     def __init__(self, path):
         self.path = Path(path).expanduser().resolve() if str(path) != ":memory:" else None
         if self.path:
@@ -59,12 +66,16 @@ class Store(CatalogMixin, CommerceMixin, OperationsMixin, LoyaltyMixin):
             marker = self.db.execute("PRAGMA application_id").fetchone()[0]
             if tables and marker != APPLICATION_ID:
                 raise ValueError("이 파일은 새 독립판 업무 DB가 아닙니다. 기존 프로그램 데이터는 열거나 변경하지 않습니다.")
+            if tables and self.db.execute("PRAGMA user_version").fetchone()[0] > SCHEMA_VERSION:
+                raise ValueError("더 최신 버전의 장부입니다. 같은 버전 이상의 프로그램으로 실행하세요.")
             self.db.execute("PRAGMA journal_mode=WAL")
             self.db.execute("PRAGMA synchronous=FULL")
             initialize(self.db)
             self.db.execute(f"PRAGMA application_id={APPLICATION_ID}")
             self._init_loyalty()
             self._init_operations()
+            self._init_recovery()
+            self._init_catalog()
             self._dummy_password = password_hash(secrets.token_urlsafe(24))
         except BaseException:
             self.db.close()
@@ -101,6 +112,9 @@ class Store(CatalogMixin, CommerceMixin, OperationsMixin, LoyaltyMixin):
     def _require(self, *permissions):
         if set(permissions) - PERMISSIONS:
             raise ValueError("알 수 없는 업무 권한입니다.")
+        if self._restore_token != self._current_restore_token():
+            self.actor = None
+            raise PermissionError("자료가 복원되었습니다. 프로그램을 다시 실행해 로그인하세요.")
         row = self.db.execute("SELECT * FROM users WHERE id=?", (self.actor["id"],)).fetchone() if self.actor else None
         if not row or not row["active"]:
             self.actor = None
@@ -146,10 +160,29 @@ class Store(CatalogMixin, CommerceMixin, OperationsMixin, LoyaltyMixin):
         valid = password_matches(password, row["password_hash"] if row else self._dummy_password)
         if not row or not valid or not row["active"]:
             raise ValueError("사용자 코드 또는 비밀번호를 확인하세요.")
+        self._restore_token = self._current_restore_token()
         self.actor = self._public_user(row)
         with self._tx():
             self._audit("login", "user", row["id"], {})
         return self.actor
+
+    def bootstrap_default_admin(self):
+        """The explicitly requested, publicly documented first-run credential.
+
+        Never reset an existing account; all later password changes retain the
+        normal eight-character minimum. The database stores only a salted hash.
+        """
+        with self._tx():
+            if self.users_count():
+                return False
+            identifier = self.db.execute("INSERT INTO users(code,name,password_hash,role,permissions) VALUES('admin','관리자',?,'admin',?)", (_scrypt_hash("1234"), json.dumps(sorted(PERMISSIONS)))).lastrowid
+            self.db.execute("INSERT OR IGNORE INTO partners(kind,code,name,opening_date) VALUES('customer','WALKIN','일반고객',date('now','localtime'))")
+            self._audit("bootstrap_admin", "user", identifier, {"code": "admin", "password_change_recommended": True})
+        return True
+
+    def default_login_available(self):
+        row = self.db.execute("SELECT password_hash FROM users WHERE code='admin' AND role='admin' AND active=1").fetchone()
+        return bool(row and password_matches("1234", row[0]))
 
     def logout(self):
         if self.actor:

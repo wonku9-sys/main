@@ -103,6 +103,10 @@ def build(output, native=False):
     subprocess.run([str(executable), "--smoke-test", "--screenshot", str(screenshot)], cwd=bundle, env=environment, check=True, timeout=180)
     if not screenshot.is_file() or screenshot.stat().st_size < 1000:
         raise RuntimeError("The real frozen executable did not produce its desktop screenshot.")
+    for suffix in ("-purchase", "-product-search", "-categories", "-backup", "-payments", "-login"):
+        capture = screenshot.with_name(screenshot.stem + suffix + screenshot.suffix)
+        if not capture.is_file() or capture.stat().st_size < 1000:
+            raise RuntimeError(f"The frozen executable did not validate its new workflow screen: {suffix}")
     if label == "Windows":
         (bundle / "체험 실행.bat").write_bytes(b'@echo off\r\ncd /d "%~dp0"\r\n"SeoyoungPOS-Standalone.exe" --demo\r\n')
     documents = bundle / "안내문서"
@@ -115,9 +119,12 @@ def build(output, native=False):
         + ("Windows 10/11 x64용 무설치 프로그램입니다.\n" if label == "Windows" else f"주의: 이 파일은 {label} 검증용이며 Windows 프로그램이 아닙니다.\n")
         + f"ZIP 전체를 쓰기 가능한 폴더에 압축 해제하고 {executable.name}을 실행하세요.\n"
         "Python 설치·서버·인터넷·카드 연동이 필요하지 않습니다.\n"
-        "처음 실행할 때 관리자 코드와 이름, 새 비밀번호(8자 이상)를 직접 만드세요.\n"
+        "새 장부의 초기 아이디 admin / 초기 비밀번호 1234 (로그인 창 하단에도 표시).\n"
+        "공개된 초기 비밀번호입니다. 로그인 후 비밀번호 변경에서 8자 이상의 새 비밀번호로 바꾸세요.\n"
         "자료는 실행 파일 옆 data-v2 폴더의 seoyoung-standalone-v2.db에 보존됩니다.\n"
         "프로그램 폴더를 옮길 때 data-v2 폴더를 함께 옮기고, 정기적으로 설정의 백업을 이용하세요.\n"
+        "설정에서 백업 목록을 선택해 복원할 수 있습니다. 적용하면 현재 자료가 교체되고 프로그램이 종료됩니다.\n"
+        "백업 폴더는 자동 생성합니다. 7일마다 오래된 관리 백업을 삭제하되 최신 15개를 남기고 알립니다.\n"
         "기존 서영 POS 프로그램 및 DB를 가져오거나 덮어쓰지 않는 완전히 별도의 독립판입니다.\n"
         "USB 스캐너는 HID 키보드(Enter 접미사) 모드, 프린터는 Windows 드라이버를 사용합니다.\n"
         "세부 실행법과 제외 기능은 안내문서/README.md를 확인하세요.\n", encoding="utf-8-sig")

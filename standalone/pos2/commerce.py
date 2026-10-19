@@ -27,7 +27,7 @@ class CommerceMixin:
         if kind not in {"supplier", "customer"}:
             raise ValueError("거래처 유형이 올바르지 않습니다.")
         rows = self.db.execute(
-            "SELECT id,code,name FROM partners WHERE kind=? AND active=1 "
+            "SELECT id,code,name,business_no,supplier_mode FROM partners WHERE kind=? AND active=1 "
             "AND (name LIKE ? OR code LIKE ?) ORDER BY name,id",
             (kind, f"%{search}%", f"%{search}%"),
         )
@@ -440,34 +440,38 @@ class CommerceMixin:
     def void_payment(self, identifier, reason):
         with self._tx():
             self._require("trade")
-            reason = text(reason, "취소 사유", required=True)
-            payment = self.db.execute("SELECT * FROM payments WHERE id=?", (identifier,)).fetchone()
-            if not payment or payment["voided"]:
-                raise ValueError("취소할 수 있는 정산 이력이 아닙니다.")
-            record = self._trade_row(payment["document_id"])
-            if record["member_id"] and record["kind"] == "sale":
-                raise ValueError("회원 매출의 전액 정산을 해제할 수 없습니다. 원전표 반품을 이용하세요.")
-            self._assert_open(payment["date"])
-            if payment["method"] == "cash":
-                self._assert_cash_open(payment["date"], payment["user_id"])
-            self.db.execute("UPDATE payments SET voided=1 WHERE id=?", (identifier,))
-            if not record["source_id"]:
-                refunds = -self.db.execute(
-                    "SELECT COALESCE(SUM(p.amount),0) FROM payments p JOIN documents d ON d.id=p.document_id "
-                    "WHERE d.source_id=? AND d.status='posted' AND p.voided=0", (record["id"],),
-                ).fetchone()[0]
-                if refunds and self._source_settlement(record["id"])[0]:
-                    raise ValueError("이미 환불한 원전표 정산은 해제할 수 없습니다. 환불 정산을 먼저 확인하세요.")
-                if refunds:
-                    refund_days = self.db.execute(
-                        "SELECT DISTINCT p.date FROM payments p JOIN documents d ON d.id=p.document_id "
-                        "WHERE d.source_id=? AND d.status='posted' AND p.voided=0 ORDER BY p.date", (record["id"],),
-                    ).fetchall()
-                    if any(self._source_settlement(record["id"], row[0])[0] for row in refund_days):
-                        raise ValueError("환불 당시의 지급액이 부족해지는 정산 취소는 허용되지 않습니다.")
-            self.db.execute("UPDATE documents SET cash_paid=? WHERE id=?",
-                            (abs(self._trade_payment_sum(record["id"])), record["id"]))
-            self._audit("void_payment", "payment", identifier, {"reason": reason})
+            self._void_trade_payment(identifier, reason)
+
+    def _void_trade_payment(self, identifier, reason, settlement_id=None):
+        reason = text(reason, "취소 사유", required=True)
+        payment = self.db.execute("SELECT * FROM payments WHERE id=?", (identifier,)).fetchone()
+        if not payment or payment["voided"]:
+            raise ValueError("취소할 수 있는 정산 이력이 아닙니다.")
+        if payment["supplier_settlement_id"] and payment["supplier_settlement_id"] != settlement_id:
+            raise ValueError("공급사 묶음 결제입니다. 결제관리에서 결제 전체를 취소하세요.")
+        record = self._trade_row(payment["document_id"])
+        if record["member_id"] and record["kind"] == "sale":
+            raise ValueError("회원 매출의 전액 정산을 해제할 수 없습니다. 원전표 반품을 이용하세요.")
+        self._assert_open(payment["date"])
+        if payment["method"] == "cash":
+            self._assert_cash_open(payment["date"], payment["user_id"])
+        self.db.execute("UPDATE payments SET voided=1 WHERE id=?", (identifier,))
+        if not record["source_id"]:
+            refunds = -self.db.execute(
+                "SELECT COALESCE(SUM(p.amount),0) FROM payments p JOIN documents d ON d.id=p.document_id "
+                "WHERE d.source_id=? AND d.status='posted' AND p.voided=0", (record["id"],),
+            ).fetchone()[0]
+            if refunds and self._source_settlement(record["id"])[0]:
+                raise ValueError("이미 환불한 원전표 정산은 해제할 수 없습니다. 환불 정산을 먼저 확인하세요.")
+            if refunds:
+                refund_days = self.db.execute(
+                    "SELECT DISTINCT p.date FROM payments p JOIN documents d ON d.id=p.document_id "
+                    "WHERE d.source_id=? AND d.status='posted' AND p.voided=0 ORDER BY p.date", (record["id"],),
+                ).fetchall()
+                if any(self._source_settlement(record["id"], row[0])[0] for row in refund_days):
+                    raise ValueError("환불 당시의 지급액이 부족해지는 정산 취소는 허용되지 않습니다.")
+        self.db.execute("UPDATE documents SET cash_paid=? WHERE id=?", (abs(self._trade_payment_sum(record["id"])), record["id"]))
+        self._audit("void_payment", "payment", identifier, {"reason": reason})
 
     def cancel_document(self, identifier, reason):
         with self._tx():
@@ -509,6 +513,8 @@ class CommerceMixin:
         if partner["opening_balance"]:
             entries.append({"date": partner["opening_date"], "kind": "opening", "number": "이월잔액",
                             "charge": partner["opening_balance"], "payment": 0, "memo": "초기 외상 잔액", "order": -1})
+        for payment in self.db.execute("SELECT * FROM supplier_settlements WHERE partner_id=? AND opening_amount>0 AND voided=0", (partner_id,)):
+            entries.append({"date": payment["date"], "kind": "payment", "number": f"결제-{payment['id']:06d}", "charge": 0, "payment": payment["opening_amount"], "memo": payment["memo"], "settlement_id": payment["id"], "order": 0})
         for record in self.db.execute("SELECT * FROM documents WHERE partner_id=? AND status='posted'", (partner_id,)):
             sign = -1 if record["source_id"] else 1
             entries.append({"date": record["date"], "kind": record["kind"], "number": record["number"],

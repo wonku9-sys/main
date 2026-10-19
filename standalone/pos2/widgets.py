@@ -6,7 +6,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from PySide6.QtCore import QDate, QEvent, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QPageLayout, QTextDocument
+from PySide6.QtGui import QColor, QFont, QIcon, QPageLayout, QPainter, QPen, QPixmap, QTextDocument
 from PySide6.QtPrintSupport import QPrintDialog, QPrinter, QPrinterInfo, QPrintPreviewDialog
 from PySide6.QtWidgets import (
     QComboBox, QDateEdit, QDialog, QDialogButtonBox, QFileDialog, QFormLayout,
@@ -42,7 +42,20 @@ def action(text, callback, primary=False, danger=False):
     return result
 
 
+def search_icon():
+    pixmap = QPixmap(20, 20)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setPen(QPen(QColor("#315C6D"), 2))
+    painter.drawEllipse(3, 3, 9, 9)
+    painter.drawLine(11, 11, 17, 17)
+    painter.end()
+    return QIcon(pixmap)
+
+
 READ_PERMISSIONS = {
+    "SupplierPaymentsPage": ("trade",), "SupplierPaymentDialog": ("trade",),
     "ProductsPage": ("catalog",), "PartnersPage": ("catalog",),
     "ProductDialog": ("catalog",), "LabelsPage": ("catalog",),
     "LabelDialog": ("catalog",), "PartnerPicker": ("catalog", "trade"),

@@ -8,7 +8,7 @@ from pathlib import Path
 import sys
 import tempfile
 
-from PySide6.QtCore import QDate, QSize, Qt, QTimer
+from PySide6.QtCore import QDate, QLockFile, QSize, Qt, QTimer
 from PySide6.QtGui import QAction, QFont, QIcon, QKeySequence
 from PySide6.QtWidgets import (
     QApplication, QDialog, QFrame, QHBoxLayout, QLabel, QMainWindow, QMessageBox,
@@ -76,46 +76,44 @@ QStatusBar { color:#81939E; font-size:10px; }
 """
 
 SECTIONS = [
-    ("1. 기초관리", [("products", "상품장 · 확장단위", "catalog"), ("suppliers", "공급사", "catalog"), ("customers", "판매처", "catalog"), ("labels", "라벨 출력", "catalog")]),
-    ("2. 매입 · 판매", [("purchases", "매입 · 매입반품", "trade"), ("sales", "매출 · 고객반품", "trade"), ("ledger", "거래처 원장 · 결제", "trade")]),
+    ("1. 기초관리", [("products", "상품장 · 확장단위", "catalog"), ("categories", "상품 분류", "catalog"), ("suppliers", "공급사", "catalog"), ("customers", "판매처", "catalog"), ("labels", "라벨 출력", "catalog")]),
+    ("2. 매입 · 판매", [("purchases", "매입장 · 매입반품", "trade"), ("payments", "결제관리 · 공급사 지급", "trade"), ("sales", "매출장 · 고객반품", "trade"), ("ledger", "거래처 원장", "trade")]),
     ("3. 재고관리", [("inventory", "현재고 · 입출고", "inventory"), ("counts", "실사 입력 · 적용", "inventory"), ("closings", "현금 · 월재고 마감", ("inventory", "trade"))]),
     ("4. 회원 · 행사", [("members", "회원 · 포인트", "loyalty"), ("promotions", "특매 그룹", "loyalty"), ("prices", "가격 변경 예약", "loyalty"), ("gifts", "사은품 교환", "loyalty")]),
     ("5. 조회 · 보고서", [("overview", "업무 현황", "reports"), ("reports", "일 · 월 · 상세 집계", "reports"), ("commission", "공급사 판매 수수료", "reports")]),
-    ("6. 관리자", [("users", "사용자 · 접근권한", "admin"), ("settings", "매장 설정 · 백업", "admin")]),
+    ("6. 관리자 모드", [("users", "사용자 · 접근권한", "admin"), ("settings", "매장 설정 · 백업", "admin")]),
 ]
 
 
 class LoginDialog(FormDialog):
     def __init__(self, store, parent=None):
         self.store, self.initial = store, store.users_count() == 0
-        super().__init__("최초 관리자 설정" if self.initial else "사용자 확인", parent)
+        if self.initial:
+            store.bootstrap_default_admin()
+        super().__init__("사용자 확인", parent)
         self.setMinimumWidth(430)
-        self.resize(470, 380 if self.initial else 310)
+        self.resize(470, 330)
         self.code = self.field("code", "사용자 코드")
-        self.name = self.field("name", "사용자 이름") if self.initial else None
+        self.name = self.confirm = None
         self.password = self.field("password", "비밀번호", password=True)
-        self.confirm = self.field("confirm", "비밀번호 확인", password=True) if self.initial else None
-        hint = QLabel("새 독립판 전용 계정입니다. 기존 프로그램 계정·자료를 불러오지 않습니다.")
-        hint.setWordWrap(True)
-        hint.setObjectName("muted")
-        self.body.addWidget(hint)
+        default_available = store.default_login_available()
+        self.code.setText("admin" if default_available else "")
+        if default_available:
+            self.password.setText("1234")
+        self.hint = QLabel("초기 아이디: admin / 초기 비밀번호: 1234\n로그인 후 ‘비밀번호 변경’으로 변경해 주세요." if default_available else "설정된 계정과 비밀번호로 로그인하세요.\n변경한 비밀번호는 초기 비밀번호로 되돌아가지 않습니다.")
+        self.hint.setWordWrap(True)
+        self.hint.setObjectName("notice" if default_available else "muted")
+        self.body.addWidget(self.hint)
         box = self.finish(self.submit)
         save = box.button(box.StandardButton.Save)
-        save.setText("관리자 만들기" if self.initial else "로그인")
+        save.setText("로그인")
         save.setAutoDefault(False)
         save.setDefault(False)
-        self.password.returnPressed.connect(self.submit if not self.initial else lambda: self.confirm.setFocus())
-        if self.confirm:
-            self.confirm.returnPressed.connect(self.submit)
+        self.password.returnPressed.connect(self.submit)
 
     def submit(self):
         try:
-            if self.initial:
-                if self.password.text() != self.confirm.text():
-                    raise ValueError("비밀번호 확인이 일치하지 않습니다.")
-                self.store.setup_admin(self.code.text(), self.name.text(), self.password.text())
-            else:
-                self.store.login(self.code.text(), self.password.text())
+            self.store.login(self.code.text(), self.password.text())
             self.accept()
         except (ValueError, PermissionError) as exc:
             self.error(exc)
@@ -152,7 +150,7 @@ class InventoryPage(Page):
         super().__init__(window, "현재고 · 입출고", "기본단위로 환산한 현재 수량과 등록순 이동평균 원가입니다. 확장단위 스캔도 같은 재고를 사용합니다.")
         filters = QHBoxLayout()
         self.search = ScanField()
-        self.search.setPlaceholderText("상품명 · 코드 · 기본/확장단위 바코드, F8 스캔")
+        self.search.setPlaceholderText("상품코드 · 상품명 · 규격 · 기본/확장 바코드, F8 스캔")
         self.search.scanned.connect(lambda _: self.refresh())
         filters.addWidget(self.search, 1)
         filters.addWidget(action("조회", self.refresh))
@@ -244,7 +242,7 @@ class MainWindow(QMainWindow):
         brand = QLabel("서영 POS")
         brand.setObjectName("brand")
         side.addWidget(brand)
-        independent = QLabel("PDF 새 설계 · 독립판 2.0")
+        independent = QLabel(f"PDF 새 설계 · 독립판 {__version__}")
         independent.setObjectName("independent")
         side.addWidget(independent)
         self.tree = QTreeWidget()
@@ -264,12 +262,20 @@ class MainWindow(QMainWindow):
         top.setContentsMargins(20, 8, 20, 8)
         self.location = QLabel("독립형 매장 업무")
         top.addWidget(self.location, 1)
-        top.addWidget(QLabel(f"{store.actor['name']} · {'관리자' if store.actor['role'] == 'admin' else '일반 사용자'}"))
+        top.addWidget(QLabel(f"{store.actor['name']} · {'관리자 모드' if store.actor['role'] == 'admin' else '일반 사용자'}"))
+        self.admin_mode_button = None
+        if store.actor["role"] == "admin":
+            self.admin_mode_button = action("관리자 설정", lambda: self.open_page("settings"))
+            top.addWidget(self.admin_mode_button)
         top.addWidget(action("비밀번호 변경", self.password))
         top.addWidget(action("로그아웃", self.logout))
         right.addWidget(header)
         if demo:
             banner = QLabel("체험 모드 · 실제 거래자료와 분리된 샘플입니다. 스캔·반품·실사·라벨을 시험할 수 있습니다.")
+            banner.setObjectName("notice")
+            right.addWidget(banner)
+        elif store.actor["code"] == "admin" and store.default_login_available():
+            banner = QLabel("초기 비밀번호를 사용 중입니다. 상단 ‘비밀번호 변경’에서 새 비밀번호로 변경해 주세요.")
             banner.setObjectName("notice")
             right.addWidget(banner)
         self.stack = QStackedWidget()
@@ -313,6 +319,30 @@ class MainWindow(QMainWindow):
         self.notify(f"새 독립판 DB: {store.path} · F8 바코드  F5 조회  Ctrl+E 엑셀  Ctrl+P 인쇄")
         if self.items:
             self.open_page("overview" if "overview" in self.items else next(iter(self.items)))
+        self.maintenance_timer = QTimer(self)
+        self.maintenance_timer.setInterval(60 * 60 * 1000)
+        self.maintenance_timer.timeout.connect(self.maintain_backups)
+        self.maintenance_timer.start()
+        QTimer.singleShot(500, self.maintain_backups)
+
+    def maintain_backups(self):
+        if not self.isVisible() or QApplication.activeModalWidget() is not None:
+            return
+        try:
+            result = self.store.run_backup_retention()
+            if result["deleted"] or result["failed"]:
+                message = f"오래된 백업 {len(result['deleted']):,}개를 삭제했습니다.\n최근 생성된 백업 15개는 그대로 보관합니다."
+                if result["failed"]:
+                    message += f"\n사용 중인 파일 {len(result['failed']):,}개는 삭제하지 못했습니다."
+                QMessageBox.information(self, "주간 백업 정리", message)
+                if "settings" in self.pages and self.store.actor and self.store.actor["role"] == "admin":
+                    self.pages["settings"].refresh_backups()
+        except (ValueError, PermissionError, OSError):
+            self.notify("백업 정리를 완료하지 못했습니다. 설정에서 백업 폴더를 확인하세요.")
+
+    def closeEvent(self, event):
+        self.maintenance_timer.stop()
+        super().closeEvent(event)
 
     def allowed(self, permission):
         actor = self.store.actor
@@ -322,10 +352,13 @@ class MainWindow(QMainWindow):
     def open_page(self, key):
         if key not in self.items:
             return False
-        from .catalog_ui import ProductsPage, PartnersPage, UsersPage, SettingsPage
+        from .catalog_ui import ProductsPage, CategoriesPage, PartnersPage, UsersPage, SettingsPage
         from .workflow_ui import TradesPage, LedgerPage, CountsPage, ReportPage, ClosingsPage
         from .loyalty_ui import MembersPage, PromotionsPage, PricesPage, GiftsPage
+        from .payment_ui import SupplierPaymentsPage
         factories = {"overview": lambda: OverviewPage(self), "products": lambda: ProductsPage(self), "suppliers": lambda: PartnersPage(self, "supplier"), "customers": lambda: PartnersPage(self, "customer"), "purchases": lambda: TradesPage(self, "purchase"), "sales": lambda: TradesPage(self, "sale"), "ledger": lambda: LedgerPage(self), "inventory": lambda: InventoryPage(self), "counts": lambda: CountsPage(self), "closings": lambda: ClosingsPage(self), "members": lambda: MembersPage(self), "promotions": lambda: PromotionsPage(self), "prices": lambda: PricesPage(self), "gifts": lambda: GiftsPage(self), "reports": lambda: ReportPage(self), "commission": lambda: CommissionPage(self), "labels": lambda: LabelsPage(self), "users": lambda: UsersPage(self), "settings": lambda: SettingsPage(self)}
+        factories["categories"] = lambda: CategoriesPage(self)
+        factories["payments"] = lambda: SupplierPaymentsPage(self)
         try:
             if key not in self.pages:
                 page = factories[key]()
@@ -412,6 +445,15 @@ class MainWindow(QMainWindow):
             self.store.logout()
             self.close()
 
+    def finish_restore(self, result):
+        self.maintenance_timer.stop()
+        self.setEnabled(False)
+        for page in self.pages.values():
+            page.hide()
+        QMessageBox.information(self, "백업 복원 완료", "백업 자료를 불러왔습니다. 프로그램을 종료합니다.\n다시 실행한 뒤 백업 당시 계정·비밀번호로 로그인하세요.\n\n복원 전 자료의 자동 백업:\n" + result["safety_backup"])
+        self.close()
+        QApplication.instance().quit()
+
 
 def data_directory():
     if getattr(sys, "frozen", False):
@@ -443,8 +485,13 @@ def main(argv=None):
     directory = Path(scratch.name) if scratch else args.data_dir or data_directory()
     is_demo = args.demo or args.smoke_test
     path = directory / ("seoyoung-standalone-demo.db" if is_demo else "seoyoung-standalone-v2.db")
-    store, backdrop, window = None, None, None
+    store, backdrop, window, process_lock = None, None, None, None
     try:
+        directory.mkdir(parents=True, exist_ok=True)
+        process_lock = QLockFile(str(path) + ".lock")
+        process_lock.setStaleLockTime(0)
+        if not process_lock.tryLock(0):
+            raise ValueError("이 장부를 사용하는 프로그램이 이미 실행 중입니다. 기존 창을 종료한 뒤 다시 실행하세요.")
         store = Store(path)
         if is_demo:
             from .demo import seed
@@ -483,13 +530,59 @@ def main(argv=None):
                             assert len(reopened.documents(status="posted")) >= 9
                         finally:
                             reopened.close()
+                        backup_file = store.create_backup()
+                        store.save_member({"code": "SMOKE-RESTORE", "name": "복원 검증용 임시 회원"})
+                        restored = store.restore_backup(backup_file, DEMO_PASSWORD)
+                        assert Path(restored["safety_backup"]).is_file()
+                        store.login(DEMO_CODE, DEMO_PASSWORD)
+                        assert not store.members("SMOKE-RESTORE")
                     window.open_page("products")
                     app.processEvents()
                     if args.screenshot:
                         args.screenshot.parent.mkdir(parents=True, exist_ok=True)
                         assert window.grab().save(str(args.screenshot))
+                        if args.smoke_test:
+                            from .workflow_ui import ProductPicker, TradeDialog
+                            def capture(suffix, widget):
+                                widget.show()
+                                app.processEvents()
+                                target = args.screenshot.with_name(args.screenshot.stem + suffix + args.screenshot.suffix)
+                                assert widget.grab().save(str(target))
+                            purchase = TradeDialog(window, "purchase")
+                            first = store.products()[0]
+                            purchase.partner.setCurrentIndex(purchase.partner.findData(first["supplier_id"]))
+                            for product in store.products(supplier_id=first["supplier_id"]):
+                                purchase.scan_barcode(product["barcode"])
+                            purchase.paid.setText("5000")
+                            assert "미지급잔액" in purchase.balance_label.text()
+                            capture("-purchase", purchase)
+                            picker = ProductPicker(purchase)
+                            assert picker.supplier_only.isChecked()
+                            assert 0 < picker.grid.rowCount() < len(store.products())
+                            capture("-product-search", picker)
+                            picker.close()
+                            purchase.close()
+                            window.open_page("categories")
+                            capture("-categories", window)
+                            window.open_page("settings")
+                            assert window.current_page.backup_grid.rowCount() >= 2
+                            capture("-backup", window)
+                            window.open_page("payments")
+                            capture("-payments", window)
+                            fresh_login_store = Store(directory / "smoke-login.db")
+                            try:
+                                first_login = LoginDialog(fresh_login_store, window)
+                                assert first_login.code.text() == "admin" and "1234" in first_login.hint.text()
+                                capture("-login", first_login)
+                                first_login.submit()
+                                assert fresh_login_store.actor["code"] == "admin"
+                                fresh_login_store.change_password("1234", "Smoke-Admin-2026!")
+                                assert not fresh_login_store.default_login_available()
+                                first_login.close()
+                            finally:
+                                fresh_login_store.close()
                     if args.smoke_test:
-                        print(f"PASS standalone-v2: {len(window.items)} desktop pages, returns, expanded units, persistence, no legacy imports", flush=True)
+                        print(f"PASS standalone-v2: {len(window.items)} desktop pages, returns, expanded units, persistence, backup restore, no legacy imports", flush=True)
                         app.exit(0)
                 except BaseException:
                     import traceback
@@ -512,5 +605,7 @@ def main(argv=None):
             backdrop.close()
         if store:
             store.close()
+        if process_lock:
+            process_lock.unlock()
         if scratch:
             scratch.cleanup()

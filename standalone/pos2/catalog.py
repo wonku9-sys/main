@@ -10,6 +10,109 @@ PARTNER_TEXT = ("code", "name", "business_no", "contact", "phone", "bank", "acco
 
 
 class CatalogMixin:
+    def _init_catalog(self):
+        for row in self.db.execute("SELECT DISTINCT category,category_mid,category_small FROM products"):
+            self._ensure_category_path(*row, allow_inactive=True)
+
+    def _ensure_category_path(self, category, middle="", small="", allow_inactive=False):
+        parent = None
+        for level, name in enumerate((category, middle, small), 1):
+            if not name:
+                break
+            self.db.execute("INSERT OR IGNORE INTO product_categories(parent_id,name,level) VALUES(?,?,?)", (parent, name, level))
+            row = self.db.execute("SELECT id,active FROM product_categories WHERE parent_id IS ? AND name=?", (parent, name)).fetchone()
+            if not row["active"] and not allow_inactive:
+                raise ValueError("무효 분류는 새 상품에 지정할 수 없습니다. 분류를 먼저 유효화하세요.")
+            parent = row["id"]
+        return parent
+
+    def _category_path(self, identifier):
+        path = []
+        while identifier is not None:
+            row = self.db.execute("SELECT * FROM product_categories WHERE id=?", (identifier,)).fetchone()
+            if not row or len(path) >= 3:
+                raise ValueError("상품 분류를 찾을 수 없습니다.")
+            path.insert(0, row["name"])
+            identifier = row["parent_id"]
+        return path
+
+    def categories(self):
+        self._require("catalog")
+        result = []
+        for row in self.db.execute("SELECT * FROM product_categories ORDER BY level,name,id"):
+            item = dict(row)
+            item["path"] = self._category_path(row["id"])
+            columns = ("category", "category_mid", "category_small")[:row["level"]]
+            clause = " AND ".join(f"{key}=?" for key in columns)
+            item["product_count"] = self.db.execute("SELECT COUNT(*) FROM products WHERE " + clause, item["path"]).fetchone()[0]
+            result.append(item)
+        return result
+
+    def save_category(self, data, id=None):
+        with self._tx():
+            self._require("catalog")
+            name = text(data.get("name"), "분류명", True, 300)
+            old = self.db.execute("SELECT * FROM product_categories WHERE id=?", (id,)).fetchone() if id else None
+            if id and not old:
+                raise ValueError("분류를 찾을 수 없습니다.")
+            if old:
+                if data.get("parent_id", old["parent_id"]) != old["parent_id"]:
+                    raise ValueError("기존 분류의 상위 분류는 변경할 수 없습니다.")
+                path = self._category_path(id)
+                columns = ("category", "category_mid", "category_small")[:old["level"]]
+                rows = self.db.execute("SELECT id FROM products WHERE " + " AND ".join(f"{key}=?" for key in columns), path).fetchall()
+                active = int(bool(data.get("active", old["active"])))
+                if active and old["parent_id"]:
+                    ancestor = self.db.execute("SELECT active FROM product_categories WHERE id=?", (old["parent_id"],)).fetchone()
+                    if not ancestor[0]:
+                        raise ValueError("상위 분류를 먼저 유효화하세요.")
+                self.db.execute("UPDATE product_categories SET name=?,active=? WHERE id=?", (name, active, id))
+                if not active:
+                    self.db.execute("WITH RECURSIVE branch(id) AS (SELECT ? UNION ALL SELECT c.id FROM product_categories c JOIN branch b ON c.parent_id=b.id) UPDATE product_categories SET active=0 WHERE id IN (SELECT id FROM branch)", (id,))
+                field = columns[-1]
+                for product in rows:
+                    self.db.execute(f"UPDATE products SET {field}=?,updated_at=? WHERE id=?", (name, now(), product[0]))
+                    self._audit("category_rename", "product", product[0], {"changes": {field: {"old": path[-1], "new": name}}})
+            else:
+                parent = data.get("parent_id")
+                level = len(self._category_path(parent)) + 1 if parent is not None else 1
+                if level > 3:
+                    raise ValueError("분류는 대분류·중분류·소분류까지 만들 수 있습니다.")
+                if parent is not None and not self.db.execute("SELECT active FROM product_categories WHERE id=?", (parent,)).fetchone()[0]:
+                    raise ValueError("무효 분류 아래에는 새 분류를 추가할 수 없습니다.")
+                id = self.db.execute("INSERT INTO product_categories(parent_id,name,level) VALUES(?,?,?)", (parent, name, level)).lastrowid
+            self._audit("update_category" if old else "create_category", "category", id, {"name": name})
+        return id
+
+    def delete_category(self, id):
+        with self._tx():
+            self._require("catalog")
+            path = self._category_path(id)
+            if not path:
+                raise ValueError("삭제할 분류를 선택하세요.")
+            if self.db.execute("SELECT 1 FROM product_categories WHERE parent_id=?", (id,)).fetchone():
+                raise ValueError("하위 분류를 먼저 삭제하세요.")
+            columns = ("category", "category_mid", "category_small")[:len(path)]
+            if self.db.execute("SELECT 1 FROM products WHERE " + " AND ".join(f"{key}=?" for key in columns) + " LIMIT 1", path).fetchone():
+                raise ValueError("등록된 상품이 사용하는 분류입니다. 상품의 분류를 먼저 변경하세요.")
+            self.db.execute("DELETE FROM product_categories WHERE id=?", (id,))
+            self._audit("delete_category", "category", id, {"path": path})
+
+    def _record_product_code(self, code):
+        tail = code[1:] if code.startswith("P") else ""
+        if tail.isascii() and tail.isdigit() and len(tail) <= 12:
+            self.db.execute("INSERT INTO code_sequences(name,last_value) VALUES('product',?) ON CONFLICT(name) DO UPDATE SET last_value=MAX(last_value,excluded.last_value)", (int(tail),))
+
+    def _next_product_code(self):
+        maximum = self.db.execute("SELECT COALESCE(MAX(CAST(SUBSTR(code,2) AS INTEGER)),0) FROM products WHERE code GLOB 'P[0-9]*' AND SUBSTR(code,2) NOT GLOB '*[^0-9]*' AND LENGTH(code)<=13").fetchone()[0]
+        saved = self.db.execute("SELECT last_value FROM code_sequences WHERE name='product'").fetchone()
+        number = max(maximum, saved[0] if saved else 0) + 1
+        if number > 999_999_999_999:
+            raise ValueError("상품 자동코드 번호 범위를 초과했습니다.")
+        code = f"P{number:05d}"
+        self._record_product_code(code)
+        return code
+
     def _next_code(self, table, prefix, kind=None):
         number = 1
         while self.db.execute(f"SELECT 1 FROM {table} WHERE code=?" + (" AND kind=?" if kind else ""), ((f"{prefix}{number:05d}", kind) if kind else (f"{prefix}{number:05d}",))).fetchone():
@@ -20,7 +123,8 @@ class CatalogMixin:
         opening = self.db.execute("SELECT opening_balance FROM partners WHERE id=?", (identifier,)).fetchone()[0]
         charge = self.db.execute("SELECT COALESCE(SUM(CASE WHEN kind IN ('purchase_return','sale_return') THEN -(total-points_used) ELSE total-points_used END),0) FROM documents WHERE partner_id=? AND status='posted'", (identifier,)).fetchone()[0]
         paid = self.db.execute("SELECT COALESCE(SUM(amount),0) FROM payments WHERE partner_id=? AND voided=0", (identifier,)).fetchone()[0]
-        return opening + charge - paid
+        opening_paid = self.db.execute("SELECT COALESCE(SUM(opening_amount),0) FROM supplier_settlements WHERE partner_id=? AND voided=0", (identifier,)).fetchone()[0]
+        return opening + charge - paid - opening_paid
 
     def partners(self, kind, search=""):
         self._require("catalog", "trade", "reports")
@@ -91,8 +195,8 @@ class CatalogMixin:
     def products(self, search="", supplier_id=None, category="", active_only=False):
         self._require("catalog", "trade", "inventory", "reports", "loyalty")
         term = f"%{text(search)}%"
-        sql = "SELECT p.*,s.name AS supplier_name FROM products p LEFT JOIN partners s ON s.id=p.supplier_id WHERE (p.name LIKE ? OR p.code LIKE ? OR p.barcode LIKE ? OR p.keywords LIKE ? OR p.receipt_name LIKE ? OR EXISTS(SELECT 1 FROM product_units u WHERE u.product_id=p.id AND u.barcode LIKE ?))"
-        params = [term] * 6
+        sql = "SELECT p.*,s.name AS supplier_name FROM products p LEFT JOIN partners s ON s.id=p.supplier_id WHERE (p.name LIKE ? OR p.code LIKE ? OR p.barcode LIKE ? OR p.specification LIKE ? OR p.keywords LIKE ? OR p.receipt_name LIKE ? OR EXISTS(SELECT 1 FROM product_units u WHERE u.product_id=p.id AND u.barcode LIKE ?))"
+        params = [term] * 7
         if supplier_id is not None:
             sql += " AND p.supplier_id=?"
             params.append(supplier_id)
@@ -118,8 +222,13 @@ class CatalogMixin:
                 raise ValueError("상품을 찾을 수 없습니다.")
             values = dict(old) if old else {key: "" for key in PRODUCT_TEXT}
             values.update({key: text(data.get(key, values[key]), key, key == "name", 4000 if key == "memo" else 300) for key in PRODUCT_TEXT})
-            values["code"] = values["code"] or self._next_code("products", "P")
+            values["code"] = values["code"] or (old["code"] if old else self._next_product_code())
+            self._record_product_code(values["code"])
             values["category"] = values["category"] or "미분류"
+            if values["category_small"] and not values["category_mid"]:
+                raise ValueError("소분류를 정하려면 중분류를 먼저 선택하세요.")
+            unchanged = bool(old and all(values[key] == old[key] for key in ("category", "category_mid", "category_small")))
+            self._ensure_category_path(values["category"], values["category_mid"], values["category_small"], allow_inactive=unchanged)
             values["base_unit"] = values["base_unit"] or "kg"
             values["supplier_id"] = data.get("supplier_id", old["supplier_id"] if old else None) or None
             if values["supplier_id"]:
@@ -131,6 +240,7 @@ class CatalogMixin:
                 raise ValueError("과세·면세 구분을 확인하세요.")
             for key in ("tracked", "active"):
                 values[key] = int(bool(data.get(key, old[key] if old else True)))
+            values["retirement_target"] = int(bool(data.get("retirement_target", old["retirement_target"] if old else False)) and values["active"])
             for key in ("purchase_price", "sale_price"):
                 values[key] = money(data.get(key, old[key] if old else 0))
             values["min_qty"] = qty(data["min_qty"], allow_zero=True) if "min_qty" in data else old["min_qty"] if old else 0
@@ -141,7 +251,7 @@ class CatalogMixin:
                 if values["tracked"] != old["tracked"] and (used or old["stock_qty"] or old["stock_cost"]):
                     raise ValueError("재고 또는 이력이 있는 상품의 재고관리 설정은 변경할 수 없습니다.")
             values["updated_at"] = now()
-            columns = PRODUCT_TEXT + ("supplier_id", "tax_mode", "tracked", "active", "purchase_price", "sale_price", "min_qty", "updated_at")
+            columns = PRODUCT_TEXT + ("supplier_id", "tax_mode", "tracked", "active", "retirement_target", "purchase_price", "sale_price", "min_qty", "updated_at")
             if old:
                 self.db.execute("UPDATE products SET " + ",".join(f"{key}=?" for key in columns) + " WHERE id=?", tuple(values[key] for key in columns) + (id,))
             else:
@@ -228,6 +338,8 @@ class CatalogMixin:
                 row = self.db.execute("SELECT category FROM products WHERE id=?", (identifier,)).fetchone()
                 if not row:
                     raise ValueError("선택한 상품 중 존재하지 않는 상품이 있습니다.")
+                current = self.db.execute("SELECT category_mid,category_small FROM products WHERE id=?", (identifier,)).fetchone()
+                self._ensure_category_path(category, current[0], current[1])
                 self.db.execute("UPDATE products SET category=?,updated_at=? WHERE id=?", (category, now(), identifier))
                 self._audit("bulk_category", "product", identifier, {"changes": {"category": {"old": row[0], "new": category}}})
 

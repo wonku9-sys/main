@@ -40,7 +40,7 @@ jobs:
         with:
           name: standalone-windows-desktop
           if-no-files-found: error
-          path: standalone/dist/SeoyoungPOS-Standalone-Windows-smoke.png
+          path: standalone/dist/SeoyoungPOS-Standalone-Windows-smoke*.png
       - name: Preserve verified packages
         uses: actions/upload-artifact@v4
         with:

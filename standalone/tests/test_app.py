@@ -27,26 +27,55 @@ def login_staff(store, permission):
     store.login("staff", "Staff-Password-2026!")
 
 
-def test_first_admin_enter_moves_to_confirmation_without_implicit_submit(context):
+def test_first_admin_login_has_default_hint_and_enter_authenticates(context):
     app, store = context
     dialog = LoginDialog(store)
     dialog.show()
-    dialog.code.setText("owner")
-    dialog.name.setText("매장 관리자")
-    dialog.password.setText("Owner-Password-2026!")
+    assert dialog.code.text() == "admin" and dialog.password.text() == "1234"
+    assert "1234" in dialog.hint.text() and "변경" in dialog.hint.text()
+    assert store.users_count() == 1 and store.actor is None
     dialog.password.setFocus()
     QTest.keyClick(dialog.password, Qt.Key.Key_Return)
-    assert store.users_count() == 0
-    assert dialog.isVisible()
-    dialog.confirm.setText("Owner-Password-2026!")
-    QTest.keyClick(dialog.confirm, Qt.Key.Key_Return)
     assert store.users_count() == 1
-    assert store.actor["role"] == "admin"
+    assert store.actor["role"] == "admin" and store.actor["code"] == "admin"
+
+
+def test_default_admin_hash_mode_and_password_change_never_resets_on_restart(context):
+    app, store = context
+    dialog = LoginDialog(store)
+    dialog.submit()
+    assert store.actor["code"] == "admin" and store.actor["role"] == "admin"
+    stored = store.db.execute("SELECT password_hash FROM users WHERE code='admin'").fetchone()[0]
+    assert stored.startswith("scrypt$") and stored != "1234"
+    window = MainWindow(store)
+    assert window.admin_mode_button is not None
+    assert {"users", "settings", "payments"} <= set(window.items)
+    window.admin_mode_button.click()
+    assert window.current_key == "settings"
+    store.change_password("1234", "Local-Only-Password-2026!")
+    assert not store.default_login_available()
+    again = LoginDialog(store)
+    assert not again.initial and again.password.text() == "" and "1234" not in again.hint.text()
+    assert store.users_count() == 1
+    with pytest.raises(ValueError):
+        store.login("admin", "1234")
+    store.login("admin", "Local-Only-Password-2026!")
+
+
+def test_existing_custom_admin_is_never_overwritten_by_default_login(context):
+    _, store = context
+    store.setup_admin("wonku9", "기존 관리자", "Existing-Local-Password-2026!")
+    assert not store.bootstrap_default_admin()
+    dialog = LoginDialog(store)
+    assert not dialog.initial and dialog.password.text() == ""
+    assert store.users_count() == 1
+    store.login("wonku9", "Existing-Local-Password-2026!")
+    assert store.actor["code"] == "wonku9"
 
 
 @pytest.mark.parametrize("permission,keys", [
-    ("catalog", {"products", "suppliers", "customers", "labels"}),
-    ("trade", {"purchases", "sales", "ledger", "closings"}),
+    ("catalog", {"products", "categories", "suppliers", "customers", "labels"}),
+    ("trade", {"purchases", "payments", "sales", "ledger", "closings"}),
     ("inventory", {"inventory", "counts", "closings"}),
     ("reports", {"overview", "reports", "commission"}),
     ("loyalty", {"members", "promotions", "prices", "gifts"}),

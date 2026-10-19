@@ -31,7 +31,8 @@ CREATE TABLE IF NOT EXISTS products (
  stock_qty INTEGER NOT NULL DEFAULT 0 CHECK(stock_qty BETWEEN 0 AND 9000000000000),
  stock_cost INTEGER NOT NULL DEFAULT 0 CHECK(stock_cost BETWEEN 0 AND 9000000000000),
  origin TEXT NOT NULL DEFAULT '', warehouse TEXT NOT NULL DEFAULT '', shelf TEXT NOT NULL DEFAULT '',
- keywords TEXT NOT NULL DEFAULT '', memo TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+ keywords TEXT NOT NULL DEFAULT '', memo TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+ retirement_target INTEGER NOT NULL DEFAULT 0 CHECK(retirement_target IN (0,1))
 );
 CREATE UNIQUE INDEX IF NOT EXISTS product_barcode_unique ON products(barcode) WHERE barcode<>'';
 CREATE TABLE IF NOT EXISTS product_units (
@@ -82,13 +83,22 @@ CREATE TABLE IF NOT EXISTS document_lines (
  commission_amount INTEGER NOT NULL DEFAULT 0 CHECK(commission_amount>=0),
  tax_mode TEXT NOT NULL DEFAULT 'exempt' CHECK(tax_mode IN ('exempt','taxable'))
 );
+CREATE TABLE IF NOT EXISTS supplier_settlements (
+ id INTEGER PRIMARY KEY, partner_id INTEGER NOT NULL REFERENCES partners(id) ON DELETE RESTRICT,
+ date TEXT NOT NULL, amount INTEGER NOT NULL CHECK(amount BETWEEN 1 AND 9000000000000),
+ opening_amount INTEGER NOT NULL DEFAULT 0 CHECK(opening_amount BETWEEN 0 AND amount),
+ method TEXT NOT NULL CHECK(method IN ('cash','transfer')), memo TEXT NOT NULL DEFAULT '',
+ voided INTEGER NOT NULL DEFAULT 0 CHECK(voided IN (0,1)),
+ user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT, created_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS payments (
  id INTEGER PRIMARY KEY, partner_id INTEGER NOT NULL REFERENCES partners(id) ON DELETE RESTRICT,
  document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE RESTRICT,
  date TEXT NOT NULL, amount INTEGER NOT NULL CHECK(ABS(amount)<=9000000000000),
  method TEXT NOT NULL CHECK(method IN ('cash','transfer')), memo TEXT NOT NULL DEFAULT '',
  voided INTEGER NOT NULL DEFAULT 0 CHECK(voided IN (0,1)),
- user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT, created_at TEXT NOT NULL
+ user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT, created_at TEXT NOT NULL,
+ supplier_settlement_id INTEGER REFERENCES supplier_settlements(id) ON DELETE RESTRICT
 );
 CREATE TABLE IF NOT EXISTS stock_events (
  id INTEGER PRIMARY KEY, product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE RESTRICT,
@@ -105,6 +115,15 @@ CREATE TABLE IF NOT EXISTS audit (
  action TEXT NOT NULL, entity TEXT NOT NULL, entity_id INTEGER, detail TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY,value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS code_sequences (
+ name TEXT PRIMARY KEY, last_value INTEGER NOT NULL CHECK(last_value>=0)
+);
+CREATE TABLE IF NOT EXISTS product_categories (
+ id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES product_categories(id) ON DELETE RESTRICT,
+ name TEXT NOT NULL, level INTEGER NOT NULL CHECK(level BETWEEN 1 AND 3),
+ active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1)), UNIQUE(parent_id,name)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS category_root_name ON product_categories(name) WHERE parent_id IS NULL;
 CREATE INDEX IF NOT EXISTS documents_date_kind ON documents(date,kind,status);
 CREATE INDEX IF NOT EXISTS documents_partner ON documents(partner_id,date);
 CREATE INDEX IF NOT EXISTS documents_source_status_date ON documents(source_id,status,date);
@@ -119,3 +138,12 @@ PRAGMA user_version=200;
 
 def initialize(db):
     db.executescript(SCHEMA)
+    columns = {row[1] for row in db.execute("PRAGMA table_info(products)")}
+    if "retirement_target" not in columns:
+        db.execute("ALTER TABLE products ADD COLUMN retirement_target INTEGER NOT NULL DEFAULT 0 CHECK(retirement_target IN (0,1))")
+    category_columns = {row[1] for row in db.execute("PRAGMA table_info(product_categories)")}
+    if "active" not in category_columns:
+        db.execute("ALTER TABLE product_categories ADD COLUMN active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1))")
+    payment_columns = {row[1] for row in db.execute("PRAGMA table_info(payments)")}
+    if "supplier_settlement_id" not in payment_columns:
+        db.execute("ALTER TABLE payments ADD COLUMN supplier_settlement_id INTEGER REFERENCES supplier_settlements(id) ON DELETE RESTRICT")
