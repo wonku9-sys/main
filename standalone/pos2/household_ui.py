@@ -79,6 +79,7 @@ class HouseholdPage(Page):
             dialog=FormDialog("가계부 잠금 해제",self)
             guide=QLabel("나의 가계부\n개인 가계부 암호를 한 번 입력하면 같은 로그인 중에는 다시 묻지 않습니다.");guide.setWordWrap(True);dialog.body.insertWidget(1,guide)
             password=dialog.field("password","가계부 암호",password=True)
+            dialog.body.addWidget(action('가계부 암호 찾기 · 이메일 인증',self.email_reset))
             holder={}
             def unlock():
                 try:holder["key"]=self.store.unlock_household(password.text());password.clear();dialog.accept()

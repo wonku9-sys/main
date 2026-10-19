@@ -3,7 +3,8 @@ from datetime import date
 import time
 
 from PySide6.QtCore import QEvent, QTimer, Qt, QDate
-from PySide6.QtWidgets import QApplication, QComboBox, QDialog, QDialogButtonBox, QHBoxLayout, QLabel, QMessageBox, QTextEdit, QVBoxLayout, QWidget,QCheckBox,QSlider,QLineEdit,QCalendarWidget,QGridLayout
+from PySide6.QtGui import QCursor
+from PySide6.QtWidgets import QApplication, QComboBox, QDialog, QDialogButtonBox, QHBoxLayout, QLabel, QMessageBox, QTextEdit, QVBoxLayout, QWidget,QCheckBox,QSlider,QLineEdit,QCalendarWidget,QGridLayout,QMenu
 
 from .widgets import Page, FormDialog, DataGrid, action, date_field
 from .navigation import mark_saved, confirm_dialog_exit, ask_unsaved
@@ -48,6 +49,7 @@ class DiaryPage(Page):
         password=dialog.field("password","일기장 암호 (8~128자)",password=True)
         confirm=dialog.field("confirm","암호 확인",password=True) if not exists else None
         notice=QLabel("로그인 암호와 다른 암호를 권장합니다.\n잊은 암호는 관리자도 복구할 수 없습니다."); notice.setWordWrap(True); dialog.body.addWidget(notice)
+        if exists:dialog.body.addWidget(action('일기장 암호 찾기 · 이메일 인증',self.reset_email))
         holder={}
         def submit():
             try:
@@ -77,9 +79,10 @@ class DiaryPage(Page):
         def submit():
             try:self.store.change_diary_password(old.text(),new.text(),confirm.text());dialog.accept()
             except (ValueError,PermissionError) as exc:dialog.error(exc)
-        dialog.finish(submit);dialog.exec()
+        dialog.finish(submit);changed=dialog.exec()==QDialog.DialogCode.Accepted
         for field in dialog.fields.values():field.clear()
-        self.store.lock_diary()
+        if changed:self.store.lock_diary()
+        return changed
 
 
 class DiaryDialog(FormDialog):
@@ -121,6 +124,7 @@ class DiaryDialog(FormDialog):
         tools.addWidget(action('건강·병원 기록',self.health));tools.addStretch();tools.addWidget(action("잠그고 닫기",self.lock_close));self.body.addLayout(tools)
         self.body.addWidget(QLabel("같은 로그인 중에는 다시 열 때 암호를 묻지 않습니다. 자리 비움 시 ‘잠그고 닫기’를 사용하세요."))
         tools.insertWidget(2,action('사진·문서 첨부',self.attach))
+        tools.insertWidget(3,action('일기장 설정',self.security_settings))
         self.finish(self.save)
         from .personal_themes import theme_picker
         self.theme=theme_picker(store,'diary',self);self.form.addRow('화면 분위기',self.theme)
@@ -145,6 +149,16 @@ class DiaryDialog(FormDialog):
         self.search.textChanged.connect(lambda *_:self.refresh_entries());self.only_bookmarked.toggled.connect(lambda *_:self.refresh_entries());self.calendar.clicked.connect(self.calendar_day);self.update_word_count()
 
     def snapshot(self):return self.identifier,self.title.text(),self.date.date().toString("yyyy-MM-dd"),self.mood.currentText(),self.editor.toPlainText(),self.tags.text(),self.bookmark.isChecked()
+
+    def security_settings(self):
+        """Show settings only when requested, not beside every diary opening."""
+        menu=QMenu(self)
+        def change():
+            if not self.confirm_change():return
+            if DiaryPage.change_password(self):
+                self._lock_on_close=True;self.wipe();QDialog.reject(self)
+        for title,callback in [('일기장 암호 변경',change),('일기장 이메일 복구 등록',lambda:DiaryPage.enable_email(self)),('일기장 암호 찾기 · 이메일 인증',lambda:DiaryPage.reset_email(self))]:menu.addAction(title,callback)
+        self._security_menu=menu;menu.popup(QCursor.pos())
 
     def insert_template(self):
         templates=['오늘 고마웠던 일 3가지\n1. \n2. \n3. \n\n내일 나에게 전하고 싶은 말\n',

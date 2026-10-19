@@ -122,6 +122,10 @@ def build(output, native=False):
         capture = screenshot.with_name(screenshot.stem + suffix + screenshot.suffix)
         if not capture.is_file() or capture.stat().st_size < 1000:
             raise RuntimeError(f"The frozen executable did not validate its new workflow screen: {suffix}")
+    for suffix in ('-worklog-independent','-diary-independent'):
+        capture=screenshot.with_name(screenshot.stem+suffix+screenshot.suffix)
+        if not capture.is_file() or capture.stat().st_size<1000:
+            raise RuntimeError(f"The frozen executable did not validate visible single-window content: {suffix}")
     if label == "Windows":
         (bundle / "체험 실행.bat").write_bytes(b'@echo off\r\ncd /d "%~dp0"\r\n"SY-POS.exe" --demo\r\n')
     documents = bundle / "안내문서"

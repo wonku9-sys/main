@@ -88,6 +88,12 @@ def test_independent_menus_are_modeless_and_exit_honours_unsaved_changes(shop,mo
     window=MainWindow(s,popup_menus=True);window.navigation.enable();window.show()
     assert window.open_page('products') and window.open_page('purchases') and window.open_page('worklog')
     app.processEvents();assert all(not w.isModal() and w.isVisible() for w in window.popup_windows.values())
+    for key in ('products','purchases','worklog'):
+        assert window.scrollers[key].isVisible() and window.pages[key].isVisible()
+        assert window.pages[key].grid.isVisible()
+    assert window.popup_windows['worklog'].close()
+    assert window.open_page('worklog');app.processEvents()
+    assert window.scrollers['worklog'].isVisible() and window.pages['worklog'].grid.isVisible()
     assert len(window.popup_windows)==3;assert window.open_page('products') and len(window.popup_windows)==3
     assert all(not item.icon(0).isNull() for item in window.items.values())
     assert window.open_page('purchases')

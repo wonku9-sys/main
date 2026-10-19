@@ -14,6 +14,9 @@ class PageWindow(QDialog):
         layout=QVBoxLayout(self);layout.setContentsMargins(0,0,0,0)
         tools=QHBoxLayout();tools.addWidget(action('첫화면',desktop.go_home));tools.addWidget(action('새로고침',self.refresh));tools.addStretch();tools.addWidget(action('이 창 닫기',self.close));layout.addLayout(tools)
         layout.addWidget(scroll,1)
+        # QStackedWidget hides non-current pages explicitly. Reparenting that
+        # scroll area into a dialog does not clear its hidden flag by itself.
+        scroll.show()
         self.setWindowModality(Qt.WindowModality.NonModal)
 
     def refresh(self):

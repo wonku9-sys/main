@@ -4,8 +4,9 @@ from decimal import Decimal
 import sqlite3
 from types import SimpleNamespace
 import pytest
-from PySide6.QtCore import QDate,QCoreApplication,QEvent
-from PySide6.QtWidgets import QApplication,QMessageBox
+from PySide6.QtCore import QDate,QCoreApplication,QEvent,Qt
+from PySide6.QtTest import QTest
+from PySide6.QtWidgets import QApplication,QMessageBox,QLabel
 from pos2.store import Store
 from pos2.recovery import SCHEMA_VERSION
 
@@ -116,10 +117,46 @@ def test_public_lucky_requires_no_store_or_login(app):
     d=open_lucky_numbers();assert not d.isModal()
     for _ in range(6):d.page.draw();d.page.finish_draw()
     assert len(set(d.page.drawn))==6 and all(1<=n<=45 for n in d.page.drawn)
-    assert len(d.page.remaining)==39 and not d.page.draw_button.isEnabled()
-    old=list(d.page.drawn);d.page.draw();d.page.finish_draw();assert d.page.drawn==old
+    assert len(d.page.remaining)==39 and d.page.draw_button.isEnabled()
+    assert d.page.results==[sorted(d.page.drawn)]
     d.page.copy();assert '행운의 숫자' in app.clipboard().text()
     d.page.reset(False);assert d.page.drawn==[] and len(d.page.remaining)==45;d.close();assert open_lucky_numbers() is d;d.close();d.deleteLater();QCoreApplication.sendPostedEvents(None,QEvent.Type.DeferredDelete);app.processEvents()
+
+def test_lucky_single_and_batch_draws_keep_five_rows_without_photo(app):
+    from pos2.lucky_numbers import LuckyNumbersDialog
+    d=LuckyNumbersDialog();d.show();app.processEvents();p=d.page
+    try:
+        assert not p.machine.image.isNull() and p.machine.image.hasAlphaChannel()
+        labels=p.findChildren(QLabel)
+        assert not any(label.pixmap() and not label.pixmap().isNull() for label in labels)
+        assert not any(label.openExternalLinks() or '<a ' in label.text() or '사진 출처' in label.text() for label in labels)
+        QTest.mouseClick(p.machine,Qt.MouseButton.LeftButton);assert p.timer.isActive()
+        p.draw_five();assert p.batch_rows==0  # A second click cannot change a running draw.
+        p.finish_draw();assert len(p.drawn)==1 and not p.results
+        first=p.drawn[0];p.draw_six();p.finish_draw();assert len(p.results)==1 and first in p.results[0]
+        original=list(p.results[0]);p.draw();p.finish_draw();assert len(p.drawn)==1 and p.results[0]==original
+        partial=p.drawn[0];p.draw_five();p.finish_draw()
+        assert len(p.results)==5 and p.results[0]==original and partial in p.results[1]
+        for index,values in enumerate(p.results):
+            assert len(values)==len(set(values))==6 and values==sorted(values) and all(1<=n<=45 for n in values)
+            assert [label.text() for label in p.rows[index]]==list(map(str,values))
+        assert not any(button.isEnabled() for button in (p.draw_button,p.six_button,p.five_button))
+        old=[list(values) for values in p.results];p.draw();p.draw_six();p.draw_five();p.finish_draw();assert p.results==old
+        p.copy();assert len(app.clipboard().text().splitlines())==6
+        p.reset(False);assert p.results==[] and p.drawn==[] and p.draw_button.isEnabled()
+        assert all(label.text()=='?' for values in p.rows for label in values)
+        p.draw_five();p.finish_draw();assert len(p.results)==5
+        d.resize(900,780);app.processEvents();assert not d.grab().isNull()
+    finally:d.close();d.deleteLater();app.processEvents()
+
+def test_lucky_close_stops_batch_without_losing_completed_rows(app):
+    from pos2.lucky_numbers import LuckyNumbersDialog
+    d=LuckyNumbersDialog();p=d.page
+    try:
+        p.draw_six();p.finish_draw();old=list(p.results[0]);p.draw_five();d.close()
+        assert not p.timer.isActive() and not p.machine.running and p.results==[old]
+        d.show();p.draw_six();p.finish_draw();assert len(p.results)==2 and p.results[0]==old
+    finally:d.close();d.deleteLater();app.processEvents()
 
 def logistics():
     return dict(status='done',category='입출고',customer='예시 고객사',handling_revenue='200000.25',storage_revenue='50000.50',rent_cost='20000.25',management_cost='5000.50',

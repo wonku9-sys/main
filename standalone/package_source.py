@@ -18,6 +18,7 @@ def source_files():
     files += [ROOT / "pos2" / "assets" / name for name in ("NotoSansKR-Regular.ttf", "OFL.txt", "FONT_SOURCE.md", "sy-monogram.png", "SY_LOGO.md")]
     files += list((ROOT / 'pos2' / 'assets').glob('step-*.svg'))
     files += [ROOT/'pos2'/'assets'/name for name in ('lottery-machine.jpg','LOTTERY_IMAGE.md')]
+    files += [ROOT/'pos2'/'assets'/name for name in ('lucky-machine-realistic.png','LUCKY_MACHINE.md')]
     files += [ROOT.parent / ".github" / "workflows" / "standalone-windows.yml"]
     for source in sorted(set(files)):
         if source.is_file() and "__pycache__" not in source.parts:

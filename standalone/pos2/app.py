@@ -647,16 +647,16 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "조회 실패", str(exc))
             return False
         self.current_key, self.current_page = key, page
-        if self.popup_menus and key!='home' or key in self.popup_windows:
+        if self.popup_menus and key in {'diary','household'}:
+            # Keep the settings/landing page cached, but do not open a second
+            # shell window behind the actual private editor.
+            (page.open_diary if key=='diary' else page.open_book)()
+        elif self.popup_menus and key!='home' or key in self.popup_windows:
             from .independent_windows import PageWindow
             if key not in self.popup_windows:
                 self.stack.removeWidget(self.scrollers[key])
                 self.popup_windows[key]=PageWindow(self,key,page,self.scrollers[key])
             popup=self.popup_windows[key];popup.show();popup.raise_();popup.activateWindow()
-            # Personal menu buttons open the actual private editor directly;
-            # the smaller landing/settings window remains independently usable.
-            if key in {'diary','household'}:
-                (page.open_diary if key=='diary' else page.open_book)()
         else:self.stack.setCurrentWidget(self.scrollers[key])
         self.tree.setCurrentItem(self.items[key])
         if key == "home":
@@ -1044,16 +1044,26 @@ def main(argv=None):
                             from .email_ui import EmailCodeDialog
                             mail_recovery=EmailCodeDialog(store,'bind',window);capture('-email-recovery',mail_recovery);mail_recovery.close()
                             window.popup_menus=True
-                            window.open_page('products');window.open_page('purchases')
+                            window.open_page('products');window.open_page('purchases');window.open_page('worklog');app.processEvents()
+                            window.pages['worklog'].tabs.setCurrentIndex(0);app.processEvents()
                             assert all(not popup.isModal() for popup in window.popup_windows.values())
+                            assert all(window.scrollers[key].isVisible() and window.pages[key].isVisible() for key in window.popup_windows)
+                            assert window.pages['worklog'].grid.isVisible()
+                            capture('-worklog-independent',window.popup_windows['worklog'])
                             capture('-independent-windows',window.popup_windows['purchases'])
+                            from .private_session import remember_key
+                            single_key=store.unlock_diary('Smoke-Diary-Only-2026!');remember_key(store,'diary',single_key);single_key[:]=bytes(len(single_key))
+                            window.open_page('diary');app.processEvents()
+                            assert 'diary' not in window.popup_windows
+                            assert window.personal_windows['diary'].isVisible()
+                            capture('-diary-independent',window.personal_windows['diary'])
                             from .independent_windows import close_independent_windows
                             assert close_independent_windows(window)
                             window.popup_menus=False;window.open_page('home')
                             from .lucky_numbers import open_lucky_numbers
                             lucky=open_lucky_numbers(window)
-                            for _ in range(6):lucky.page.draw();lucky.page.finish_draw()
-                            assert len(set(lucky.page.drawn))==6
+                            lucky.page.draw_five();lucky.page.finish_draw()
+                            assert len(lucky.page.results)==5 and all(len(set(values))==6 for values in lucky.page.results)
                             capture('-lucky-numbers',lucky);lucky.close()
                     if args.smoke_test:
                         print(f"PASS standalone-v2: {len(window.items)} desktop pages, returns, expanded units, persistence, backup restore, no legacy imports", flush=True)
