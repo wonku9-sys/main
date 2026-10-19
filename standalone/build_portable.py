@@ -1,0 +1,139 @@
+"""Build only the clean standalone POS; run on Windows for a Windows release."""
+
+import argparse
+from hashlib import sha256
+from importlib import metadata
+import os
+from pathlib import Path
+import platform
+import shutil
+import subprocess
+import sys
+import sysconfig
+import tempfile
+from zipfile import ZIP_DEFLATED, ZipFile
+
+ROOT = Path(__file__).resolve().parent
+APP = "SeoyoungPOS-Standalone"
+DISTRIBUTIONS = ("PySide6", "PySide6-Essentials", "PySide6-Addons", "shiboken6", "openpyxl", "et-xmlfile", "python-barcode", "pyinstaller")
+
+
+def licenses(destination):
+    """Distribute original third-party notices, not application source from elsewhere."""
+    lines = ["# Third-party components", "", "Original license and notice files accompany the runtime in this directory.", ""]
+    destination.mkdir()
+    qt_notices = ROOT / "third-party-licenses"
+    for source in qt_notices.glob("*.txt"):
+        shutil.copy2(source, destination / source.name)
+    if not (destination / "Qt-LGPL-3.0-only.txt").exists():
+        raise RuntimeError("The original Qt LGPL notice must accompany the standalone source.")
+    python_notice = next((path for path in (Path(sys.base_prefix) / "LICENSE.txt", Path(sysconfig.get_path("stdlib")) / "LICENSE.txt") if path.is_file()), None)
+    if python_notice is None:
+        raise RuntimeError("The Python interpreter's original LICENSE.txt must be available before distribution.")
+    shutil.copy2(python_notice, destination / "Python-LICENSE.txt")
+    for name in DISTRIBUTIONS:
+        distribution = metadata.distribution(name)
+        copied = 0
+        for entry in distribution.files or ():
+            parts = entry.parts
+            lowered = [part.lower() for part in parts]
+            if not any("license" in part or "licence" in part or part.startswith("copying") or part.startswith("notice") for part in lowered):
+                continue
+            source = Path(distribution.locate_file(entry))
+            if not source.is_file() or source.suffix.lower() not in {"", ".txt", ".md", ".rst", ".html", ".json", ".python"}:
+                continue
+            safe = [part for part in parts if part not in {"..", ".", "/"}]
+            target = destination / name / Path(*safe)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
+            copied += 1
+        lines.append(f"- {distribution.metadata['Name']} {distribution.version}: {copied} original notice files; {distribution.metadata.get('License-Expression') or distribution.metadata.get('License') or 'see notices'}")
+        if not copied and name not in {"PySide6", "PySide6-Essentials", "PySide6-Addons", "shiboken6"}:
+            raise RuntimeError(f"No original license notice found for {name}; do not distribute an incomplete package.")
+    lines.extend(["", "Qt for Python (PySide6 / Shiboken6) uses the accompanying Qt-LGPL-3.0-only.txt and Qt-GPL-3.0-only.txt notices.",
+                  "Qt for Python source and license options: https://www.qt.io/qt-for-python / https://code.qt.io/pyside/pyside-setup.git/",
+                  "The application uses dynamically linked Qt libraries in _internal; no restriction on replacing those libraries is imposed."])
+    (destination / "COMPONENTS.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def check_entry(path):
+    relative = path.as_posix().lower()
+    if path.suffix.lower() in {".db", ".sqlite", ".sqlite3", ".env", ".key", ".pem"} or relative.endswith(("-wal", "-shm")):
+        raise RuntimeError(f"Business data or private file must never be packaged: {path}")
+    if "seoyoung_pos" in relative or "data-v2" in path.parts:
+        raise RuntimeError(f"Legacy application or business data path detected: {path}")
+
+
+def build(output, native=False):
+    if sys.platform != "win32" and not native:
+        raise RuntimeError("Windows EXE must be built on Windows. Use --native only for a clearly labelled local-platform validation build.")
+    if platform.machine().lower() not in {"amd64", "x86_64"}:
+        raise RuntimeError("This release target is x64 only.")
+    label = "Windows" if sys.platform == "win32" else "Linux" if sys.platform.startswith("linux") else platform.system()
+    output = output.resolve()
+    bundle = output / APP
+    archive = output / f"{APP}-{label}-x64-portable.zip"
+    if bundle.exists() or archive.exists() or archive.with_suffix(archive.suffix + ".sha256").exists():
+        raise RuntimeError("Output already exists. Preserve it and choose a fresh --output directory.")
+    if not (ROOT / "README.md").is_file():
+        raise RuntimeError("The independent application's README.md is required before packaging.")
+    output.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="seoyoung-standalone-build-") as scratch:
+        temporary = Path(scratch)
+        command = [sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--onedir", "--windowed", "--name", APP,
+                   "--paths", str(ROOT), "--distpath", str(output), "--workpath", str(temporary / "work"), "--specpath", str(temporary),
+                   "--hidden-import", "PySide6.QtPrintSupport", "--hidden-import", "PySide6.QtSvg", "--collect-all", "barcode", "--exclude-module", "seoyoung_pos", str(ROOT / "launch.py")]
+        build_environment = dict(os.environ)
+        build_environment["PYINSTALLER_CONFIG_DIR"] = str(temporary / "cache")
+        subprocess.run(command, cwd=ROOT, env=build_environment, check=True)
+    executable = bundle / (APP + ".exe" if sys.platform == "win32" else APP)
+    if not executable.is_file():
+        raise RuntimeError("The frozen executable was not created.")
+    environment = dict(os.environ)
+    environment["QT_QPA_PLATFORM"] = "offscreen"
+    screenshot = output / f"{APP}-{label}-smoke.png"
+    subprocess.run([str(executable), "--smoke-test", "--screenshot", str(screenshot)], cwd=bundle, env=environment, check=True, timeout=180)
+    if not screenshot.is_file() or screenshot.stat().st_size < 1000:
+        raise RuntimeError("The real frozen executable did not produce its desktop screenshot.")
+    if label == "Windows":
+        (bundle / "체험 실행.bat").write_bytes(b'@echo off\r\ncd /d "%~dp0"\r\n"SeoyoungPOS-Standalone.exe" --demo\r\n')
+    documents = bundle / "안내문서"
+    documents.mkdir()
+    for source in sorted(ROOT.glob("*.md")):
+        if source.name != "CONTRACT.md":
+            shutil.copy2(source, documents / source.name)
+    (bundle / "먼저_읽어주세요.txt").write_text(
+        "서영 POS 독립판 2.0.0\n\n"
+        + ("Windows 10/11 x64용 무설치 프로그램입니다.\n" if label == "Windows" else f"주의: 이 파일은 {label} 검증용이며 Windows 프로그램이 아닙니다.\n")
+        + f"ZIP 전체를 쓰기 가능한 폴더에 압축 해제하고 {executable.name}을 실행하세요.\n"
+        "Python 설치·서버·인터넷·카드 연동이 필요하지 않습니다.\n"
+        "처음 실행할 때 관리자 코드와 이름, 새 비밀번호(8자 이상)를 직접 만드세요.\n"
+        "자료는 실행 파일 옆 data-v2 폴더의 seoyoung-standalone-v2.db에 보존됩니다.\n"
+        "프로그램 폴더를 옮길 때 data-v2 폴더를 함께 옮기고, 정기적으로 설정의 백업을 이용하세요.\n"
+        "기존 서영 POS 프로그램 및 DB를 가져오거나 덮어쓰지 않는 완전히 별도의 독립판입니다.\n"
+        "USB 스캐너는 HID 키보드(Enter 접미사) 모드, 프린터는 Windows 드라이버를 사용합니다.\n"
+        "세부 실행법과 제외 기능은 안내문서/README.md를 확인하세요.\n", encoding="utf-8-sig")
+    licenses(bundle / "third-party-licenses")
+    files = sorted(path for path in bundle.rglob("*") if path.is_file())
+    for path in files:
+        check_entry(path.relative_to(bundle))
+    with ZipFile(archive, "w", compression=ZIP_DEFLATED, compresslevel=9) as stream:
+        for path in files:
+            stream.write(path, path.relative_to(output))
+    with ZipFile(archive) as stream:
+        if stream.testzip() is not None:
+            raise RuntimeError("Portable ZIP failed its CRC integrity check.")
+        for entry in stream.namelist():
+            check_entry(Path(entry))
+    digest = sha256(archive.read_bytes()).hexdigest()
+    archive.with_suffix(archive.suffix + ".sha256").write_text(f"{digest}  {archive.name}\n", encoding="ascii")
+    print(f"Built and smoke-tested {label} portable: {archive} ({archive.stat().st_size:,} bytes)\nSHA256 {digest}", flush=True)
+    return archive
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--output", type=Path, default=ROOT / "dist")
+    parser.add_argument("--native", action="store_true", help="Allow a clearly platform-labelled non-Windows test bundle.")
+    options = parser.parse_args()
+    build(options.output, options.native)

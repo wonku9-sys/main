@@ -1,0 +1,121 @@
+"""New schema; deliberately independent from the legacy application's database."""
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS users (
+ id INTEGER PRIMARY KEY, code TEXT NOT NULL UNIQUE, name TEXT NOT NULL,
+ password_hash TEXT NOT NULL, role TEXT NOT NULL CHECK(role IN ('admin','staff')),
+ permissions TEXT NOT NULL DEFAULT '[]', active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1))
+);
+CREATE TABLE IF NOT EXISTS partners (
+ id INTEGER PRIMARY KEY, kind TEXT NOT NULL CHECK(kind IN ('supplier','customer')),
+ code TEXT NOT NULL, name TEXT NOT NULL, business_no TEXT NOT NULL DEFAULT '',
+ contact TEXT NOT NULL DEFAULT '', phone TEXT NOT NULL DEFAULT '', bank TEXT NOT NULL DEFAULT '',
+ account TEXT NOT NULL DEFAULT '', account_holder TEXT NOT NULL DEFAULT '', memo TEXT NOT NULL DEFAULT '',
+ active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1)),
+ opening_balance INTEGER NOT NULL DEFAULT 0 CHECK(ABS(opening_balance)<=9000000000000),
+ opening_date TEXT NOT NULL,
+ supplier_mode TEXT NOT NULL DEFAULT 'direct' CHECK(supplier_mode IN ('direct','commission')),
+ commission_bps INTEGER NOT NULL DEFAULT 0 CHECK(commission_bps BETWEEN 0 AND 10000), UNIQUE(kind,code)
+);
+CREATE TABLE IF NOT EXISTS products (
+ id INTEGER PRIMARY KEY, code TEXT NOT NULL UNIQUE, barcode TEXT NOT NULL DEFAULT '',
+ name TEXT NOT NULL, receipt_name TEXT NOT NULL DEFAULT '', category TEXT NOT NULL DEFAULT '',
+ category_mid TEXT NOT NULL DEFAULT '', category_small TEXT NOT NULL DEFAULT '',
+ specification TEXT NOT NULL DEFAULT '', base_unit TEXT NOT NULL DEFAULT 'kg',
+ tax_mode TEXT NOT NULL DEFAULT 'exempt' CHECK(tax_mode IN ('exempt','taxable')),
+ tracked INTEGER NOT NULL DEFAULT 1 CHECK(tracked IN (0,1)), active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1)),
+ supplier_id INTEGER REFERENCES partners(id) ON DELETE RESTRICT,
+ purchase_price INTEGER NOT NULL DEFAULT 0 CHECK(purchase_price BETWEEN 0 AND 9000000000000),
+ sale_price INTEGER NOT NULL DEFAULT 0 CHECK(sale_price BETWEEN 0 AND 9000000000000),
+ min_qty INTEGER NOT NULL DEFAULT 0 CHECK(min_qty BETWEEN 0 AND 9000000000000),
+ stock_qty INTEGER NOT NULL DEFAULT 0 CHECK(stock_qty BETWEEN 0 AND 9000000000000),
+ stock_cost INTEGER NOT NULL DEFAULT 0 CHECK(stock_cost BETWEEN 0 AND 9000000000000),
+ origin TEXT NOT NULL DEFAULT '', warehouse TEXT NOT NULL DEFAULT '', shelf TEXT NOT NULL DEFAULT '',
+ keywords TEXT NOT NULL DEFAULT '', memo TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS product_barcode_unique ON products(barcode) WHERE barcode<>'';
+CREATE TABLE IF NOT EXISTS product_units (
+ id INTEGER PRIMARY KEY, product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE RESTRICT,
+ name TEXT NOT NULL, barcode TEXT NOT NULL DEFAULT '', factor INTEGER NOT NULL CHECK(factor BETWEEN 1 AND 9000000000000),
+ purchase_price INTEGER NOT NULL DEFAULT 0 CHECK(purchase_price BETWEEN 0 AND 9000000000000),
+ sale_price INTEGER NOT NULL DEFAULT 0 CHECK(sale_price BETWEEN 0 AND 9000000000000),
+ active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1)), UNIQUE(product_id,name)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS unit_barcode_unique ON product_units(barcode) WHERE barcode<>'';
+CREATE TRIGGER IF NOT EXISTS product_cross_barcode_insert BEFORE INSERT ON products
+ WHEN NEW.barcode<>'' AND EXISTS(SELECT 1 FROM product_units WHERE barcode=NEW.barcode)
+ BEGIN SELECT RAISE(ABORT,'이미 등록된 확장단위 바코드입니다.'); END;
+CREATE TRIGGER IF NOT EXISTS product_cross_barcode_update BEFORE UPDATE OF barcode ON products
+ WHEN NEW.barcode<>'' AND EXISTS(SELECT 1 FROM product_units WHERE barcode=NEW.barcode)
+ BEGIN SELECT RAISE(ABORT,'이미 등록된 확장단위 바코드입니다.'); END;
+CREATE TRIGGER IF NOT EXISTS unit_cross_barcode_insert BEFORE INSERT ON product_units
+ WHEN NEW.barcode<>'' AND EXISTS(SELECT 1 FROM products WHERE barcode=NEW.barcode)
+ BEGIN SELECT RAISE(ABORT,'이미 등록된 상품 바코드입니다.'); END;
+CREATE TRIGGER IF NOT EXISTS unit_cross_barcode_update BEFORE UPDATE OF barcode ON product_units
+ WHEN NEW.barcode<>'' AND EXISTS(SELECT 1 FROM products WHERE barcode=NEW.barcode)
+ BEGIN SELECT RAISE(ABORT,'이미 등록된 상품 바코드입니다.'); END;
+CREATE TABLE IF NOT EXISTS documents (
+ id INTEGER PRIMARY KEY, number TEXT NOT NULL UNIQUE,
+ kind TEXT NOT NULL CHECK(kind IN ('purchase','sale','purchase_return','sale_return')),
+ date TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('draft','posted','cancelled')),
+ partner_id INTEGER NOT NULL REFERENCES partners(id) ON DELETE RESTRICT,
+ member_id INTEGER REFERENCES members(id) ON DELETE RESTRICT,
+ source_id INTEGER REFERENCES documents(id) ON DELETE RESTRICT,
+ total INTEGER NOT NULL DEFAULT 0 CHECK(total BETWEEN 0 AND 9000000000000),
+ cash_paid INTEGER NOT NULL DEFAULT 0 CHECK(cash_paid BETWEEN 0 AND 9000000000000),
+ points_used INTEGER NOT NULL DEFAULT 0 CHECK(points_used BETWEEN 0 AND 9000000000000),
+ points_earned INTEGER NOT NULL DEFAULT 0 CHECK(points_earned BETWEEN 0 AND 9000000000000),
+ memo TEXT NOT NULL DEFAULT '', user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+ created_at TEXT NOT NULL, cancel_reason TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS document_lines (
+ id INTEGER PRIMARY KEY, document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+ product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE RESTRICT,
+ unit_id INTEGER REFERENCES product_units(id) ON DELETE RESTRICT,
+ product_name TEXT NOT NULL, unit_name TEXT NOT NULL,
+ factor INTEGER NOT NULL CHECK(factor>0), input_qty INTEGER NOT NULL CHECK(input_qty>0),
+ base_qty INTEGER NOT NULL CHECK(base_qty>0), unit_price INTEGER NOT NULL CHECK(unit_price>=0),
+ total INTEGER NOT NULL CHECK(total>=0), cost INTEGER NOT NULL DEFAULT 0 CHECK(cost>=0),
+ source_line_id INTEGER REFERENCES document_lines(id) ON DELETE RESTRICT,
+ supplier_id INTEGER REFERENCES partners(id) ON DELETE RESTRICT,
+ commission_bps INTEGER NOT NULL DEFAULT 0 CHECK(commission_bps BETWEEN 0 AND 10000),
+ commission_amount INTEGER NOT NULL DEFAULT 0 CHECK(commission_amount>=0),
+ tax_mode TEXT NOT NULL DEFAULT 'exempt' CHECK(tax_mode IN ('exempt','taxable'))
+);
+CREATE TABLE IF NOT EXISTS payments (
+ id INTEGER PRIMARY KEY, partner_id INTEGER NOT NULL REFERENCES partners(id) ON DELETE RESTRICT,
+ document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE RESTRICT,
+ date TEXT NOT NULL, amount INTEGER NOT NULL CHECK(ABS(amount)<=9000000000000),
+ method TEXT NOT NULL CHECK(method IN ('cash','transfer')), memo TEXT NOT NULL DEFAULT '',
+ voided INTEGER NOT NULL DEFAULT 0 CHECK(voided IN (0,1)),
+ user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT, created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS stock_events (
+ id INTEGER PRIMARY KEY, product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE RESTRICT,
+ document_id INTEGER REFERENCES documents(id) ON DELETE RESTRICT, date TEXT NOT NULL,
+ kind TEXT NOT NULL, qty_delta INTEGER NOT NULL CHECK(ABS(qty_delta)<=9000000000000),
+ cost_delta INTEGER NOT NULL CHECK(ABS(cost_delta)<=9000000000000),
+ balance_qty INTEGER NOT NULL CHECK(balance_qty BETWEEN 0 AND 9000000000000),
+ balance_cost INTEGER NOT NULL CHECK(balance_cost BETWEEN 0 AND 9000000000000),
+ reason TEXT NOT NULL DEFAULT '', user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+ created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS audit (
+ id INTEGER PRIMARY KEY, at TEXT NOT NULL, user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+ action TEXT NOT NULL, entity TEXT NOT NULL, entity_id INTEGER, detail TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY,value TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS documents_date_kind ON documents(date,kind,status);
+CREATE INDEX IF NOT EXISTS documents_partner ON documents(partner_id,date);
+CREATE INDEX IF NOT EXISTS documents_source_status_date ON documents(source_id,status,date);
+CREATE INDEX IF NOT EXISTS payments_document_voided_date ON payments(document_id,voided,date);
+CREATE INDEX IF NOT EXISTS lines_product ON document_lines(product_id,document_id);
+CREATE INDEX IF NOT EXISTS lines_source ON document_lines(source_line_id);
+CREATE INDEX IF NOT EXISTS stock_product_date ON stock_events(product_id,date,id);
+CREATE INDEX IF NOT EXISTS audit_entity ON audit(entity,entity_id,id);
+PRAGMA user_version=200;
+"""
+
+
+def initialize(db):
+    db.executescript(SCHEMA)
