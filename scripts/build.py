@@ -149,11 +149,16 @@ def build(*, native: bool = False, verify: bool = True, license_cache: Path | No
             smoke_env["QT_QPA_PLATFORM"] = "offscreen"
             run([str(executable), "--demo", "--smoke-test"], env=smoke_env)
         shutil.copy2(ROOT / "README.md", app_dir / "README.md")
-        for name in ("windows-portable-notes.md", "VALIDATION.md"):
+        for name in ("windows-portable-notes.md", "VALIDATION.md", "MANUAL_SCOPE.md", "RELEASE_NOTES.md"):
             document = ROOT / "docs" / name
             if document.is_file():
                 (app_dir / "docs").mkdir(exist_ok=True)
                 shutil.copy2(document, app_dir / "docs" / document.name)
+        screenshots = ROOT / "docs" / "screenshots"
+        if screenshots.is_dir():
+            (app_dir / "docs" / "screenshots").mkdir(parents=True, exist_ok=True)
+            for screenshot in screenshots.glob("*.png"):
+                shutil.copy2(screenshot, app_dir / "docs" / "screenshots" / screenshot.name)
         collect_notices(app_dir, license_cache)
 
         destination = dist / "SeoyoungPOS"

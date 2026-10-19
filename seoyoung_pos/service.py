@@ -15,11 +15,21 @@ from pathlib import Path
 import sqlite3
 from typing import Any
 
+from .loyalty import LoyaltyMixin
 from .security import hash_password, verify_password
 
 
-PERMISSIONS = frozenset({"products", "partners", "purchases", "sales", "inventory", "reports", "users", "settings"})
+PERMISSIONS = frozenset({"products", "partners", "purchases", "sales", "inventory", "reports", "users", "settings", "members", "promotions"})
 MAX_INTEGER = 9_000_000_000_000
+PRODUCT_METADATA_TEXT_FIELDS = (
+    "category_mid", "category_small", "receipt_name", "capacity", "unit_capacity",
+    "keywords", "warehouse", "shelf",
+)
+PRODUCT_EDITABLE_FIELDS = frozenset({
+    "code", "barcode", "name", "category", "specification", "unit", "origin", "memo",
+    "supplier_id", "purchase_price", "sale_price", "min_stock", "active", "tax_type",
+    "box_quantity", *PRODUCT_METADATA_TEXT_FIELDS,
+})
 
 
 def _integer(value: Any, label: str = "금액", *, positive: bool = False) -> int:
@@ -72,7 +82,7 @@ def _day(value: str) -> str:
         raise ValueError("날짜는 YYYY-MM-DD 형식으로 입력해 주세요.") from None
 
 
-class POSService:
+class POSService(LoyaltyMixin):
     def __init__(self, path: str | Path):
         self.path = Path(path) if str(path) != ":memory:" else None
         if self.path:
@@ -137,8 +147,52 @@ class POSService:
             CREATE INDEX IF NOT EXISTS document_partner ON documents(partner_id);
             CREATE INDEX IF NOT EXISTS item_document ON document_items(document_id);
             CREATE INDEX IF NOT EXISTS stock_product ON stock_movements(product_id,id);
-            PRAGMA user_version=1;
         """)
+        self._migrate_product_metadata()
+        self._migrate_offline_workflows()
+        self._migrate_loyalty()
+
+    def _migrate_product_metadata(self):
+        """Add descriptive fields without rewriting product or transaction rows."""
+        columns = {key: "TEXT NOT NULL DEFAULT ''" for key in PRODUCT_METADATA_TEXT_FIELDS}
+        columns.update(
+            tax_type="TEXT NOT NULL DEFAULT 'exempt' CHECK(tax_type IN ('taxable','exempt'))",
+            box_quantity="INTEGER NOT NULL DEFAULT 0 CHECK(box_quantity>=0)",
+            created_at="TEXT NOT NULL DEFAULT ''",
+            updated_at="TEXT NOT NULL DEFAULT ''",
+        )
+        with self._transaction():
+            present = {row["name"] for row in self.db.execute("PRAGMA table_info(products)")}
+            for name, definition in columns.items():
+                if name not in present:
+                    self.db.execute(f"ALTER TABLE products ADD COLUMN {name} {definition}")
+            self.db.execute("CREATE INDEX IF NOT EXISTS audit_entity_item ON audit(entity,entity_id,id)")
+            # A newer client may already have applied later, compatible migrations.
+            if self.db.execute("PRAGMA user_version").fetchone()[0] < 2:
+                self.db.execute("PRAGMA user_version=2")
+
+    def _migrate_offline_workflows(self):
+        """Add optional stocktake tables without rewriting existing business rows.
+
+        These tables are a compatible extension of schema 2. In particular, never
+        overwrite a newer client's user_version or recreate an existing table.
+        """
+        with self._transaction():
+            self.db.execute("""CREATE TABLE IF NOT EXISTS stocktakes (
+                id INTEGER PRIMARY KEY, number TEXT NOT NULL UNIQUE,
+                date TEXT NOT NULL, reason TEXT NOT NULL,
+                user_id INTEGER NOT NULL REFERENCES users(id), created_at TEXT NOT NULL)""")
+            self.db.execute("""CREATE TABLE IF NOT EXISTS stocktake_items (
+                id INTEGER PRIMARY KEY, stocktake_id INTEGER NOT NULL REFERENCES stocktakes(id),
+                product_id INTEGER NOT NULL REFERENCES products(id),
+                product_code TEXT NOT NULL, product_name TEXT NOT NULL, unit TEXT NOT NULL,
+                expected_qty INTEGER NOT NULL CHECK(expected_qty>=0),
+                counted_qty INTEGER NOT NULL CHECK(counted_qty>=0), delta INTEGER NOT NULL,
+                previous_cost INTEGER NOT NULL CHECK(previous_cost>=0),
+                counted_cost INTEGER NOT NULL CHECK(counted_cost>=0),
+                UNIQUE(stocktake_id,product_id))""")
+            self.db.execute("CREATE INDEX IF NOT EXISTS stocktake_date ON stocktakes(date,id)")
+            self.db.execute("CREATE INDEX IF NOT EXISTS stocktake_item_batch ON stocktake_items(stocktake_id,id)")
 
     @contextmanager
     def _transaction(self):
@@ -276,7 +330,7 @@ class POSService:
                 raise ValueError("현재 로그인 중인 계정은 삭제할 수 없습니다.")
             if row["role"] == "admin" and self.db.execute("SELECT COUNT(*) FROM users WHERE role='admin'").fetchone()[0] <= 1:
                 raise ValueError("마지막 관리자 계정은 삭제할 수 없습니다.")
-            if self.db.execute("SELECT 1 FROM documents WHERE user_id=? UNION ALL SELECT 1 FROM payments WHERE user_id=? UNION ALL SELECT 1 FROM stock_movements WHERE user_id=? LIMIT 1", (user_id, user_id, user_id)).fetchone():
+            if self.db.execute("SELECT 1 FROM documents WHERE user_id=? UNION ALL SELECT 1 FROM payments WHERE user_id=? UNION ALL SELECT 1 FROM stock_movements WHERE user_id=? UNION ALL SELECT 1 FROM stocktakes WHERE user_id=? LIMIT 1", (user_id, user_id, user_id, user_id)).fetchone():
                 raise ValueError("거래 이력이 있는 계정은 감사 추적을 위해 삭제할 수 없습니다. 접근 권한을 해제해 주세요.")
             self.db.execute("DELETE FROM users WHERE id=?", (user_id,))
             self._audit("delete", "user", user_id, {"username": row["username"]})
@@ -336,17 +390,78 @@ class POSService:
                 raise ValueError("거래처를 찾을 수 없습니다.")
             self._audit("delete", "partner", partner_id, {})
 
+    def partner_ledger(self, kind, partner_id, start="", end="") -> dict:
+        """Chronological charges/payments and an actual opening balance.
+
+        Charges use document dates, payments use their own dates. The initial
+        payment already has a payments row, so documents.paid is deliberately
+        never summed here. Cancelled documents have no effect on the ledger.
+        """
+        aliases = {"supplier": "supplier", "purchase": "supplier",
+                   "customer": "customer", "sale": "customer"}
+        if kind not in aliases:
+            raise ValueError("거래처 종류가 올바르지 않습니다.")
+        kind = aliases[kind]
+        document_kind = "purchase" if kind == "supplier" else "sale"
+        self._require(self._kind(document_kind), "reports")
+        start, end = _day(start) if start else "", _day(end) if end else ""
+        if start and end and start > end:
+            raise ValueError("조회 시작일은 종료일보다 늦을 수 없습니다.")
+        partner = self.db.execute("SELECT * FROM partners WHERE id=? AND kind=?", (partner_id, kind)).fetchone()
+        if not partner:
+            raise ValueError("선택한 종류의 거래처를 찾을 수 없습니다.")
+        # A single UNION query gives both event types the same SQLite snapshot.
+        events = self.db.execute("""
+            SELECT 'document' AS event_type,d.id AS event_id,d.date,d.created_at,
+                   d.id AS document_id,d.number AS document_number,d.total AS charge,
+                   0 AS payment,d.memo,u.name AS user_name,0 AS event_order
+            FROM documents d JOIN users u ON u.id=d.user_id
+            WHERE d.kind=? AND d.partner_id=? AND d.status='posted'
+            UNION ALL
+            SELECT 'payment',p.id,p.date,p.created_at,d.id,d.number,0,p.amount,
+                   p.memo,u.name,1
+            FROM payments p JOIN documents d ON d.id=p.document_id
+            JOIN users u ON u.id=p.user_id
+            WHERE d.kind=? AND d.partner_id=? AND d.status='posted'
+            ORDER BY date,created_at,event_order,event_id
+        """, (document_kind, partner_id, document_kind, partner_id))
+        opening = charges = payments = 0
+        entries = []
+        for event in events:
+            if end and event["date"] > end:
+                continue
+            delta = event["charge"] - event["payment"]
+            if start and event["date"] < start:
+                opening += delta
+                continue
+            entry = {key: event[key] for key in (
+                "event_type", "date", "document_id", "document_number", "charge",
+                "payment", "memo", "user_name",
+            )}
+            entry["event_id"] = event["event_id"]
+            charges += event["charge"]
+            payments += event["payment"]
+            # Final running balances are filled after the complete opening is known.
+            entries.append(entry)
+        balance = opening
+        for entry in entries:
+            balance += entry["charge"] - entry["payment"]
+            entry["balance"] = balance
+        return {"partner": dict(partner), "kind": kind, "start": start, "end": end,
+                "opening_balance": opening, "total_charge": charges,
+                "total_payment": payments, "closing_balance": balance, "entries": entries}
+
     @staticmethod
     def _product(row) -> dict:
         result = dict(row)
-        for key in ("min_stock", "stock_qty"):
+        for key in ("min_stock", "stock_qty", "box_quantity"):
             result[key] = _qty_text(result[key])
         result["active"] = bool(result["active"])
         return result
 
     def list_products(self, search="", supplier_id=None, category="", low_stock=False) -> list[dict]:
         self._require("products", "purchases", "sales", "inventory", "reports")
-        clauses, params = ["(p.name LIKE ? OR p.code LIKE ? OR p.barcode LIKE ?)"], [f"%{search}%"] * 3
+        clauses, params = ["(p.name LIKE ? OR p.code LIKE ? OR p.barcode LIKE ? OR p.keywords LIKE ? OR p.receipt_name LIKE ?)"], [f"%{search}%"] * 5
         if supplier_id is not None:
             clauses.append("p.supplier_id=?")
             params.append(supplier_id)
@@ -371,28 +486,79 @@ class POSService:
                       active=1 if data.get("active", True) else 0)
         with self._transaction():
             self._require("products")
+            old = None
+            if product_id is not None:
+                old = self.db.execute("SELECT * FROM products WHERE id=?", (product_id,)).fetchone()
+                if not old:
+                    raise ValueError("상품을 찾을 수 없습니다.")
+                if old["unit"] != values["unit"] and self.db.execute("SELECT 1 FROM stock_movements WHERE product_id=? LIMIT 1", (product_id,)).fetchone():
+                    raise ValueError("재고 이력이 있는 상품의 단위는 변경할 수 없습니다. 새 상품으로 등록해 주세요.")
+            for key in PRODUCT_METADATA_TEXT_FIELDS:
+                values[key] = str(data[key] if key in data else old[key] if old else "").strip()
+            # These fields are descriptive only; tax_type does not change line totals.
+            values["tax_type"] = data.get("tax_type", old["tax_type"] if old else "exempt")
+            if not isinstance(values["tax_type"], str) or values["tax_type"] not in {"taxable", "exempt"}:
+                raise ValueError("과세 구분은 과세 또는 면세를 선택해 주세요.")
+            if "box_quantity" in data:
+                try:
+                    values["box_quantity"] = _quantity(data["box_quantity"], zero=True)
+                except ValueError:
+                    raise ValueError("박스 입수는 0 이상의 수량으로 소수점 셋째 자리까지 입력해 주세요.") from None
+            else:
+                values["box_quantity"] = old["box_quantity"] if old else 0
             if values["supplier_id"] and not self.db.execute("SELECT 1 FROM partners WHERE id=? AND kind='supplier'", (values["supplier_id"],)).fetchone():
                 raise ValueError("올바른 공급사를 선택해 주세요.")
+            now = datetime.now().astimezone().isoformat(timespec="seconds")
+            values["updated_at"] = now
             if product_id is None:
+                values["created_at"] = now
                 fields = list(values)
                 product_id = self.db.execute(f"INSERT INTO products({','.join(fields)}) VALUES({','.join('?' for _ in fields)})", tuple(values.values())).lastrowid
                 action = "create"
             else:
-                old = self.db.execute("SELECT unit FROM products WHERE id=?", (product_id,)).fetchone()
-                if not old:
-                    raise ValueError("상품을 찾을 수 없습니다.")
-                if old[0] != values["unit"] and self.db.execute("SELECT 1 FROM stock_movements WHERE product_id=? LIMIT 1", (product_id,)).fetchone():
-                    raise ValueError("재고 이력이 있는 상품의 단위는 변경할 수 없습니다. 새 상품으로 등록해 주세요.")
                 self.db.execute(f"UPDATE products SET {','.join(key+'=?' for key in values)} WHERE id=?", (*values.values(), product_id))
                 action = "update"
-            self._audit(action, "product", product_id, {"name": values["name"]})
+            previous = self._product(old) if old else {}
+            current = self._product(self.db.execute("SELECT * FROM products WHERE id=?", (product_id,)).fetchone())
+            changes = {key: {"old": previous.get(key), "new": current[key]}
+                       for key in values if key in PRODUCT_EDITABLE_FIELDS
+                       and (not old or previous[key] != current[key])}
+            self._audit(action, "product", product_id, {"changes": changes})
         return product_id
+
+    def product_changes(self, product_id) -> list[dict]:
+        """Return only product audit details, without granting global audit access."""
+        self._require("products", "reports")
+        rows = self.db.execute("SELECT at,username,action,detail FROM audit WHERE entity='product' AND entity_id=? ORDER BY id DESC", (product_id,))
+        result = []
+        for row in rows:
+            try:
+                detail = json.loads(row["detail"])
+            except (ValueError, TypeError):
+                detail = {}
+            clean = {}
+            if isinstance(detail, dict):
+                if isinstance(detail.get("changes"), dict):
+                    changes = {}
+                    for field, diff in detail["changes"].items():
+                        if field in PRODUCT_EDITABLE_FIELDS and isinstance(diff, dict):
+                            values = {key: diff.get(key) for key in ("old", "new")}
+                            if all(value is None or isinstance(value, (str, int, float, bool)) for value in values.values()):
+                                changes[field] = values
+                    clean["changes"] = changes
+                # Older product saves and stock adjustments used these details.
+                for key in ("name", "qty", "reason"):
+                    if key in detail and isinstance(detail[key], (str, int, float, bool)):
+                        clean[key] = detail[key]
+            result.append({"at": row["at"], "username": row["username"],
+                           "action": row["action"], "detail": json.dumps(clean, ensure_ascii=False)})
+        return result
 
     def delete_product(self, product_id):
         self._require("products")
         with self._transaction():
             self._require("products")
-            if self.db.execute("SELECT 1 FROM document_items WHERE product_id=? UNION ALL SELECT 1 FROM stock_movements WHERE product_id=? LIMIT 1", (product_id, product_id)).fetchone():
+            if self.db.execute("SELECT 1 FROM document_items WHERE product_id=? UNION ALL SELECT 1 FROM stock_movements WHERE product_id=? UNION ALL SELECT 1 FROM stocktake_items WHERE product_id=? LIMIT 1", (product_id, product_id, product_id)).fetchone():
                 raise ValueError("거래·재고 이력이 있는 상품은 삭제할 수 없습니다. 사용 중지를 선택해 주세요.")
             if not self.db.execute("DELETE FROM products WHERE id=?", (product_id,)).rowcount:
                 raise ValueError("상품을 찾을 수 없습니다.")
@@ -574,7 +740,7 @@ class POSService:
                     LEFT JOIN documents later ON later.id=m.document_id
                     WHERE m.product_id=? AND m.id>(SELECT MAX(id) FROM stock_movements
                         WHERE document_id=? AND product_id=? AND kind='purchase')
-                    AND ((m.kind='sale' AND later.status='posted') OR (m.kind='adjustment' AND m.qty<0)) LIMIT 1""",
+                    AND ((m.kind='sale' AND later.status='posted') OR (m.kind IN ('adjustment','stocktake') AND m.qty<0)) LIMIT 1""",
                     (item["product_id"], doc_id, item["product_id"])).fetchone():
                     raise ValueError("이 매입 이후 유효한 매출 또는 재고 차감이 있어 취소할 수 없습니다. 관련 매출을 먼저 취소해 주세요.")
                 delta = -item["qty"] if doc["kind"] == "purchase" else item["qty"]
@@ -614,6 +780,117 @@ class POSService:
             self._stock_move(product_id, delta, "adjustment", str(reason).strip())
             self.db.execute("UPDATE products SET stock_cost=stock_cost+? WHERE id=?", (cost_delta, product_id))
             self._audit("adjust_stock", "product", product_id, {"qty": _qty_text(delta), "reason": str(reason).strip()})
+
+    def save_stocktake(self, items, reason) -> int:
+        """Apply an absolute physical count as one atomic, stale-safe batch.
+
+        The caller must provide each displayed expected_qty; if another sale or
+        adjustment changed any product meanwhile, nothing in this batch is saved.
+        Counts use the product's existing unit, with no implicit unit conversion.
+        Valuation follows adjust_stock's moving-average cost convention.
+        """
+        self._require("inventory")
+        reason = str(reason).strip()
+        if not reason:
+            raise ValueError("재고 실사 사유를 입력해 주세요.")
+        if not isinstance(items, (list, tuple)) or not items:
+            raise ValueError("실사 수량을 입력한 상품이 한 개 이상 필요합니다.")
+        prepared, seen = [], set()
+        for item in items:
+            if not isinstance(item, dict):
+                raise ValueError("실사 상품과 장부·실사 수량을 확인해 주세요.")
+            product_id = _integer(item.get("product_id"), "상품 코드", positive=True)
+            if product_id in seen:
+                raise ValueError("같은 상품은 한 실사에서 한 번만 입력해 주세요.")
+            seen.add(product_id)
+            try:
+                expected = _quantity(item.get("expected_qty"), zero=True)
+                counted = _quantity(item.get("counted_qty"), zero=True)
+            except ValueError:
+                raise ValueError("장부·실사 수량은 0 이상이며 소수점 셋째 자리까지 입력해 주세요.") from None
+            prepared.append((product_id, expected, counted))
+        now = datetime.now().astimezone().isoformat(timespec="seconds")
+        day = Date.today().isoformat()
+        with self._transaction():
+            self._require("inventory")
+            validated = []
+            # Validate every line while holding the write lock, before changing any.
+            for product_id, expected, counted in prepared:
+                product = self.db.execute("SELECT * FROM products WHERE id=?", (product_id,)).fetchone()
+                if not product or not product["active"]:
+                    raise ValueError("실사할 사용 중인 상품을 찾을 수 없습니다.")
+                if product["stock_qty"] != expected:
+                    raise ValueError(f"'{product['name']}' 장부 재고가 변경되었습니다. 새로 조회한 뒤 실사 수량을 다시 확인해 주세요.")
+                delta = counted - expected
+                if delta > 0:
+                    unit_cost = (Decimal(product["stock_cost"]) / expected if expected
+                                 else Decimal(product["purchase_price"]) / 1000)
+                    counted_cost = product["stock_cost"] + _rounded(Decimal(delta) * unit_cost)
+                elif delta < 0:
+                    counted_cost = product["stock_cost"] - _rounded(Decimal(product["stock_cost"]) * (-delta) / expected)
+                else:
+                    counted_cost = product["stock_cost"]
+                if not 0 <= counted_cost <= MAX_INTEGER:
+                    raise ValueError("실사 후 재고 금액이 허용 범위를 초과했습니다.")
+                validated.append((product, expected, counted, delta, counted_cost))
+            next_id = self.db.execute("SELECT COALESCE(MAX(id),0)+1 FROM stocktakes").fetchone()[0]
+            number = f"ST-{day.replace('-', '')}-{next_id:06d}"
+            batch_id = self.db.execute("INSERT INTO stocktakes(number,date,reason,user_id,created_at) VALUES(?,?,?,?,?)",
+                                       (number, day, reason, self.user["id"], now)).lastrowid
+            for product, expected, counted, delta, counted_cost in validated:
+                self.db.execute("""INSERT INTO stocktake_items(
+                    stocktake_id,product_id,product_code,product_name,unit,expected_qty,
+                    counted_qty,delta,previous_cost,counted_cost) VALUES(?,?,?,?,?,?,?,?,?,?)""",
+                    (batch_id, product["id"], product["code"], product["name"], product["unit"],
+                     expected, counted, delta, product["stock_cost"], counted_cost))
+                if delta:
+                    self._stock_move(product["id"], delta, "stocktake", f"{number} · {reason}", at=day)
+                    self.db.execute("UPDATE products SET stock_cost=? WHERE id=?", (counted_cost, product["id"]))
+                    self._audit("adjust_stock", "product", product["id"],
+                                {"qty": _qty_text(delta), "reason": f"실사 {number} · {reason}"})
+            self._audit("stocktake", "stocktake", batch_id,
+                        {"number": number, "items_count": len(validated), "reason": reason})
+        return batch_id
+
+    def list_stocktakes(self, start="", end="") -> list[dict]:
+        self._require("inventory", "reports")
+        start, end = _day(start) if start else "", _day(end) if end else ""
+        if start and end and start > end:
+            raise ValueError("조회 시작일은 종료일보다 늦을 수 없습니다.")
+        clauses, params = [], []
+        if start:
+            clauses.append("s.date>=?")
+            params.append(start)
+        if end:
+            clauses.append("s.date<=?")
+            params.append(end)
+        rows = self.db.execute("""SELECT s.*,u.name AS user_name,
+            COUNT(i.id) AS items_count,SUM(CASE WHEN i.delta<>0 THEN 1 ELSE 0 END) AS changed_count,
+            COALESCE(SUM(i.counted_cost-i.previous_cost),0) AS value_change
+            FROM stocktakes s JOIN users u ON u.id=s.user_id
+            JOIN stocktake_items i ON i.stocktake_id=s.id"""
+            + (" WHERE " + " AND ".join(clauses) if clauses else "")
+            + " GROUP BY s.id ORDER BY s.date DESC,s.id DESC", params)
+        return [dict(row) for row in rows]
+
+    def get_stocktake(self, batch_id) -> dict:
+        self._require("inventory", "reports")
+        header = self.db.execute("""SELECT s.*,u.name AS user_name FROM stocktakes s
+            JOIN users u ON u.id=s.user_id WHERE s.id=?""", (batch_id,)).fetchone()
+        if not header:
+            raise ValueError("재고 실사 이력을 찾을 수 없습니다.")
+        result = dict(header)
+        result["items"] = []
+        changed_count = value_change = 0
+        for row in self.db.execute("SELECT * FROM stocktake_items WHERE stocktake_id=? ORDER BY id", (batch_id,)):
+            item = dict(row)
+            changed_count += row["delta"] != 0
+            value_change += row["counted_cost"] - row["previous_cost"]
+            for field in ("expected_qty", "counted_qty", "delta"):
+                item[field] = _qty_text(row[field])
+            result["items"].append(item)
+        result.update(items_count=len(result["items"]), changed_count=changed_count, value_change=value_change)
+        return result
 
     def list_stock_movements(self, product_id=None) -> list[dict]:
         self._require("inventory", "reports")
@@ -659,6 +936,59 @@ class POSService:
         for row in self.db.execute("SELECT p.date,d.kind,SUM(p.amount) AS amount FROM payments p JOIN documents d ON d.id=p.document_id WHERE d.status='posted' AND p.date BETWEEN ? AND ? GROUP BY p.date,d.kind", (start, end)):
             entry(row["date"])["paid_purchase" if row["kind"] == "purchase" else "paid_sale"] = row["amount"]
         return {"summary": summary, "daily": [days[key] for key in sorted(days)]}
+
+    def grouped_report(self, start, end, group_by="daily") -> dict:
+        """Posted line totals grouped by business date and explicit product unit.
+
+        cost_total is cost of goods sold; gross_profit=sale_total-cost_total,
+        not sales minus purchases. Product/category labels use the current
+        product master. Supplier purchases use their actual document supplier;
+        sales are attributed to the product's current default supplier (or 미지정),
+        not a claimed batch/lot provenance. Quantities in unlike units are never
+        added together, and payment dates/amounts do not affect this report.
+        """
+        self._require("reports")
+        start, end = _day(start), _day(end)
+        if start > end:
+            raise ValueError("조회 시작일은 종료일보다 늦을 수 없습니다.")
+        groups = {
+            "daily": ("d.date", "d.date"),
+            "monthly": ("substr(d.date,1,7)", "substr(d.date,1,7)"),
+            "product": ("CAST(p.id AS TEXT)", "p.code || ' · ' || p.name"),
+            "category": ("p.category", "CASE WHEN p.category='' THEN '미분류' ELSE p.category END"),
+            "supplier": ("COALESCE(CAST(s.id AS TEXT),'')", "COALESCE(s.name,'미지정')"),
+        }
+        if group_by not in groups:
+            raise ValueError("조회 구분은 일별·월별·상품별·분류별·공급사별 중 선택해 주세요.")
+        key, label = groups[group_by]
+        query = f"""SELECT {key} AS group_key,{label} AS label,i.unit,
+            SUM(CASE WHEN d.kind='purchase' THEN i.qty ELSE 0 END) AS purchase_qty,
+            SUM(CASE WHEN d.kind='sale' THEN i.qty ELSE 0 END) AS sale_qty,
+            SUM(CASE WHEN d.kind='purchase' THEN i.total ELSE 0 END) AS purchase_total,
+            SUM(CASE WHEN d.kind='sale' THEN i.total ELSE 0 END) AS sale_total,
+            SUM(CASE WHEN d.kind='sale' THEN i.cost ELSE 0 END) AS cost_total
+            FROM document_items i JOIN documents d ON d.id=i.document_id
+            JOIN products p ON p.id=i.product_id
+            LEFT JOIN partners s ON s.id=CASE WHEN d.kind='purchase' THEN d.partner_id ELSE p.supplier_id END
+            WHERE d.status='posted' AND d.date BETWEEN ? AND ?
+            GROUP BY {key},{label},i.unit ORDER BY label,group_key,i.unit"""
+        result = []
+        summary = {"purchase_total": 0, "sale_total": 0, "cost_total": 0, "gross_profit": 0,
+                   "quantities_by_unit": {}}
+        for row in self.db.execute(query, (start, end)):
+            entry = dict(row)
+            entry["gross_profit"] = entry["sale_total"] - entry["cost_total"]
+            for field in ("purchase_total", "sale_total", "cost_total", "gross_profit"):
+                summary[field] += entry[field]
+            units = summary["quantities_by_unit"].setdefault(entry["unit"], {"purchase_qty": 0, "sale_qty": 0})
+            for field in ("purchase_qty", "sale_qty"):
+                units[field] += entry[field]
+                entry[field] = _qty_text(entry[field])
+            result.append(entry)
+        for units in summary["quantities_by_unit"].values():
+            for field in ("purchase_qty", "sale_qty"):
+                units[field] = _qty_text(units[field])
+        return {"start": start, "end": end, "group_by": group_by, "rows": result, "summary": summary}
 
     def audit_log(self, entity=None, entity_id=None) -> list[dict]:
         self._require("settings")

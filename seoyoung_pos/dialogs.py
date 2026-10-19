@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
+import json
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from datetime import datetime
 from typing import Any
 
 from PySide6.QtCore import QDate, QRegularExpression, Qt
 from PySide6.QtGui import QRegularExpressionValidator
 from PySide6.QtWidgets import (
-    QAbstractItemView, QCheckBox, QComboBox, QCompleter, QDateEdit,
+    QAbstractItemView, QApplication, QCheckBox, QComboBox, QCompleter, QDateEdit,
     QDialog, QDialogButtonBox, QFormLayout, QFrame, QGridLayout,
-    QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMessageBox, QPushButton,
+    QGroupBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMainWindow, QMessageBox, QPushButton,
     QScrollArea, QTabWidget, QTableWidget, QTableWidgetItem, QTextEdit,
     QVBoxLayout, QWidget,
 )
@@ -19,6 +21,7 @@ from PySide6.QtWidgets import (
 PERMISSIONS = {
     "products": "상품 관리", "partners": "거래처 관리", "purchases": "매입 관리",
     "sales": "매출 관리", "inventory": "재고 관리", "reports": "조회·엑셀",
+    "members": "회원·포인트 관리", "promotions": "기간 특매 관리",
     "users": "사용자 관리 (관리자)", "settings": "설정 (관리자)",
 }
 
@@ -136,39 +139,117 @@ class BusinessDialog(QDialog):
         return box
 
 
+class LoginBackdrop(QMainWindow):
+    """A locked, server-free desktop shell while account authentication is pending.
+
+    No service or authenticated business view is installed in this window. Its
+    menus are intentionally disabled until the real MainWindow is opened after
+    LoginDialog has authenticated the user.
+    """
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setObjectName("loginBackdrop")
+        self.setWindowTitle("서영 POS · 오프라인 매장 관리")
+        self.resize(1280, 800)
+        self.setMinimumSize(800, 540)
+        self.setStyleSheet("""
+            #loginBackdrop, #loginCanvas { background: #FFFFFF; }
+            #loginBackdrop QMenuBar { background: #F7F9FC; color: #617287;
+                border-bottom: 1px solid #DFE6EE; padding: 3px 8px; }
+            #loginBackdrop QMenuBar::item { padding: 5px 11px; }
+            #loginBackdrop QMenuBar::item:disabled { color: #8391A3; }
+            #loginBackdrop QStatusBar { background: #F7F9FC;
+                color: #77879A; border-top: 1px solid #E4EAF1; }
+        """)
+        self.locked_menus = []
+        for title in ("기초관리", "매입·매출관리", "재고관리", "거래 분석", "사용자·설정"):
+            menu = self.menuBar().addMenu(title)
+            menu.setEnabled(False)
+            self.locked_menus.append(menu)
+        canvas = QWidget()
+        canvas.setObjectName("loginCanvas")
+        self.setCentralWidget(canvas)
+        self.statusBar().setSizeGripEnabled(False)
+        self.statusBar().showMessage("사용자 인증 후 업무 메뉴를 사용할 수 있습니다.")
+        self.statusBar().addPermanentWidget(QLabel("오프라인 단독 실행 · SQLite"))
+        if QApplication.platformName() != "offscreen" and QApplication.primaryScreen():
+            available = QApplication.primaryScreen().availableGeometry()
+            self.resize(min(self.width(), available.width()), min(self.height(), available.height()))
+
+
 class LoginDialog(BusinessDialog):
     def __init__(self, service, parent: QWidget | None = None):
         self.service = service
         self.initial = service.users_count() == 0
         super().__init__(
-            "서영 POS 시작하기" if self.initial else "서영 POS 로그인",
+            "첫 관리자 등록" if self.initial else "사용자 확인",
             "첫 관리자 계정을 만들어 매장 관리를 시작하세요." if self.initial else
-            "오늘의 거래, 재고와 미결제 잔액을 한곳에서 관리하세요.", parent,
+            "서영 POS · 매입·매출 및 재고 관리", parent,
         )
-        self.setFixedWidth(500)
+        self.setObjectName("loginDialog")
+        self.setMinimumWidth(0)
+        self.setFixedWidth(500 if self.initial else 460)
+        self.layout.setContentsMargins(24, 22, 24, 22)
+        self.layout.setSpacing(16)
+        self.setStyleSheet("""
+            #loginDialog { background: #FFFFFF; }
+            #loginDialog #dialogHeader { background: #FFF7E8;
+                border-top: 3px solid #E7AE3C; border-bottom: 1px solid #F1E2C5;
+                border-radius: 6px; padding: 13px 14px; }
+            #loginDialog #dialogTitle { color: #473D28; font-size: 20px; font-weight: 700; }
+            #loginDialog #dialogSubtitle { color: #8B7B60; font-size: 11px; }
+            #loginDialog QLineEdit { min-height: 20px; padding: 6px 9px; }
+            #loginDialog #mutedLabel { font-size: 11px; color: #8090A3; }
+        """)
         form = QFormLayout()
-        form.setSpacing(14)
-        self.username = line_edit("", "로그인 아이디")
+        form.setHorizontalSpacing(16)
+        form.setVerticalSpacing(12)
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        self.username = line_edit("", "등록한 사용자 코드 (아이디)")
         self.username.setObjectName("loginUsername")
         self.name = line_edit("", "예: 매장 관리자")
+        self.name.setObjectName("loginName")
         self.password = line_edit("", "8자 이상 비밀번호" if self.initial else "비밀번호")
         self.password.setObjectName("loginPassword")
         self.password.setEchoMode(QLineEdit.EchoMode.Password)
         self.confirm = line_edit("", "비밀번호를 한 번 더 입력하세요")
         self.confirm.setEchoMode(QLineEdit.EchoMode.Password)
-        form.addRow("아이디", self.username)
         if self.initial:
-            form.addRow("이름", self.name)
-        form.addRow("비밀번호", self.password)
+            form.addRow("사용자 코드", self.username)
+            form.addRow("사용자 이름", self.name)
+        else:
+            self.name.setReadOnly(True)
+            self.name.setPlaceholderText("로그인 후 확인됩니다")
+            self.name.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            form.addRow("사용자 이름", self.name)
+            form.addRow("사용자 코드", self.username)
+        form.addRow("암호", self.password)
         if self.initial:
             form.addRow("비밀번호 확인", self.confirm)
         self.layout.addLayout(form)
-        note = QLabel("오프라인 사용 · 거래자료는 이 기기에 안전하게 보관됩니다.")
+        note = QLabel("서버·인터넷 연결 없이 사용합니다.\n거래자료는 이 PC의 데이터베이스에 보관됩니다.")
         note.setObjectName("mutedLabel")
         note.setWordWrap(True)
         self.layout.addWidget(note)
-        self.buttons("관리자 계정 만들기" if self.initial else "로그인", self.submit)
+        self.button_box = self.buttons("관리자 계정 만들기" if self.initial else "확인", self.submit)
+        QWidget.setTabOrder(self.username, self.name if self.initial else self.password)
+        if self.initial:
+            QWidget.setTabOrder(self.name, self.password)
+            QWidget.setTabOrder(self.password, self.confirm)
         self.username.setFocus()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if self.parentWidget() and self.parentWidget().isVisible():
+            frame = self.frameGeometry()
+            frame.moveCenter(self.parentWidget().frameGeometry().center())
+            screen = self.parentWidget().screen()
+            if screen and QApplication.platformName() != "offscreen":
+                available = screen.availableGeometry()
+                frame.moveLeft(max(available.left(), min(frame.left(), available.right() - frame.width() + 1)))
+                frame.moveTop(max(available.top(), min(frame.top(), available.bottom() - frame.height() + 1)))
+            self.move(frame.topLeft())
 
     def submit(self):
         try:
@@ -183,7 +264,8 @@ class LoginDialog(BusinessDialog):
                     raise ValueError("비밀번호 확인이 일치하지 않습니다.")
                 self.service.create_initial_admin(username, self.name.text().strip(), password)
                 self.initial = False
-            self.service.login(username, password)
+            user = self.service.login(username, password)
+            self.name.setText(user["name"])
             self.accept()
         except Exception as error:
             self.error(error)
@@ -272,40 +354,44 @@ class PartnerPicker(BusinessDialog):
 
 class ProductDialog(BusinessDialog):
     def __init__(self, service, record: dict | None = None, parent=None):
-        self.service, self.record = service, record or {}
-        super().__init__("상품 수정" if record else "새 상품 등록", "중량과 단가를 정확하게 관리하고 거래·재고 이력을 확인하세요.", parent)
-        self.resize(880, 720)
-        tabs = QTabWidget()
-        self.layout.addWidget(tabs, 1)
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        content = QWidget()
-        grid = QGridLayout(content)
-        grid.setContentsMargins(16, 22, 16, 18)
-        grid.setHorizontalSpacing(22)
-        grid.setVerticalSpacing(14)
+        self.service, self.record = service, dict(record or {})
+        # Product-list rows can predate the last transaction. Always open the latest
+        # persisted quantities and descriptive metadata when editing a product.
+        if self.record.get("id"):
+            self.record = next((item for item in service.list_products()
+                                if item["id"] == self.record["id"]), self.record)
+        super().__init__("상품 등록정보" if record else "새 상품 등록",
+                         "상품 기본정보와 가격·보관정보를 입력하고, 탭에서 거래와 변경 이력을 확인하세요.", parent)
+        self.setObjectName("productDialog")
+        self.setMinimumSize(900, 680)
+        self.resize(1020, 830)
+        screen = self.screen()
+        if screen and QApplication.platformName() != "offscreen":
+            available = screen.availableGeometry()
+            self.resize(min(1020, available.width() - 30), min(830, available.height() - 45))
+        self.layout.setContentsMargins(20, 18, 20, 16)
+        self.layout.setSpacing(12)
         self.fields = {}
-        definitions = [
-            ("code", "상품 코드 *", "중복되지 않는 상품 코드"), ("barcode", "바코드", "스캐너 입력 가능"),
-            ("name", "상품명 *", "예: 국내산 삼겹살"), ("category", "분류", "예: 돈육 / 우육 / 가공"),
-            ("specification", "규격", "예: 냉장 · 구이용"), ("origin", "원산지", "예: 국내산"),
-        ]
-        for index, (key, title, placeholder) in enumerate(definitions):
-            field = line_edit(self.record.get(key, ""), placeholder)
+        for key, placeholder in [
+            ("code", "필수 · 중복되지 않는 코드"), ("barcode", "바코드 스캔 또는 직접 입력"),
+            ("name", "필수 · 예: 국내산 삼겹살"), ("category", "예: 정육"),
+            ("category_mid", "예: 돈육"), ("category_small", "예: 삼겹살"),
+            ("specification", "예: 냉장 · 구이용"), ("origin", "예: 국내산"),
+            ("receipt_name", "매장 내 상품 표기용 이름"), ("capacity", "예: 500"),
+            ("unit_capacity", "예: g / 팩"), ("warehouse", "예: 냉장 1창고"),
+            ("shelf", "예: A-03"), ("keywords", "예: 구이, 냉장, 한돈"),
+        ]:
+            field = self._compact(line_edit(self.record.get(key, ""), placeholder))
             field.setObjectName(f"product_{key}")
             self.fields[key] = field
-            column, row = index % 2, index // 2
-            form = QVBoxLayout()
-            form.setSpacing(6)
-            form.addWidget(QLabel(title))
-            form.addWidget(field)
-            grid.addLayout(form, row, column)
-        self.unit = QComboBox()
+
+        self.unit = self._compact(QComboBox())
         self.unit.addItems(["kg", "g", "개", "박스", "팩", "EA", "L", "mL"])
         self.unit.setEditable(True)
         self.unit.setCurrentText(self.record.get("unit", "kg"))
-        self.supplier = QComboBox()
+        self.unit.setObjectName("product_unit")
+        self.supplier = self._compact(QComboBox())
+        self.supplier.setObjectName("product_supplier")
         self.supplier.addItem("공급사 미지정", None)
         try:
             for partner in service.list_partners("supplier"):
@@ -314,86 +400,392 @@ class ProductDialog(BusinessDialog):
             self.error(error)
         index = self.supplier.findData(self.record.get("supplier_id"))
         self.supplier.setCurrentIndex(max(index, 0))
-        for column, (title, field) in enumerate([("거래 단위", self.unit), ("기본 공급사", self.supplier)]):
-            form = QVBoxLayout()
-            form.setSpacing(6)
-            form.addWidget(QLabel(title))
-            form.addWidget(field)
-            grid.addLayout(form, 3, column)
-        self.purchase_price = number_edit(self.record.get("purchase_price", 0))
-        self.sale_price = number_edit(self.record.get("sale_price", 0))
-        self.min_stock = number_edit(self.record.get("min_stock", "0"), True)
-        for index, (title, field) in enumerate([
-            ("매입 단가 (원 / 거래 단위)", self.purchase_price),
-            ("판매 단가 (원 / 거래 단위)", self.sale_price),
-            ("최소 재고 (거래 단위)", self.min_stock),
-        ]):
-            form = QVBoxLayout()
-            form.setSpacing(6)
-            form.addWidget(QLabel(title))
-            form.addWidget(field)
-            grid.addLayout(form, 4 + index // 2, index % 2)
-        self.active = QCheckBox("사용 중인 상품")
+        self.purchase_price = self._compact(number_edit(self.record.get("purchase_price", 0)))
+        self.purchase_price.setObjectName("product_purchase_price")
+        self.sale_price = self._compact(number_edit(self.record.get("sale_price", 0)))
+        self.sale_price.setObjectName("product_sale_price")
+        self.min_stock = self._compact(number_edit(self.record.get("min_stock", "0"), True))
+        self.min_stock.setObjectName("product_min_stock")
+        self.box_quantity = self._compact(number_edit(self.record.get("box_quantity", "0"), True))
+        self.box_quantity.setObjectName("product_box_quantity")
+        self.active = QCheckBox("사용 상품")
         self.active.setChecked(bool(self.record.get("active", True)))
-        grid.addWidget(self.active, 5, 1)
+        self.tax_type = self._compact(QComboBox())
+        self.tax_type.setObjectName("product_tax_type")
+        self.tax_type.addItem("면세", "exempt")
+        self.tax_type.addItem("과세", "taxable")
+        self.tax_type.setCurrentIndex(max(0, self.tax_type.findData(self.record.get("tax_type", "exempt"))))
+        self.tax_type.setToolTip("상품 분류용 정보입니다. 전표 금액이나 부가세를 자동으로 변경하지 않습니다.")
         self.memo = QTextEdit(self.record.get("memo", ""))
+        self.memo.setObjectName("product_memo")
         self.memo.setPlaceholderText("이력번호·보관 방법 등 필요한 정보를 기록하세요.")
-        self.memo.setMaximumHeight(90)
-        grid.addWidget(QLabel("메모"), 6, 0, 1, 2)
-        grid.addWidget(self.memo, 7, 0, 1, 2)
-        note = QLabel("단가는 선택한 거래 단위 기준입니다. 예: 단위 kg, 판매 단가 38,000원 → 0.5kg 판매액 19,000원")
-        note.setObjectName("mutedLabel")
-        note.setWordWrap(True)
-        grid.addWidget(note, 8, 0, 1, 2)
-        if record:
-            current_stock = QLabel(f"현재 재고  {quantity(record.get('stock_qty'))} {record.get('unit', '')}    ·    재고 원가액  {money(record.get('stock_cost'))} 원")
-            current_stock.setObjectName("totalValue")
-            grid.addWidget(current_stock, 9, 0, 1, 2)
-        grid.setRowStretch(10, 1)
+        self.memo.setMinimumHeight(84)
+        self.memo.setMaximumHeight(106)
+
+        self.tabs = QTabWidget()
+        self.tabs.setObjectName("productTabs")
+        self.layout.addWidget(self.tabs, 1)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        content = QWidget()
+        content.setObjectName("productForm")
+        form_layout = QVBoxLayout(content)
+        form_layout.setContentsMargins(12, 12, 12, 12)
+        form_layout.setSpacing(12)
+
+        classification = QFrame()
+        classification.setObjectName("productSection")
+        classify = QGridLayout(classification)
+        classify.setContentsMargins(12, 10, 12, 10)
+        classify.setHorizontalSpacing(9)
+        classify.setVerticalSpacing(8)
+        classify.addWidget(self.active, 0, 0)
+        classify.addWidget(self._label("과세 구분"), 0, 1)
+        classify.addWidget(self.tax_type, 0, 2)
+        for column, key, label in [(3, "category", "대분류"), (5, "category_mid", "중분류"), (7, "category_small", "소분류")]:
+            classify.addWidget(self._label(label), 0, column)
+            classify.addWidget(self.fields[key], 0, column + 1)
+            classify.setColumnStretch(column + 1, 1)
+        classify.addWidget(self._label("기본 공급사"), 1, 0)
+        classify.addWidget(self.supplier, 1, 1, 1, 5)
+        self.supplier_search = QPushButton("공급사 검색")
+        self.supplier_search.setObjectName("productSupplierSearch")
+        self.supplier_search.setMinimumHeight(32)
+        self.supplier_search.clicked.connect(self.pick_supplier)
+        classify.addWidget(self.supplier_search, 1, 6, 1, 3)
+        form_layout.addWidget(classification)
+
+        panels = QGridLayout()
+        panels.setHorizontalSpacing(12)
+        panels.setVerticalSpacing(12)
+        panels.setColumnStretch(0, 1)
+        panels.setColumnStretch(1, 1)
+        basic, basic_grid = self._group("상품 기본정보")
+        self._row(basic_grid, 0, "상품 코드 *", self.fields["code"])
+        self._row(basic_grid, 1, "바코드", self.fields["barcode"])
+        self._row(basic_grid, 2, "상품명 *", self.fields["name"])
+        self._row(basic_grid, 3, "규격", self.fields["specification"])
+        basic_grid.addWidget(self._label("거래 단위 *"), 4, 0)
+        basic_grid.addWidget(self.unit, 4, 1)
+        basic_grid.addWidget(self._label("용량"), 4, 2)
+        basic_grid.addWidget(self.fields["capacity"], 4, 3)
+        basic_grid.addWidget(self._label("단위 용량"), 5, 0)
+        basic_grid.addWidget(self.fields["unit_capacity"], 5, 1, 1, 3)
+        panels.addWidget(basic, 0, 0)
+
+        stock, stock_grid = self._group("재고 · 보관정보")
+        self._row(stock_grid, 0, "상품 표기명", self.fields["receipt_name"])
+        self.fields["receipt_name"].setToolTip("이름을 보관하는 항목입니다. 영수증 출력 기능은 제공하지 않습니다.")
+        stock_summary = QFrame()
+        stock_summary.setObjectName("productSummary")
+        summary = QGridLayout(stock_summary)
+        summary.setContentsMargins(10, 8, 10, 8)
+        self.stock_quantity_label = QLabel()
+        self.stock_quantity_label.setObjectName("readonlyValue")
+        self.stock_cost_label = QLabel()
+        self.stock_cost_label.setObjectName("readonlyValue")
+        self.stock_quantity_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.stock_cost_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        summary.addWidget(self._label("현재 재고"), 0, 0)
+        summary.addWidget(self.stock_quantity_label, 0, 1)
+        summary.addWidget(self._label("재고 원가액"), 1, 0)
+        summary.addWidget(self.stock_cost_label, 1, 1)
+        summary.setColumnStretch(1, 1)
+        stock_grid.addWidget(stock_summary, 1, 0, 1, 4)
+        stock_grid.addWidget(self._label("최소 재고"), 2, 0)
+        stock_grid.addWidget(self.min_stock, 2, 1)
+        stock_grid.addWidget(self._label("원산지"), 2, 2)
+        stock_grid.addWidget(self.fields["origin"], 2, 3)
+        stock_grid.addWidget(self._label("보관 창고"), 3, 0)
+        stock_grid.addWidget(self.fields["warehouse"], 3, 1)
+        stock_grid.addWidget(self._label("매대·위치"), 3, 2)
+        stock_grid.addWidget(self.fields["shelf"], 3, 3)
+        self._row(stock_grid, 4, "박스 입수", self.box_quantity)
+        self.box_quantity.setToolTip("보관용 입수 정보입니다. 거래 수량이나 재고를 자동으로 환산하지 않습니다.")
+        stock_grid.setRowStretch(5, 1)
+        panels.addWidget(stock, 0, 1)
+
+        pricing, pricing_grid = self._group("가격정보")
+        self.purchase_price_label = self._label("매입 단가 (원)")
+        self.sale_price_label = self._label("판매 단가 (원)")
+        pricing_grid.addWidget(self.purchase_price_label, 0, 0)
+        pricing_grid.addWidget(self.purchase_price, 0, 1, 1, 3)
+        pricing_grid.addWidget(self.sale_price_label, 1, 0)
+        pricing_grid.addWidget(self.sale_price, 1, 1, 1, 3)
+        self.margin_label = QLabel()
+        self.margin_label.setObjectName("productMargin")
+        self.margin_label.setWordWrap(True)
+        pricing_grid.addWidget(self.margin_label, 2, 0, 1, 4)
+        unit_note = QLabel("단가는 거래 단위 기준입니다. 과세 구분은 분류 정보로만 저장됩니다.")
+        unit_note.setObjectName("productMeta")
+        unit_note.setWordWrap(True)
+        pricing_grid.addWidget(unit_note, 3, 0, 1, 4)
+        pricing_grid.setRowStretch(4, 1)
+        panels.addWidget(pricing, 1, 0)
+
+        description, description_grid = self._group("상품 설명 · 관리 메모")
+        self._row(description_grid, 0, "키워드", self.fields["keywords"])
+        description_grid.addWidget(self.memo, 1, 0, 1, 4)
+        description_grid.setRowStretch(1, 1)
+        panels.addWidget(description, 1, 1)
+        form_layout.addLayout(panels)
+        form_layout.addStretch(1)
         scroll.setWidget(content)
-        tabs.addTab(scroll, "상품정보")
+        self.tabs.addTab(scroll, "상품정보")
+
         self.history_tables = {}
-        for kind, label in [("purchase", "매입이력"), ("sale", "매출이력"), ("stock", "재고이력")]:
+        self.history_filters = {}
+        self.history_summaries = {}
+        self.history_totals = self.history_summaries
+        self.history_hints = {}
+        for kind, label in [("purchase", "매입정보"), ("sale", "판매정보"), ("stock", "재고정보")]:
             page = QWidget()
             layout = QVBoxLayout(page)
-            if record:
-                headers = ["일자", "전표번호", "거래처", "수량", "단가", "금액", "상태"] if kind != "stock" else ["일자", "구분", "수량", "재고", "전표번호", "사유"]
-                history = table(headers)
-                self.history_tables[kind] = history
-                layout.addWidget(history)
-            else:
-                hint = QLabel("상품을 저장하면 거래와 재고 이력이 표시됩니다.")
-                hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                hint.setObjectName("mutedLabel")
-                layout.addWidget(hint)
-            tabs.addTab(page, label)
-            needed = {"purchase": "purchases", "sale": "sales", "stock": "inventory"}[kind]
-            if record and not (service.has_permission(needed) or service.has_permission("reports")):
-                tabs.setTabEnabled(tabs.count() - 1, False)
-                tabs.setTabToolTip(tabs.count() - 1, "이력 조회 권한이 필요합니다.")
-        tabs.currentChanged.connect(self.load_history)
-        self.buttons(callback=self.save)
+            layout.setContentsMargins(14, 14, 14, 14)
+            layout.setSpacing(12)
+            if kind != "stock":
+                filters = QHBoxLayout()
+                dates_enabled = QCheckBox("기간 지정")
+                start, end = date_edit(), date_edit()
+                start.setDate(QDate.currentDate().addMonths(-1))
+                self._compact(start)
+                self._compact(end)
+                start.setEnabled(False)
+                end.setEnabled(False)
+                dates_enabled.toggled.connect(start.setEnabled)
+                dates_enabled.toggled.connect(end.setEnabled)
+                refresh = QPushButton("조회")
+                refresh.setMinimumHeight(32)
+                refresh.clicked.connect(lambda _checked=False, key=kind: self.load_history({"purchase": 1, "sale": 2}[key]))
+                filters.addWidget(dates_enabled)
+                filters.addWidget(start)
+                filters.addWidget(QLabel("~"))
+                filters.addWidget(end)
+                filters.addStretch(1)
+                filters.addWidget(refresh)
+                layout.addLayout(filters)
+                self.history_filters[kind] = (dates_enabled, start, end)
+            hint = QLabel("상품 저장 후 실제 거래·재고 이력을 확인할 수 있습니다.")
+            hint.setObjectName("productMeta")
+            hint.setWordWrap(True)
+            self.history_hints[kind] = hint
+            layout.addWidget(hint)
+            headers = (["일자", "전표번호", "거래처", "수량", "단가 (원)", "금액 (원)", "상태"]
+                       if kind != "stock" else ["일자", "구분", "수량", "잔여 재고", "전표번호", "사유"])
+            history = table(headers)
+            history.setObjectName(f"productHistory_{kind}")
+            self.history_tables[kind] = history
+            layout.addWidget(history, 1)
+            totals = QLabel()
+            totals.setObjectName("productMargin")
+            totals.setWordWrap(True)
+            self.history_summaries[kind] = totals
+            layout.addWidget(totals)
+            self.tabs.addTab(page, label)
+
+        change_page = QWidget()
+        change_layout = QVBoxLayout(change_page)
+        change_layout.setContentsMargins(14, 14, 14, 14)
+        self.changes_hint = QLabel("상품 저장 후 등록·수정 내역을 확인할 수 있습니다.")
+        self.changes_hint.setObjectName("productMeta")
+        self.changes_hint.setWordWrap(True)
+        change_layout.addWidget(self.changes_hint)
+        self.changes_table = table(["변경일시", "작업자", "구분", "변경 내용"])
+        self.change_table = self.changes_table
+        self.changes_table.setObjectName("productChangeLog")
+        change_layout.addWidget(self.changes_table, 1)
+        self.tabs.addTab(change_page, "변경로그")
+        self.tabs.currentChanged.connect(self.load_history)
+
+        self.record_context = QLabel()
+        self.record_context.setObjectName("productMeta")
+        self.record_context.setWordWrap(True)
+        self.layout.addWidget(self.record_context)
+        self.button_box = self.buttons(callback=self.save)
+        self.apply_button = self.button_box.addButton("적용", QDialogButtonBox.ButtonRole.ApplyRole)
+        self.apply_button.setObjectName("productApply")
+        self.apply_button.setMinimumHeight(38)
+        self.apply_button.clicked.connect(self.apply_changes)
+        self.purchase_price.textChanged.connect(self.update_price_summary)
+        self.sale_price.textChanged.connect(self.update_price_summary)
+        self.unit.currentTextChanged.connect(self.update_price_summary)
+        self.refresh_record_context()
+        self.update_history_access()
+        self.update_price_summary()
         self.fields["name"].setFocus()
 
+    @staticmethod
+    def _compact(widget):
+        widget.setMinimumHeight(32)
+        return widget
+
+    @staticmethod
+    def _label(text):
+        label = QLabel(text)
+        label.setObjectName("productFieldLabel")
+        return label
+
+    @staticmethod
+    def _group(title):
+        group = QGroupBox(title)
+        group.setObjectName("productGroup")
+        grid = QGridLayout(group)
+        grid.setContentsMargins(12, 16, 12, 10)
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(6)
+        grid.setColumnStretch(1, 1)
+        grid.setColumnStretch(3, 1)
+        return group, grid
+
+    def _row(self, grid, row, label, widget):
+        grid.addWidget(self._label(label), row, 0)
+        grid.addWidget(widget, row, 1, 1, 3)
+
+    def pick_supplier(self):
+        picker = PartnerPicker(self.service, "supplier", self)
+        if picker.exec() == QDialog.DialogCode.Accepted:
+            selected = picker.selected
+            index = self.supplier.findData(selected["id"])
+            if index < 0:
+                self.supplier.addItem(f"{selected['name']}  ·  {selected['code']}", selected["id"])
+                index = self.supplier.count() - 1
+            self.supplier.setCurrentIndex(index)
+
+    def update_price_summary(self, *_):
+        purchase = Decimal(self.purchase_price.text() or "0")
+        sale = Decimal(self.sale_price.text() or "0")
+        unit = self.unit.currentText().strip() or "거래 단위"
+        self.purchase_price_label.setText(f"매입 단가 (원/{unit})")
+        self.sale_price_label.setText(f"판매 단가 (원/{unit})")
+        margin = (sale - purchase) / sale * 100 if sale else None
+        margin_text = f"{margin.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP):,.2f}%" if margin is not None else "—"
+        self.margin_label.setText(f"판매 기준 이익률  {margin_text}     단위당 차액  {money(sale - purchase)} 원")
+        self.margin_label.setStyleSheet("color: #BC4B3B;" if sale and sale < purchase else "")
+
+    def refresh_record_context(self):
+        unit = self.record.get("unit", self.unit.currentText())
+        self.stock_quantity_label.setText(f"{quantity(self.record.get('stock_qty'))} {unit}")
+        self.stock_cost_label.setText(f"{money(self.record.get('stock_cost'))} 원")
+        if self.record.get("id"):
+            def readable_time(value):
+                if not value:
+                    return "기존 자료 · 일시 미기록"
+                try:
+                    return datetime.fromisoformat(str(value)).astimezone().strftime("%Y-%m-%d %H:%M")
+                except ValueError:
+                    return str(value)
+            created = readable_time(self.record.get("created_at"))
+            updated = readable_time(self.record.get("updated_at"))
+            self.record_context.setText(f"상품 코드  {self.record.get('code', '')}    ·    등록  {created}    ·    수정  {updated}")
+        else:
+            self.record_context.setText("새 상품  ·  * 필수 항목    |    적용: 저장 후 계속 편집    ·    저장: 저장 후 닫기")
+
+    def update_history_access(self):
+        for index, permission in [(1, "purchases"), (2, "sales"), (3, "inventory")]:
+            allowed = self.service.has_permission(permission) or self.service.has_permission("reports")
+            self.tabs.setTabEnabled(index, allowed)
+            self.tabs.setTabToolTip(index, "" if allowed else "이력 조회 권한이 필요합니다.")
+        allowed = self.service.has_permission("products") or self.service.has_permission("reports")
+        self.tabs.setTabEnabled(4, allowed)
+        self.tabs.setTabToolTip(4, "" if allowed else "상품 또는 조회 권한이 필요합니다.")
+
     def load_history(self, tab_index: int):
-        if not self.record or tab_index == 0:
+        if tab_index == 0 or tab_index < 0 or not self.tabs.isTabEnabled(tab_index):
+            return
+        if tab_index == 4:
+            self.load_changes()
             return
         kind = ["purchase", "sale", "stock"][tab_index - 1]
         widget = self.history_tables[kind]
         widget.setRowCount(0)
+        if not self.record.get("id"):
+            self.history_hints[kind].setText("상품 저장 후 실제 거래·재고 이력을 확인할 수 있습니다.")
+            self.history_summaries[kind].setText("")
+            return
         try:
             if kind == "stock":
-                labels = {"purchase": "매입", "sale": "매출", "adjustment": "재고 조정", "cancel_purchase": "매입 취소", "cancel_sale": "매출 취소"}
-                for item in self.service.list_stock_movements(self.record["id"]):
+                labels = {"purchase": "매입", "sale": "매출", "adjustment": "재고 조정", "stocktake": "재고 실사", "cancel_purchase": "매입 취소", "cancel_sale": "매출 취소"}
+                records = self.service.list_stock_movements(self.record["id"])
+                for item in records:
                     put_row(widget, [item.get("date", ""), labels.get(item.get("kind"), item.get("kind", "")), quantity(item.get("qty")), quantity(item.get("balance_qty")), item.get("document_number", ""), item.get("reason", "")])
+                self.history_summaries[kind].setText(f"재고 변동  {len(records):,}건    ·    현재 재고  {quantity(self.record.get('stock_qty'))} {self.record.get('unit', '')}")
             else:
-                for item in self.service.product_history(self.record["id"], kind):
+                records = self.service.product_history(self.record["id"], kind)
+                enabled, start, end = self.history_filters[kind]
+                if enabled.isChecked():
+                    first, last = start.date().toString("yyyy-MM-dd"), end.date().toString("yyyy-MM-dd")
+                    if first > last:
+                        raise ValueError("조회 시작일은 종료일보다 늦을 수 없습니다.")
+                    records = [item for item in records if first <= str(item.get("date", ""))[:10] <= last]
+                for item in records:
                     put_row(widget, [item.get("date", ""), item.get("number", ""), item.get("partner_name", ""), quantity(item.get("qty")), money(item.get("unit_price")), money(item.get("item_total", 0)), "취소" if item.get("status") == "cancelled" else "정상"])
+                posted = [item for item in records if item.get("status") != "cancelled"]
+                qty = sum((Decimal(str(item.get("qty") or "0")) for item in posted), Decimal("0"))
+                amount = sum(item.get("item_total", 0) for item in posted)
+                self.history_summaries[kind].setText(f"조회  {len(records):,}건    ·    정상 수량  {quantity(qty)} {self.record.get('unit', '')}    ·    정상 금액  {money(amount)} 원    (취소 제외)")
+            self.history_hints[kind].setText("실제 저장된 이력입니다." if records else "조회 조건에 해당하는 이력이 없습니다.")
             widget.resizeColumnsToContents()
         except Exception as error:
             self.error(error)
 
-    def save(self):
+    def load_changes(self):
+        self.changes_table.setRowCount(0)
+        if not self.record.get("id"):
+            return
+        labels = {
+            "code": "상품 코드", "barcode": "바코드", "name": "상품명", "category": "대분류",
+            "category_mid": "중분류", "category_small": "소분류", "specification": "규격",
+            "origin": "원산지", "receipt_name": "상품 표기명", "unit": "거래 단위",
+            "capacity": "용량", "unit_capacity": "단위 용량", "supplier_id": "공급사 ID",
+            "purchase_price": "매입 단가", "sale_price": "판매 단가", "min_stock": "최소 재고",
+            "active": "사용 여부", "memo": "관리 메모", "tax_type": "과세 구분",
+            "box_quantity": "박스 입수", "warehouse": "보관 창고", "shelf": "매대·위치", "keywords": "키워드",
+        }
+
+        def display(key, value):
+            if value in (None, ""):
+                return "—"
+            if key == "tax_type":
+                return {"exempt": "면세", "taxable": "과세"}.get(value, str(value))
+            if key == "active":
+                return "사용" if value else "사용 중지"
+            return str(value)
+
+        try:
+            records = self.service.product_changes(self.record["id"])
+            for item in records:
+                try:
+                    detail = json.loads(item.get("detail") or "{}")
+                except (TypeError, ValueError):
+                    detail = {}
+                changes = detail.get("changes", {}) if isinstance(detail, dict) else {}
+                summary = []
+                if isinstance(changes, dict):
+                    for key, change in changes.items():
+                        if key not in labels or not isinstance(change, dict):
+                            continue
+                        summary.append(f"{labels[key]}: {display(key, change.get('old'))} → {display(key, change.get('new'))}")
+                action = {"create": "등록", "update": "수정", "adjust_stock": "재고 조정"}.get(item.get("action"), "변경")
+                if item.get("action") == "adjust_stock" and isinstance(detail, dict):
+                    summary = [f"재고 증감: {detail.get('qty', '—')} {self.record.get('unit', '')}",
+                               f"조정 사유: {detail.get('reason', '—')}"]
+                if not summary:
+                    summary = ["상품 등록" if item.get("action") == "create" else "상품 정보 수정 (상세 기록 없음)"]
+                row = put_row(self.changes_table, [str(item.get("at", item.get("created_at", ""))).replace("T", " "),
+                             item.get("user_name") or item.get("username", ""), action, "  /  ".join(summary)])
+                self.changes_table.item(row, 3).setToolTip("\n".join(summary))
+            self.changes_hint.setText(f"등록·수정 기록 {len(records):,}건  ·  변경 내용 위에 마우스를 올리면 전체 내용을 확인할 수 있습니다.")
+            self.changes_table.setColumnWidth(0, 200)
+            self.changes_table.setColumnWidth(1, 110)
+            self.changes_table.setColumnWidth(2, 65)
+        except Exception as error:
+            self.error(error)
+
+    def apply_changes(self):
+        self.save(close=False)
+
+    def save(self, close=True):
         try:
             data = {key: value.text().strip() for key, value in self.fields.items()}
             if not data["name"]:
@@ -406,9 +798,18 @@ class ProductDialog(BusinessDialog):
                 sale_price=int(self.sale_price.text() or "0"),
                 min_stock=str(Decimal(self.min_stock.text() or "0")),
                 active=self.active.isChecked(), memo=self.memo.toPlainText().strip(),
+                tax_type=self.tax_type.currentData(),
+                box_quantity=str(Decimal(self.box_quantity.text() or "0")),
             )
             self.saved_id = self.service.save_product(data, self.record.get("id"))
-            self.accept()
+            self.record = next((item for item in self.service.list_products() if item["id"] == self.saved_id),
+                               {**self.record, **data, "id": self.saved_id})
+            if close:
+                self.accept()
+            else:
+                self.setWindowTitle("상품 등록정보 · 서영 POS")
+                self.refresh_record_context()
+                self.load_history(self.tabs.currentIndex())
         except (ValueError, InvalidOperation, PermissionError) as error:
             self.error(error)
         except Exception as error:
@@ -433,11 +834,17 @@ class DocumentDialog(BusinessDialog):
         self.partner_button = QPushButton("공급사 검색" if kind == "purchase" else "거래처 검색")
         self.partner_button.clicked.connect(self.pick_partner)
         self.date = date_edit(self.document.get("date", "") if self.document else "")
+        self.date.setToolTip("상품을 선택할 때 이 날짜의 특매·기본 단가를 제시합니다. 날짜만 바꾸면 수동 단가는 유지되며, '기간 단가 적용'으로 다시 계산할 수 있습니다.")
         header.addWidget(QLabel("거래일"))
         header.addWidget(self.date)
         header.addSpacing(18)
         header.addWidget(self.partner_label, 1)
         header.addWidget(self.partner_button)
+        if not self.document:
+            self.price_button = QPushButton("기간 단가 적용")
+            self.price_button.setToolTip("선택한 거래일의 특매 또는 기본 단가로 모든 상품 단가를 다시 적용합니다. 수동 입력 단가가 바뀝니다.")
+            self.price_button.clicked.connect(self.apply_period_prices)
+            header.addWidget(self.price_button)
         self.layout.addLayout(header)
         self.items = table(["상품 / 규격", "단위", "수량", "단가 (원)", "금액 (원)", ""])
         self.items.setObjectName("documentItems")
@@ -541,7 +948,7 @@ class DocumentDialog(BusinessDialog):
         def selected(_index):
             record = next((item for item in self.products if item["id"] == product.currentData()), None)
             unit.setText(record["unit"] if record else "—")
-            price.setText(str(record.get("purchase_price" if self.kind == "purchase" else "sale_price", 0)) if record else "0")
+            price.setText(str(self.service.get_effective_price(record["id"], self.date.date().toString("yyyy-MM-dd"), self.kind)) if record else "0")
             self.recalculate()
 
         def delete():
@@ -558,6 +965,23 @@ class DocumentDialog(BusinessDialog):
         remove.clicked.connect(delete)
         if not self.loading:
             product.setFocus()
+
+    def apply_period_prices(self):
+        if self.document:
+            return
+        if QMessageBox.question(self, "기간 단가 적용", "선택한 거래일의 특매·기본 단가를 모든 상품에 다시 적용할까요?\n직접 입력한 단가도 변경됩니다.", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            prices = []
+            for row in range(self.items.rowCount()):
+                product = self.items.cellWidget(row, 0)
+                if product.currentData() and product.currentText() == product.itemText(product.currentIndex()):
+                    prices.append((row, self.service.get_effective_price(product.currentData(), self.date.date().toString("yyyy-MM-dd"), self.kind)))
+            for row, value in prices:
+                self.items.cellWidget(row, 3).setText(str(value))
+            self.recalculate()
+        except (ValueError, PermissionError) as error:
+            self.error(error)
 
     def add_readonly_line(self, record: dict):
         put_row(self.items, [record.get("product_name", ""), record.get("unit", ""), quantity(record.get("qty")), money(record.get("unit_price")), money(record.get("total")), ""])

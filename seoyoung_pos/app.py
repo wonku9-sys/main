@@ -16,11 +16,12 @@ from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDateEdit, QDialog, QFileDialog,
     QFrame, QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit,
     QMainWindow, QMessageBox, QPushButton, QScrollArea, QSizePolicy,
-    QStackedWidget, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QStackedWidget, QTableWidget, QTableWidgetItem, QToolBar, QTreeWidget,
+    QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
 from . import __version__
-from .dialogs import DocumentDialog, LoginDialog, PartnerDialog, PartnerPicker, PasswordDialog, ProductDialog, UserDialog
+from .dialogs import DocumentDialog, LoginBackdrop, LoginDialog, PartnerDialog, PartnerPicker, PasswordDialog, ProductDialog, UserDialog
 from .export import export_workbook
 from .service import POSService
 
@@ -33,10 +34,24 @@ NAV_ITEMS = [
     ("customers", "판매처 관리", "people", "partners"),
     ("purchases", "매입전표", "download", "purchases"),
     ("sales", "매출전표", "upload", "sales"),
+    ("ledger", "거래처 원장", "ledger", ("purchases", "sales", "reports")),
     ("inventory", "재고 현황", "layers", "inventory"),
+    ("stocktake", "재고 실사", "check", "inventory"),
+    ("members", "회원 · 포인트", "people", "members"),
+    ("promotions", "기간 특매", "tag", "promotions"),
     ("reports", "거래 분석", "chart", "reports"),
+    ("analysis", "상세 집계", "chart", "reports"),
     ("users", "사용자 관리", "people", "users"),
     ("settings", "설정 · 백업", "settings", "settings"),
+]
+
+NAV_GROUPS = [
+    ("1. 기초관리", ("products", "suppliers", "customers")),
+    ("2. 매입 · 매출", ("purchases", "sales", "ledger")),
+    ("3. 재고관리", ("inventory", "stocktake")),
+    ("4. 회원 · 특매", ("members", "promotions")),
+    ("5. 리포트", ("dashboard", "reports", "analysis")),
+    ("6. 관리설정", ("users", "settings")),
 ]
 
 STYLE = """
@@ -45,23 +60,39 @@ QWidget { color: #25354B; font-size: 13px; }
 QMainWindow, #workspace, #page, #pageScroller { background: #F3F6FA; }
 #pageScroller { border: none; }
 QLabel { background: transparent; }
-#sidebar { background: #122238; border: none; }
+#sidebar { background: #F8FAFD; border: none; border-right: 1px solid #DCE4EE; }
 #brandMark { background: #00A99A; color: white; font-size: 26px; font-weight: 800; border-radius: 12px; }
-#brandName { color: #FFFFFF; font-size: 21px; font-weight: 700; }
+#brandName { color: #18334B; font-size: 19px; font-weight: 700; }
 #brandCaption { color: #8C9DB5; font-size: 11px; }
 #sideSection { color: #71859F; font-size: 10px; font-weight: 700; padding: 14px 12px 8px; }
-#navButton { background: transparent; color: #AABAD0; text-align: left; border: none; border-radius: 8px; padding: 11px 14px; font-size: 13px; }
-#navButton:hover { background: #1C324C; color: white; }
-#navButton:checked { background: #174344; color: #6DE0D0; font-weight: 700; border-left: 3px solid #32C9B8; }
+#navButton { background: transparent; color: #52667B; text-align: left; border: none; border-radius: 5px; padding: 4px 9px; min-height: 20px; font-size: 12px; }
+#navButton:hover { background: #EDF2F8; color: #123D54; }
+#navButton:checked { background: #DEF1EC; color: #007D70; font-weight: 700; border-left: 3px solid #009E8E; }
+#navigationTree { background: transparent; border: none; font-size: 12px; }
+#navigationTree::item { padding: 3px 0; color: #314B63; }
+#navigationTree::item:selected { background: transparent; color: #314B63; }
+#navigationTree::branch { background: transparent; }
+QMenuBar { background: #FFFFFF; color: #41576D; border-bottom: 1px solid #DFE7F0; padding: 3px 8px; font-size: 12px; }
+QMenuBar::item { padding: 5px 13px; background: transparent; }
+QMenuBar::item:selected { background: #E7F5F1; color: #007D70; border-radius: 4px; }
+QMenu { background: white; border: 1px solid #DCE4EE; padding: 5px; }
+QMenu::item { padding: 8px 26px 8px 12px; }
+QMenu::item:selected { background: #E7F5F1; color: #007D70; }
+#businessToolbar { background: #FFFFFF; border: none; border-bottom: 1px solid #DFE7F0; spacing: 3px; padding: 5px 8px; }
+#businessToolbar QToolButton { background: transparent; border: 1px solid transparent; border-radius: 6px; padding: 5px 10px; color: #465D73; font-size: 11px; }
+#businessToolbar QToolButton:hover { background: #F0F6FA; border-color: #DCE6EE; }
+#businessToolbar QToolButton:checked { background: #E5F4EF; color: #007D70; border-color: #CDE9DF; }
+#businessToolbar QToolButton:disabled { color: #A9B6C4; }
+#businessToolbar::separator { background: #DFE7EE; width: 1px; margin: 7px; }
 #sidebarFoot { color: #7E94AF; font-size: 11px; }
-#sidebarBadge { color: #64D7C4; background: #193F43; border-radius: 6px; padding: 7px 10px; font-size: 11px; }
+#sidebarBadge { color: #007D70; background: #E4F3EE; border-radius: 6px; padding: 7px 8px; font-size: 11px; }
 #topbar { background: white; border-bottom: 1px solid #E3E9F1; }
 #topbarTitle { color: #14283F; font-weight: 700; font-size: 14px; }
 #localBadge { color: #007C71; background: #E7F6F1; padding: 6px 10px; border-radius: 12px; font-size: 11px; }
 #avatar { background: #EAF0F8; color: #345377; border-radius: 16px; font-size: 13px; font-weight: 700; }
 #userName { color: #233950; font-weight: 600; }
 #userRole { color: #8390A2; font-size: 11px; }
-#pageTitle { color: #152B42; font-size: 27px; font-weight: 750; }
+#pageTitle { color: #152B42; font-size: 23px; font-weight: 750; }
 #eyebrow { color: #8694A8; font-size: 10px; font-weight: 700; letter-spacing: 1px; }
 #pageSubtitle, #mutedLabel, #dialogSubtitle { color: #8190A4; font-size: 12px; }
 #card, #filterCard, #tableCard, #chartCard { background: white; border: 1px solid #E2E8F0; border-radius: 12px; }
@@ -92,9 +123,9 @@ QLineEdit:read-only { background: #F4F7FA; color: #7E8BA0; }
 QComboBox::drop-down { border: none; width: 24px; }
 QComboBox QAbstractItemView { background: white; selection-background-color: #DFF2ED; selection-color: #165E55; padding: 5px; }
 QTableWidget { border: none; background: white; alternate-background-color: #FAFCFE; gridline-color: #EDF1F5; selection-background-color: #E7F5F1; selection-color: #1A665D; border-radius: 0px; }
-QTableWidget::item { padding: 8px 12px; border-bottom: 1px solid #EEF2F6; }
+QTableWidget::item { padding: 5px 9px; border-bottom: 1px solid #EEF2F6; }
 QTableWidget::item:selected { background: #E4F4EF; color: #185E55; }
-QHeaderView::section { background: #F7F9FC; color: #7D8CA0; font-weight: 600; padding: 12px 10px; border: none; border-bottom: 1px solid #E3EAF2; }
+QHeaderView::section { background: #F1F5FA; color: #60758A; font-weight: 600; padding: 8px; border: none; border-bottom: 1px solid #DCE6EE; border-right: 1px solid #E5EBF2; }
 QTableCornerButton::section { background: #F7F9FC; border: none; }
 QScrollBar:vertical { background: #F5F7FA; width: 9px; border: none; }
 QScrollBar::handle:vertical { background: #C5CFDC; border-radius: 4px; min-height: 30px; }
@@ -114,6 +145,22 @@ QGroupBox::title { subcontrol-origin: margin; left: 14px; padding: 0px 5px; colo
 QCheckBox { spacing: 7px; }
 QCheckBox::indicator { width: 16px; height: 16px; }
 QToolTip { background: #14263E; color: white; border: none; padding: 7px; }
+#productDialog { background: #F3F6FA; }
+#productDialog QLabel { font-size: 12px; }
+#productDialog #dialogTitle { font-size: 21px; font-weight: 700; }
+#productDialog #dialogSubtitle { color: #8392A5; font-size: 11px; }
+#productDialog #dialogHeader { background: transparent; border-bottom: 1px solid #DFE7F0; }
+#productDialog QLineEdit, #productDialog QComboBox, #productDialog QDateEdit { padding: 4px 8px; min-height: 20px; font-size: 12px; }
+#productDialog QPushButton { padding: 6px 12px; min-height: 18px; font-size: 12px; }
+#productDialog QTabBar::tab { padding: 10px 17px; font-size: 12px; }
+#productDialog #productSection { background: #EEF3F8; border: 1px solid #DFE7EF; border-radius: 7px; }
+#productDialog #productGroup { background: #FFFFFF; border: 1px solid #DFE7EF; border-radius: 8px; margin-top: 10px; padding-top: 12px; }
+#productDialog #productGroup::title { color: #264358; font-size: 12px; font-weight: 700; left: 12px; padding: 0 5px; }
+#productDialog #productSummary { background: #EBF7F3; border: 1px solid #D1EAE2; border-radius: 7px; }
+#productDialog #productFieldLabel { color: #62748A; font-size: 11px; }
+#productDialog #readonlyValue { color: #008C82; font-size: 20px; font-weight: 700; }
+#productDialog #productMargin { color: #008C82; font-size: 18px; font-weight: 700; }
+#productDialog #productMeta { color: #8997A9; font-size: 10px; }
 """
 
 
@@ -131,6 +178,11 @@ def icon(name, color="#9DB0C8"):
         "plus": '<path d="M12 5v14M5 12h14"/>',
         "search": '<circle cx="10" cy="10" r="6"/><path d="m15 15 6 6"/>',
         "refresh": '<path d="M20 10a8 8 0 0 0-14-5L3 8m0-6v6h6 M4 14a8 8 0 0 0 14 5l3-3m0 6v-6h-6"/>',
+        "back": '<path d="m14 5-7 7 7 7 M7 12h14"/>',
+        "forward": '<path d="m10 5 7 7-7 7 M3 12h14"/>',
+        "ledger": '<path d="M5 3h14v18H5z M8 7h8M8 11h8M8 15h3m3 0h2"/>',
+        "check": '<path d="M5 3h14v18H5z M8 12l3 3 5-6 M9 3v3h6V3"/>',
+        "tag": '<path d="M3 3h8l10 10-8 8L3 11Z"/><circle cx="7" cy="7" r="1"/>',
     }
     svg = f'<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="{color}" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">{paths.get(name, paths["box"])}</svg>'
     pix = QPixmap(24, 24)
@@ -194,8 +246,9 @@ class DataTable(QTableWidget):
     def __init__(self, headers):
         super().__init__(0, len(headers))
         self.setHorizontalHeaderLabels(headers)
-        self.verticalHeader().hide()
-        self.verticalHeader().setDefaultSectionSize(44)
+        self.verticalHeader().setVisible(True)
+        self.verticalHeader().setDefaultSectionSize(34)
+        self.verticalHeader().setMinimumSectionSize(28)
         self.horizontalHeader().setDefaultSectionSize(128)
         self.horizontalHeader().setMinimumSectionSize(70)
         self.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
@@ -204,7 +257,7 @@ class DataTable(QTableWidget):
         self.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.setAlternatingRowColors(True)
-        self.setShowGrid(False)
+        self.setShowGrid(True)
         self.setSortingEnabled(True)
         self.setMinimumHeight(150)
 
@@ -238,8 +291,8 @@ class Page(QWidget):
         self.title = title
         self.code = code
         self.body = QVBoxLayout(self)
-        self.body.setContentsMargins(28, 25, 28, 16)
-        self.body.setSpacing(18)
+        self.body.setContentsMargins(18, 16, 18, 12)
+        self.body.setSpacing(12)
         heading = QHBoxLayout()
         titles = QVBoxLayout()
         titles.setSpacing(5)
@@ -262,7 +315,7 @@ class Page(QWidget):
         frame = QFrame()
         frame.setObjectName("filterCard")
         layout = QHBoxLayout(frame)
-        layout.setContentsMargins(16, 13, 16, 13)
+        layout.setContentsMargins(12, 10, 12, 10)
         layout.setSpacing(10)
         self.body.addWidget(frame)
         return layout
@@ -282,7 +335,7 @@ class Page(QWidget):
         layout.setSpacing(0)
         layout.setContentsMargins(0, 0, 0, 0)
         topline = QHBoxLayout()
-        topline.setContentsMargins(18, 14, 18, 14)
+        topline.setContentsMargins(14, 10, 14, 10)
         topline.addWidget(label(title, "sectionTitle"))
         self.count_label = label("0건", "resultCount")
         topline.addWidget(self.count_label)
@@ -298,7 +351,7 @@ class Page(QWidget):
         foot = QFrame()
         foot.setObjectName("tableFooter")
         self.foot_layout = QHBoxLayout(foot)
-        self.foot_layout.setContentsMargins(18, 13, 18, 13)
+        self.foot_layout.setContentsMargins(14, 10, 14, 10)
         self.foot_layout.addWidget(label("조회 결과 합계", "mutedLabel"))
         self.foot_layout.addStretch()
         self.total_label = label("0건", "footerTotal")
@@ -418,19 +471,30 @@ class ProductsPage(Page):
         idx = self.supplier.findData(selected)
         self.supplier.setCurrentIndex(max(0, idx))
         self.supplier.blockSignals(False)
+        selected_category = self.category.currentText() if self.category.currentIndex() > 0 else ""
+        categories = sorted({product.get("category", "") for product in self.service.list_products()} - {""})
+        self.category.blockSignals(True)
+        self.category.clear()
+        self.category.addItem("전체 분류")
+        self.category.addItems(categories)
+        self.category.setCurrentIndex(max(0, self.category.findText(selected_category)))
+        self.category.blockSignals(False)
         records = self.service.list_products(self.search.text().strip(), self.supplier.currentData(), "" if self.category.currentIndex() == 0 else self.category.currentText(), self.low.isChecked())
         rows = [[r["code"], r["name"], r.get("category", ""), f'{r.get("specification", "")} · {r.get("origin", "")}', r.get("barcode", ""), r.get("supplier_name", "") or "미지정", r["purchase_price"], r["sale_price"], Decimal(str(r["stock_qty"])), r["unit"], "판매중" if r.get("active", True) else "판매중지"] for r in records]
         self.table.populate(rows, records, numeric=(8,), emphasized={1: "#255B79", 8: TEAL})
         self.results(len(records), f"{len(records):,}개 상품   ·   재고금액 {money(sum(r['stock_cost'] for r in records))} 원 (이동평균 원가)")
 
     def add(self):
-        if ProductDialog(self.service, parent=self).exec():
+        dialog = ProductDialog(self.service, parent=self)
+        if dialog.exec() or getattr(dialog, "saved_id", None):
             self.refresh()
 
     def edit(self, *_):
         row = self.selected()
-        if row and ProductDialog(self.service, row, parent=self).exec():
-            self.refresh()
+        if row:
+            dialog = ProductDialog(self.service, row, parent=self)
+            if dialog.exec() or getattr(dialog, "saved_id", None):
+                self.refresh()
 
     def delete(self):
         row = self.selected()
@@ -836,7 +900,13 @@ class MainWindow(QMainWindow):
         self.pages = {}
         self.page_scrollers = {}
         self.nav_buttons = {}
+        self.nav_items = {}
+        self.page_actions = {}
+        self.toolbar_actions = {}
         self.current_page = None
+        self.current_key = None
+        self.navigation_history = []
+        self.history_index = -1
         self.setWindowTitle(f"서영 POS · 매입 · 매출 · 재고 관리{' [데모]' if demo else ''}")
         self.resize(1510, 960)
         self.setMinimumSize(1080, 660)
@@ -848,12 +918,12 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
         sidebar = QFrame()
         sidebar.setObjectName("sidebar")
-        sidebar.setFixedWidth(220)
+        sidebar.setFixedWidth(210)
         side = QVBoxLayout(sidebar)
-        side.setContentsMargins(14, 26, 14, 20)
-        side.setSpacing(5)
+        side.setContentsMargins(10, 15, 10, 12)
+        side.setSpacing(8)
         brand = QHBoxLayout()
-        brand.setContentsMargins(9, 0, 0, 15)
+        brand.setContentsMargins(7, 0, 0, 8)
         mark = label("S", "brandMark")
         mark.setFixedSize(43, 43)
         mark.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -864,10 +934,13 @@ class MainWindow(QMainWindow):
         texts.addWidget(label("STORE MANAGEMENT", "brandCaption"))
         brand.addLayout(texts)
         side.addLayout(brand)
-        self.nav_layout = QVBoxLayout()
-        self.nav_layout.setSpacing(5)
-        side.addLayout(self.nav_layout)
-        side.addStretch()
+        self.navigation_tree = QTreeWidget()
+        self.navigation_tree.setObjectName("navigationTree")
+        self.navigation_tree.setHeaderHidden(True)
+        self.navigation_tree.setIndentation(12)
+        self.navigation_tree.setExpandsOnDoubleClick(False)
+        self.navigation_tree.currentItemChanged.connect(self._tree_selected)
+        side.addWidget(self.navigation_tree, 1)
         side.addWidget(label("  ●   오프라인 매장 운영", "sidebarBadge"))
         side.addSpacing(12)
         side.addWidget(label(f"  SEOYOUNG POS  /  v{__version__}\n  내 매장의 데이터를 내 기기에", "sidebarFoot"))
@@ -879,9 +952,9 @@ class MainWindow(QMainWindow):
         work.setSpacing(0)
         topbar = QFrame()
         topbar.setObjectName("topbar")
-        topbar.setFixedHeight(76)
+        topbar.setFixedHeight(56)
         top = QHBoxLayout(topbar)
-        top.setContentsMargins(28, 12, 28, 12)
+        top.setContentsMargins(18, 7, 18, 7)
         self.breadcrumb = label("매장 관리 워크스페이스", "topbarTitle")
         top.addWidget(self.breadcrumb)
         top.addStretch()
@@ -912,6 +985,13 @@ class MainWindow(QMainWindow):
         self.status.setContentsMargins(28, 5, 28, 9)
         work.addWidget(self.status)
         layout.addWidget(workspace, 1)
+        self.toolbar = QToolBar("업무 바로가기", self)
+        self.toolbar.setObjectName("businessToolbar")
+        self.toolbar.setMovable(False)
+        self.toolbar.setFloatable(False)
+        self.toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
+        self.toolbar.setIconSize(QSize(25, 25))
+        self.addToolBar(self.toolbar)
         self.rebuild_navigation()
         for sequence, callback in [("F5", self.refresh), ("Ctrl+F", self.focus_search), ("Ctrl+E", self.export_current), ("Ctrl+N", self.new_current)]:
             action = QAction(self)
@@ -920,11 +1000,15 @@ class MainWindow(QMainWindow):
             self.addAction(action)
 
     def rebuild_navigation(self):
-        previous = self.current_page.code if self.current_page else None
-        while self.nav_layout.count():
-            item = self.nav_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
+        previous = self.current_key
+        self.navigation_tree.blockSignals(True)
+        self.navigation_tree.clear()
+        self.menuBar().clear()
+        self.toolbar.clear()
+        for action in [*self.page_actions.values(), *self.toolbar_actions.values()]:
+            action.deleteLater()
+        self.page_actions.clear()
+        self.toolbar_actions.clear()
         while self.stack.count():
             widget = self.stack.widget(0)
             self.stack.removeWidget(widget)
@@ -932,24 +1016,53 @@ class MainWindow(QMainWindow):
         self.pages.clear()
         self.page_scrollers.clear()
         self.nav_buttons.clear()
+        self.nav_items.clear()
         self.current_page = None
+        self.current_key = None
+        self.navigation_history.clear()
+        self.history_index = -1
+        permitted = {}
         for key, title, glyph, permission in NAV_ITEMS:
-            if not self.service.has_permission(permission):
+            permissions = permission if isinstance(permission, tuple) else (permission,)
+            if not any(self.service.has_permission(p) for p in permissions):
                 continue
-            if key in ("dashboard", "products", "users"):
-                self.nav_layout.addWidget(label("워크스페이스" if key == "dashboard" else ("업무 관리" if key == "products" else "관리자"), "sideSection"))
-            nav = QPushButton(title)
-            nav.setObjectName("navButton")
-            nav.setIcon(icon(glyph))
-            nav.setIconSize(QSize(19, 19))
-            nav.setCheckable(True)
-            nav.clicked.connect(lambda checked=False, page_key=key: self.navigate(page_key))
-            self.nav_buttons[key] = nav
-            self.nav_layout.addWidget(nav)
+            permitted[key] = (title, glyph)
+            action = QAction(icon(glyph, TEAL), title, self)
+            action.setCheckable(True)
+            action.triggered.connect(lambda checked=False, page_key=key: self.navigate(page_key))
+            self.page_actions[key] = action
+        for title, keys in NAV_GROUPS:
+            allowed = [key for key in keys if key in permitted]
+            if not allowed:
+                continue
+            menu = self.menuBar().addMenu(title)
+            parent = QTreeWidgetItem(self.navigation_tree, [title])
+            font = parent.font(0)
+            font.setBold(True)
+            parent.setFont(0, font)
+            parent.setExpanded(True)
+            for key in allowed:
+                title, glyph = permitted[key]
+                menu.addAction(self.page_actions[key])
+                leaf = QTreeWidgetItem(parent)
+                leaf.setData(0, Qt.ItemDataRole.UserRole, key)
+                leaf.setSizeHint(0, QSize(160, 34))
+                nav = QPushButton(title)
+                nav.setObjectName("navButton")
+                nav.setIcon(icon(glyph, "#6C839B"))
+                nav.setIconSize(QSize(17, 17))
+                nav.setCheckable(True)
+                nav.clicked.connect(lambda checked=False, page_key=key: self.navigate(page_key))
+                self.navigation_tree.setItemWidget(leaf, 0, nav)
+                self.nav_buttons[key] = nav
+                self.nav_items[key] = leaf
+        self.navigation_tree.blockSignals(False)
+        self._build_toolbar()
         self.user_label.setText(self.service.user["name"])
         self.role_label.setText("관리자" if self.service.user["role"] == "admin" else "일반 사용자")
         if self.nav_buttons:
-            self.navigate(previous if previous in self.nav_buttons else next(iter(self.nav_buttons)))
+            first = "dashboard" if "dashboard" in self.nav_buttons else next(iter(self.nav_buttons))
+            self.navigate(previous if previous in self.nav_buttons else first)
         else:
             screen = QWidget()
             layout = QVBoxLayout(screen)
@@ -958,17 +1071,68 @@ class MainWindow(QMainWindow):
             message.setWordWrap(True)
             layout.addWidget(message)
             self.stack.addWidget(screen)
-        self.show_message(f"자동 저장  ·  {self.database_path}     |     F5 조회   Ctrl+N 등록   Ctrl+F 검색   Ctrl+E 엑셀")
+        self._update_toolbar()
+        self.show_message(f"자료 자동 저장 · {self.database_path}   |   F5 조회   Ctrl+N 등록   Ctrl+F 검색   Ctrl+E 엑셀")
 
-    def navigate(self, key):
+    def _build_toolbar(self):
+        def tool(key, text, glyph, callback, tooltip=None):
+            action = QAction(icon(glyph, TEAL), text, self)
+            action.setToolTip(tooltip or text)
+            action.triggered.connect(callback)
+            self.toolbar.addAction(action)
+            self.toolbar_actions[key] = action
+            return action
+
+        tool("back", "이전", "back", lambda: self._history_move(-1))
+        tool("forward", "다음", "forward", lambda: self._history_move(1))
+        self.toolbar.addSeparator()
+        for key in ("dashboard", "products", "purchases", "sales", "inventory", "ledger", "members", "promotions", "analysis"):
+            if key in self.page_actions:
+                self.toolbar.addAction(self.page_actions[key])
+        self.toolbar.addSeparator()
+        tool("new", "새 자료", "plus", self.new_current, "현재 업무에 새 자료 등록 · Ctrl+N")
+        tool("refresh", "조회", "refresh", self.refresh, "현재 검색 조건으로 조회 · F5")
+        tool("export", "엑셀 저장", "download", self.export_current, "현재 조회 결과를 XLSX로 저장 · Ctrl+E")
+        help_menu = self.menuBar().addMenu("도움말")
+        about = QAction("프로그램 정보", self)
+        about.triggered.connect(lambda: QMessageBox.information(self, "서영 POS", f"서영 POS {__version__}\n인터넷·서버 없이 실행하는 독립형 매장 관리 프로그램\n자료 저장: {self.database_path}\n카드 승인·전자신고·문자 전송 기능은 포함하지 않습니다."))
+        help_menu.addAction(about)
+
+    def _tree_selected(self, current, previous):
+        if current:
+            key = current.data(0, Qt.ItemDataRole.UserRole)
+            if key:
+                self.navigate(key)
+
+    def _history_move(self, delta):
+        position = self.history_index + delta
+        if 0 <= position < len(self.navigation_history):
+            key = self.navigation_history[position]
+            if self.navigate(key, record_history=False):
+                self.history_index = position
+                self._update_toolbar()
+
+    def _update_toolbar(self):
+        self.toolbar_actions["back"].setEnabled(self.history_index > 0)
+        self.toolbar_actions["forward"].setEnabled(self.history_index + 1 < len(self.navigation_history))
+        page = self.current_page
+        self.toolbar_actions["new"].setEnabled(bool(page and (isinstance(page, DocumentsPage) or hasattr(page, "add"))))
+        self.toolbar_actions["export"].setEnabled(bool(page and page.table is not None))
+        self.toolbar_actions["refresh"].setEnabled(page is not None)
+
+    def navigate(self, key, record_history=True):
         if key not in self.nav_buttons:
-            return
+            return False
         if key not in self.pages:
+            from .offline_pages import AnalysisPage, LedgerPage, MembersPage, PromotionsPage, StocktakePage
             factories = {
                 "dashboard": lambda: DashboardPage(self), "products": lambda: ProductsPage(self),
                 "suppliers": lambda: PartnersPage(self, "supplier"), "customers": lambda: PartnersPage(self, "customer"),
                 "purchases": lambda: DocumentsPage(self, "purchase"), "sales": lambda: DocumentsPage(self, "sale"),
                 "inventory": lambda: InventoryPage(self), "reports": lambda: ReportsPage(self),
+                "ledger": lambda: LedgerPage(self), "stocktake": lambda: StocktakePage(self),
+                "members": lambda: MembersPage(self), "promotions": lambda: PromotionsPage(self),
+                "analysis": lambda: AnalysisPage(self),
                 "users": lambda: UsersPage(self), "settings": lambda: SettingsPage(self),
             }
             self.pages[key] = factories[key]()
@@ -984,12 +1148,24 @@ class MainWindow(QMainWindow):
             page.refresh()
         except (ValueError, PermissionError) as exc:
             QMessageBox.warning(self, "조회할 수 없습니다", str(exc))
-            return
+            return False
         self.current_page = page
+        self.current_key = key
+        if record_history and (self.history_index < 0 or self.navigation_history[self.history_index] != key):
+            del self.navigation_history[self.history_index + 1:]
+            self.navigation_history.append(key)
+            self.history_index = len(self.navigation_history) - 1
         self.stack.setCurrentWidget(self.page_scrollers[key])
         self.breadcrumb.setText(f"매장 관리   /   {page.title}")
+        self.navigation_tree.blockSignals(True)
+        self.navigation_tree.setCurrentItem(self.nav_items[key])
+        self.nav_items[key].parent().setExpanded(True)
+        self.navigation_tree.blockSignals(False)
         for item_key, nav in self.nav_buttons.items():
             nav.setChecked(item_key == key)
+            self.page_actions[item_key].setChecked(item_key == key)
+        self._update_toolbar()
+        return True
 
     def new_document(self, kind):
         picker = PartnerPicker(self.service, "supplier" if kind == "purchase" else "customer", parent=self)
@@ -1030,11 +1206,14 @@ class MainWindow(QMainWindow):
     def logout(self):
         self.service.logout()
         self.hide()
-        if LoginDialog(self.service, parent=self).exec() == QDialog.DialogCode.Accepted:
+        backdrop = LoginBackdrop()
+        backdrop.show()
+        if LoginDialog(self.service, parent=backdrop).exec() == QDialog.DialogCode.Accepted:
             self.rebuild_navigation()
             self.show()
         else:
             self.close()
+        backdrop.close()
 
 
 def default_data_dir(demo=False):
@@ -1075,18 +1254,24 @@ def main(argv=None):
     app.setFont(QFont("Malgun Gothic" if sys.platform == "win32" else "Noto Sans CJK KR", 10))
     app.setStyleSheet(STYLE)
     service = None
+    backdrop = None
     try:
         service = POSService(db_path)
         if demo:
             from .demo import populate_demo
             populate_demo(service)
-        elif LoginDialog(service).exec() != QDialog.DialogCode.Accepted:
-            return 0
+        else:
+            backdrop = LoginBackdrop()
+            backdrop.show()
+            if LoginDialog(service, parent=backdrop).exec() != QDialog.DialogCode.Accepted:
+                return 0
         window = MainWindow(service, db_path, demo)
         if app.platformName() != "offscreen" and app.primaryScreen():
             available = app.primaryScreen().availableGeometry()
             window.resize(min(1510, available.width() - 30), min(960, available.height() - 45))
         window.show()
+        if backdrop:
+            backdrop.close()
         if args.smoke_test or args.screenshot:
             def verify():
                 try:
@@ -1110,7 +1295,7 @@ def main(argv=None):
                         if not window.grab().save(str(args.screenshot), "PNG"):
                             raise OSError("스크린샷 저장 실패")
                     if args.smoke_test:
-                        print("PASS: SQLite persistence, demo purchase/sale data, 10 desktop pages and Qt startup", flush=True)
+                        print(f"PASS: SQLite persistence, demo purchase/sale data, {len(window.nav_buttons)} desktop pages and Qt startup", flush=True)
                         app.exit(0)
                 except Exception as exc:
                     print(f"SMOKE TEST FAILED: {exc}", file=sys.stderr, flush=True)
@@ -1126,6 +1311,8 @@ def main(argv=None):
             QMessageBox.critical(None, "서영 POS 시작 실패", f"프로그램을 시작하지 못했습니다.\n{exc}\n\n데이터 위치: {db_path}")
         return 1
     finally:
+        if backdrop:
+            backdrop.close()
         if service:
             service.close()
         if scratch:

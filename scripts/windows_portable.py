@@ -96,9 +96,11 @@ def digest(path: Path, algorithm: str = "sha256") -> str:
     return hasher.hexdigest()
 
 
-def download_verified(cache: Path, name: str, url: str, expected: str, algorithm: str) -> Path:
+def download_verified(cache: Path, name: str, url: str, expected: str, algorithm: str, *, offline_cache: bool = False) -> Path:
     target = cache / name
     if not target.exists():
+        if offline_cache:
+            raise FileNotFoundError(f"Offline cache file missing: {target}; no network request was made")
         print(f"Downloading {name}", flush=True)
         payload = read_url(url)
         actual = hashlib.new(algorithm, payload).hexdigest()
@@ -111,25 +113,36 @@ def download_verified(cache: Path, name: str, url: str, expected: str, algorithm
     return target
 
 
-def upstream_artifacts(cache: Path) -> tuple[Path, list[Path], list[dict]]:
+def upstream_artifacts(cache: Path, *, offline_cache: bool = False) -> tuple[Path, list[Path], list[dict]]:
     cache.mkdir(parents=True, exist_ok=True)
     wheels_dir = cache / "wheels"
     wheels_dir.mkdir(exist_ok=True)
     python_digest = base64.b64decode(PYTHON_SHA512).hex()
-    runtime = download_verified(cache, "python.3.12.10.nupkg", PYTHON_URL, python_digest, "sha512")
+    runtime = download_verified(cache, "python.3.12.10.nupkg", PYTHON_URL, python_digest, "sha512", offline_cache=offline_cache)
     manifest = [{"name": "CPython", "version": "3.12.10", "url": PYTHON_URL, "catalog": PYTHON_CATALOG,
-                 "sha512": python_digest, "catalog_packageHash": PYTHON_SHA512}]
+                 "filename": runtime.name, "sha512": python_digest, "catalog_packageHash": PYTHON_SHA512,
+                 "verification_mode": "pinned_checksum_cache_only" if offline_cache else "pinned_checksum",
+                 "integrity_reference": "embedded_nuget_catalog_sha512"}]
     wheels = []
     for package, version, filename, expected in WHEELS:
         metadata_url = f"https://pypi.org/pypi/{package}/{version}/json"
-        metadata = json.loads(read_url(metadata_url))
-        record = next(item for item in metadata["urls"] if item["filename"] == filename)
-        if record["digests"]["sha256"] != expected:
-            raise RuntimeError(f"Upstream checksum changed for {filename}; investigate before rebuilding")
-        wheel = download_verified(wheels_dir, filename, record["url"], expected, "sha256")
+        item = {"name": package, "version": version, "filename": filename,
+                "metadata": metadata_url, "sha256": expected, "metadata_fetched": not offline_cache}
+        if offline_cache:
+            # WHEELS records contain the digests verified during the original
+            # trusted build. Never fetch metadata, infer a download URL, or
+            # substitute a digest calculated from the local cached file.
+            item["verification_mode"] = "pinned_checksum_cache_only"
+            wheel = download_verified(wheels_dir, filename, metadata_url, expected, "sha256", offline_cache=True)
+        else:
+            metadata = json.loads(read_url(metadata_url))
+            record = next(record for record in metadata["urls"] if record["filename"] == filename)
+            if record["digests"]["sha256"] != expected:
+                raise RuntimeError(f"Upstream checksum changed for {filename}; investigate before rebuilding")
+            item.update(url=record["url"], verification_mode="pinned_checksum_and_upstream_metadata")
+            wheel = download_verified(wheels_dir, filename, record["url"], expected, "sha256")
         wheels.append(wheel)
-        manifest.append({"name": package, "version": version, "filename": filename,
-                         "url": record["url"], "metadata": metadata_url, "sha256": expected})
+        manifest.append(item)
     return runtime, wheels, manifest
 
 
@@ -162,8 +175,10 @@ def copy_source(destination: Path) -> dict[str, str]:
     app = destination / "app" / "seoyoung_pos"
     app.mkdir(parents=True, exist_ok=True)
     hashes = {}
-    for source in sorted(package.rglob("*")):
-        if not source.is_file() or "__pycache__" in source.parts or source.suffix == ".pyc":
+    for source in sorted(package.rglob("*.py")):
+        # Runtime package assets currently consist entirely of Python source.
+        # Do not accidentally distribute a local database, .env or bytecode.
+        if not source.is_file() or "__pycache__" in source.parts:
             continue
         relative = source.relative_to(package)
         target = app / relative
@@ -172,10 +187,16 @@ def copy_source(destination: Path) -> dict[str, str]:
         hashes[str(relative)] = digest(target)
     if (ROOT / "README.md").is_file():
         shutil.copy2(ROOT / "README.md", destination / "README.md")
-    notes = ROOT / "docs" / "windows-portable-notes.md"
-    if notes.is_file():
-        (destination / "docs").mkdir(exist_ok=True)
-        shutil.copy2(notes, destination / "docs" / notes.name)
+    for name in ("windows-portable-notes.md", "MANUAL_SCOPE.md", "VALIDATION.md", "RELEASE_NOTES.md"):
+        document = ROOT / "docs" / name
+        if document.is_file():
+            (destination / "docs").mkdir(exist_ok=True)
+            shutil.copy2(document, destination / "docs" / document.name)
+    for screenshot in sorted((ROOT / "docs" / "screenshots").glob("*.png")):
+        if screenshot.is_file():
+            target = destination / "docs" / "screenshots" / screenshot.name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(screenshot, target)
     return hashes
 
 
@@ -195,12 +216,12 @@ def create_launcher(destination: Path, distlib_wheel: Path) -> None:
     (destination / "SeoyoungPOS.exe").write_bytes(launcher + shebang + payload.getvalue())
 
 
-def copy_licenses(destination: Path, cache: Path) -> list[dict]:
+def copy_licenses(destination: Path, cache: Path, *, offline_cache: bool = False) -> list[dict]:
     licenses = destination / "licenses"
     licenses.mkdir(exist_ok=True)
     sources = []
     for filename, url, sha256 in LICENSE_INPUTS:
-        source = download_verified(cache, filename, url, sha256, "sha256")
+        source = download_verified(cache, filename, url, sha256, "sha256", offline_cache=offline_cache)
         if filename.endswith(".tar.gz"):
             # Wheel metadata declares MIT but omits its text. Preserve the
             # license from the exact, hash-verified upstream source release.
@@ -213,7 +234,8 @@ def copy_licenses(destination: Path, cache: Path) -> list[dict]:
                 (licenses / (filename.split("-")[0] + "-LICENSE.txt")).write_bytes(incoming.read())
         else:
             shutil.copy2(source, licenses / filename)
-        sources.append({"filename": filename, "url": url, "sha256": sha256})
+        sources.append({"filename": filename, "url": url, "sha256": sha256,
+                        "verification_mode": "pinned_checksum_cache_only" if offline_cache else "pinned_checksum"})
     (licenses / "THIRD-PARTY-NOTICES.txt").write_text(
         "Seoyoung POS third-party components\n\n"
         "CPython 3.12.10: Python Software Foundation; see runtime/LICENSE.txt.\n"
@@ -318,10 +340,10 @@ def write_archive(destination: Path, output: Path) -> Path:
     return archive_path
 
 
-def build(cache: Path, output: Path, *, refresh_source: bool = False) -> Path:
+def build(cache: Path, output: Path, *, refresh_source: bool = False, offline_cache: bool = False) -> Path:
     output.mkdir(parents=True, exist_ok=True)
     destination = output / "SeoyoungPOS"
-    runtime, wheels, upstream_manifest = upstream_artifacts(cache)
+    runtime, wheels, upstream_manifest = upstream_artifacts(cache, offline_cache=offline_cache)
     distlib_wheel = next(path for path in wheels if path.name.startswith("distlib-"))
     pefile_wheel = next(path for path in wheels if path.name.startswith("pefile-"))
     if refresh_source:
@@ -353,7 +375,7 @@ def build(cache: Path, output: Path, *, refresh_source: bool = False) -> Path:
             encoding="utf-8-sig"
         )
     create_launcher(destination, distlib_wheel)
-    license_sources = copy_licenses(destination, cache)
+    license_sources = copy_licenses(destination, cache, offline_cache=offline_cache)
     (destination / "diagnose.bat").write_text(
         '@echo off\r\ncd /d "%~dp0"\r\n"runtime\\python.exe" "SeoyoungPOS.exe" %*\r\nset "pos_exit=%errorlevel%"\r\npause\r\nexit /b %pos_exit%\r\n', encoding="ascii"
     )
@@ -361,6 +383,8 @@ def build(cache: Path, output: Path, *, refresh_source: bool = False) -> Path:
     validation = validate_layout(destination, pefile_wheel)
     report = {"package": "Seoyoung POS", "target": "Windows x64", "python": "3.12.10",
               "assembly_host": sys.platform, "distribution_type": "relocatable distlib launcher + CPython runtime",
+              "build_mode": "verified_offline_cache" if offline_cache else "online_metadata_and_verified_cache",
+              "offline_cache": offline_cache, "wheel_metadata_fetched": not offline_cache,
               "upstream_integrity": upstream_manifest, "license_sources": license_sources,
               "source_sha256": source_hashes, "validation": validation}
     (destination / "PORTABLE-BUNDLE.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -373,8 +397,10 @@ def main() -> int:
     parser.add_argument("--cache", type=Path, default=Path("/workspace/downloads-pos"))
     parser.add_argument("--output", type=Path, default=Path("/workspace/artifacts/windows-portable"))
     parser.add_argument("--refresh-source", action="store_true", help="Refresh app source in this script's existing bundle and rezip")
+    parser.add_argument("--offline-cache", action="store_true",
+                        help="Require all pinned artifacts/licenses in --cache; verify hashes without any network requests")
     args = parser.parse_args()
-    build(args.cache.resolve(), args.output.resolve(), refresh_source=args.refresh_source)
+    build(args.cache.resolve(), args.output.resolve(), refresh_source=args.refresh_source, offline_cache=args.offline_cache)
     return 0
 
 
