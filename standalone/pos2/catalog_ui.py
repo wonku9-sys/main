@@ -1411,6 +1411,9 @@ class SettingsPage(Page):
         self.sound_enabled=sound_checkbox(self.store);sound_form.addRow(self.sound_enabled)
         sound_note=QLabel('메뉴·팝업 열기/닫기·저장·수정·삭제·경고에 짧은 효과음을 냅니다. 변경 즉시 현재 계정에 저장됩니다. 배경 음악은 별도 설정입니다.');sound_note.setWordWrap(True);sound_form.addRow(sound_note)
         from .lucky_audio import login_sound_settings
+        from .lucky_audio import mouse_sound
+        self.mouse_click_enabled=QCheckBox('왼쪽 클릭 소리');self.mouse_click_enabled.setChecked(mouse_sound('click').enabled);self.mouse_click_enabled.toggled.connect(mouse_sound('click').set_enabled);sound_form.addRow(self.mouse_click_enabled)
+        self.mouse_context_enabled=QCheckBox('오른쪽 메뉴 소리');self.mouse_context_enabled.setChecked(mouse_sound('context').enabled);self.mouse_context_enabled.toggled.connect(mouse_sound('context').set_enabled);sound_form.addRow(self.mouse_context_enabled)
         from .widgets import action
         sound_form.addRow(action('로그인·경고 사운드 설정',lambda:login_sound_settings(self)))
         self.body.addWidget(sounds)
@@ -1504,6 +1507,9 @@ class SettingsPage(Page):
             return
         settings = self.store.settings()
         self.sound_enabled.blockSignals(True);self.sound_enabled.setChecked(self.store.popup_sound_enabled());self.sound_enabled.blockSignals(False)
+        from .lucky_audio import mouse_sound
+        for field,kind in ((self.mouse_click_enabled,'click'),(self.mouse_context_enabled,'context')):
+            field.blockSignals(True);field.setChecked(mouse_sound(kind).enabled);field.blockSignals(False)
         self.rounding_mode.setCurrentIndex(max(0, self.rounding_mode.findData(settings["rounding_mode"])))
         defaults = {"earn_bps": 100, "point_min": 1000, "point_step": 100}
         for key, field in self.fields.items():

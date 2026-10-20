@@ -1,4 +1,5 @@
 """Resizable dialogs, maximize/fullscreen controls and accessible overflow."""
+import time
 from PySide6.QtCore import QEvent,QObject,Qt
 from PySide6.QtGui import QAction,QKeySequence
 from PySide6.QtWidgets import QApplication,QDialog,QScrollArea,QVBoxLayout,QWidget,QMenu,QPushButton,QHBoxLayout,QSizeGrip
@@ -55,10 +56,19 @@ def accessible_content(dialog):
 
 class PopupPolicy(QObject):
     def eventFilter(self,watched,event):
+        if event.type()==QEvent.Type.ContextMenu or event.type()==QEvent.Type.MouseButtonPress and event.button()==Qt.MouseButton.RightButton:
+            QApplication.instance()._sy_context_requested_at=time.monotonic()
+        if isinstance(watched,QWidget) and event.type()==QEvent.Type.MouseButtonRelease and event.button()==Qt.MouseButton.LeftButton and watched.isEnabled():
+            from .ui_sounds import play_global_cue
+            play_global_cue('click')
         if isinstance(watched,QDialog) and event.type() in {QEvent.Type.Show,QEvent.Type.Hide}:
             from .ui_sounds import play_dialog_cue
             play_dialog_cue(watched,event)
         if isinstance(watched,QMenu) and event.type()==QEvent.Type.Show:
+            app=QApplication.instance();requested=getattr(app,'_sy_context_requested_at',0);app._sy_context_requested_at=0
+            if 0<time.monotonic()-requested<2:
+                from .ui_sounds import play_global_cue
+                play_global_cue('context')
             from .menu_icons import decorate_menu
             decorate_menu(watched)
         if isinstance(watched,QDialog) and type(watched).__name__ not in EXCLUDED:

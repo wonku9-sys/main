@@ -69,6 +69,7 @@ class SoundController(QObject):
             warning=event.type()==QEvent.Type.Show and isinstance(widget,QMessageBox) and widget.icon() in {QMessageBox.Icon.Warning,QMessageBox.Icon.Critical}
             self.play('warning' if warning else 'open' if event.type()==QEvent.Type.Show else 'close')
         elif isinstance(widget,(QAbstractButton,QMenu)) and event.type()==QEvent.Type.MouseButtonRelease and event.button()==Qt.MouseButton.LeftButton:
+            if hasattr(QApplication.instance(),'_sy_popup_policy'):return False
             if widget.isEnabled():self.play('menu')
         return False
 
@@ -97,26 +98,39 @@ def play_dialog_cue(dialog,event):
             from .lucky_audio import warning_sound
             warning_sound().stop()
     else:return False
+    return play_global_cue(kind)
+
+
+def play_global_cue(kind):
     app=QApplication.instance()
     from .lucky_audio import warning_sound
-    if kind=='warning':
+    if kind in {'click','context'}:
+        from .lucky_audio import mouse_sound
+        sound=mouse_sound(kind)
+    elif kind=='warning':
         sound=warning_sound()
+    if kind in {'warning','click','context'}:
         if not sound.enabled or not sound.volume:return False
+    fallback='menu' if kind in {'click','context'} else kind
+    if kind in {'click','context'}:
+        now=time.monotonic();previous=getattr(app,'_sy_mouse_cue_at',0)
+        if now-previous<.08:return False
+        app._sy_mouse_cue_at=now
     for widget in QApplication.topLevelWidgets():
         controller=getattr(widget,'sounds',None)
         if widget.isVisible() and controller is not None and not getattr(controller,'stopped',False):
-            if kind=='warning' and sound.source is not None and sound.play():return True
-            return controller.play(kind)
+            if kind in {'warning','click','context'} and sound.source is not None and sound.play():return True
+            return controller.play(fallback)
     if not public_sound_settings().value('enabled',True,type=bool) or app.platformName() in {'offscreen','minimal'}:return False
-    if kind=='warning' and sound.source is not None and sound.play():return True
+    if kind in {'warning','click','context'} and sound.source is not None and sound.play():return True
     try:
         from PySide6.QtMultimedia import QSoundEffect,QMediaDevices
         if not QMediaDevices.audioOutputs():return False
         directory=Path(QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppLocalDataLocation))/'ui-cues'
         if directory.is_symlink():return False
-        directory.mkdir(parents=True,exist_ok=True);path=directory/(kind+'-v1.wav')
+        directory.mkdir(parents=True,exist_ok=True);path=directory/(fallback+'-v1.wav')
         if path.is_symlink():return False
-        if not path.exists():write_cue(path,kind)
+        if not path.exists():write_cue(path,fallback)
         player=getattr(app,'_sy_public_cue',None)
         if player is None:player=QSoundEffect(app);app._sy_public_cue=player
         player.stop();player.setSource(QUrl.fromLocalFile(str(path)));player.setVolume(.08);player.play();return True

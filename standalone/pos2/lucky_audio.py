@@ -11,8 +11,8 @@ class DrawSound(QObject):
     problem=Signal(str)
     def __init__(self,parent=None,settings=None,root=None,kind='draw'):
         super().__init__(parent)
-        if kind not in {'draw','open','login','warning'}:raise ValueError('알 수 없는 프로그램 효과음입니다.')
-        self.kind=kind;self.settings=settings if settings is not None else QSettings('SY-POS',{'draw':'LuckyDrawSound','open':'LuckyOpenSound','login':'LoginSound','warning':'WarningSound'}[kind])
+        if kind not in {'draw','open','login','warning','click','context'}:raise ValueError('알 수 없는 프로그램 효과음입니다.')
+        self.kind=kind;self.settings=settings if settings is not None else QSettings('SY-POS',{'draw':'LuckyDrawSound','open':'LuckyOpenSound','login':'LoginSound','warning':'WarningSound','click':'MouseClickSound','context':'ContextMenuSound'}[kind])
         self.root=Path(root) if root else Path(QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppLocalDataLocation))/'lucky-audio'/kind
         self.player=None;self.output=None
     @property
@@ -89,34 +89,34 @@ def warning_sound():
     return sound
 
 
+def mouse_sound(kind):
+    if kind not in {'click','context'}:raise ValueError('마우스 효과음을 확인하세요.')
+    app=QApplication.instance();key='_sy_'+kind+'_sound';sound=getattr(app,key,None)
+    if sound is None:sound=DrawSound(app,kind=kind);setattr(app,key,sound)
+    return sound
+
+
 def login_sound_settings(parent=None):
-    from PySide6.QtWidgets import QDialog,QVBoxLayout,QHBoxLayout,QCheckBox,QLabel,QSlider,QFileDialog
+    from PySide6.QtWidgets import QDialog,QVBoxLayout,QHBoxLayout,QCheckBox,QLabel,QSlider,QFileDialog,QGroupBox
     from .widgets import action
     from .ui_sounds import public_sound_settings
-    sound=login_sound();dialog=QDialog(parent);dialog.setWindowTitle('로그인·경고·시작화면 소리 설정');dialog.resize(640,540)
-    layout=QVBoxLayout(dialog);enabled=QCheckBox('로그인 성공 사운드');enabled.setChecked(sound.enabled);enabled.toggled.connect(sound.set_enabled);layout.addWidget(enabled)
-    label=QLabel(sound.settings.value('display_name','로그인 MP3 파일을 선택하세요.',type=str));label.setWordWrap(True);layout.addWidget(label)
-    def choose():
-        name,_=QFileDialog.getOpenFileName(dialog,'로그인 성공 사운드 선택','','오디오 파일 (*.mp3 *.wav)')
-        if not name:return
-        try:sound.register(name);label.setText(sound.settings.value('display_name','',type=str))
-        except (ValueError,OSError) as exc:label.setText(str(exc))
-    row=QHBoxLayout();row.addWidget(action('로그인 사운드 파일 선택',choose));row.addWidget(action('미리 듣기',sound.play));layout.addLayout(row)
-    volume=QSlider(Qt.Orientation.Horizontal);volume.setRange(0,100);volume.setValue(sound.volume);volume.valueChanged.connect(sound.set_volume);layout.addWidget(QLabel('로그인 사운드 음량'));layout.addWidget(volume)
-    warning=warning_sound();warning_enabled=QCheckBox('메시지 경고·알림 사운드');warning_enabled.setChecked(warning.enabled);warning_enabled.toggled.connect(warning.set_enabled);layout.addWidget(warning_enabled)
-    warning_label=QLabel(warning.settings.value('display_name','파일 미선택: 짧은 기본 경고음 사용',type=str));warning_label.setWordWrap(True);layout.addWidget(warning_label)
-    def choose_warning():
-        name,_=QFileDialog.getOpenFileName(dialog,'메시지 경고·알림 사운드 선택','','오디오 파일 (*.mp3 *.wav)')
-        if not name:return
-        try:warning.register(name);warning_label.setText(warning.settings.value('display_name','',type=str))
-        except (ValueError,OSError) as exc:warning_label.setText(str(exc))
-    warning_row=QHBoxLayout();warning_row.addWidget(action('경고 사운드 파일 선택',choose_warning));warning_row.addWidget(action('경고 소리 미리 듣기',warning.play));layout.addLayout(warning_row)
-    warning_volume=QSlider(Qt.Orientation.Horizontal);warning_volume.setRange(0,100);warning_volume.setValue(warning.volume);warning_volume.valueChanged.connect(warning.set_volume);layout.addWidget(QLabel('경고 사운드 음량'));layout.addWidget(warning_volume)
-    public=QCheckBox('로그인 전 팝업·경고 효과음');public.setChecked(public_sound_settings().value('enabled',True,type=bool))
+    dialog=QDialog(parent);dialog.setWindowTitle('프로그램 사운드 설정');dialog.resize(720,680);layout=QVBoxLayout(dialog)
+    sounds=[(login_sound(),'로그인','로그인 성공 사운드'),(warning_sound(),'경고','메시지 경고·알림 사운드'),(mouse_sound('click'),'왼쪽 클릭','왼쪽 클릭 소리'),(mouse_sound('context'),'오른쪽 메뉴','오른쪽 메뉴 소리')]
+    for sound,caption,title in sounds:
+        group=QGroupBox(title);section=QVBoxLayout(group);enabled=QCheckBox('사용');enabled.setChecked(sound.enabled);enabled.toggled.connect(sound.set_enabled)
+        label=QLabel(sound.settings.value('display_name','파일 미선택: 로그인은 무음, 나머지는 짧은 기본 효과음',type=str));label.setWordWrap(True)
+        def choose(checked=False,sound=sound,label=label,caption=caption):
+            name,_=QFileDialog.getOpenFileName(dialog,caption+' 사운드 선택','','오디오 파일 (*.mp3 *.wav)')
+            if not name:return
+            try:sound.register(name);label.setText(sound.settings.value('display_name','',type=str))
+            except (ValueError,OSError) as exc:label.setText(str(exc))
+        row=QHBoxLayout();row.addWidget(enabled);row.addWidget(action(caption+' 사운드 파일 선택',choose));row.addWidget(action('미리 듣기',sound.play));row.addWidget(QLabel('음량'))
+        volume=QSlider(Qt.Orientation.Horizontal);volume.setRange(0,100);volume.setValue(sound.volume);volume.valueChanged.connect(sound.set_volume);row.addWidget(volume);section.addLayout(row);section.addWidget(label);layout.addWidget(group)
+    public=QCheckBox('로그인 전 팝업·경고·마우스 효과음');public.setChecked(public_sound_settings().value('enabled',True,type=bool))
     def public_toggle(value):
         settings=public_sound_settings();settings.setValue('enabled',value);settings.sync()
         player=getattr(QApplication.instance(),'_sy_public_cue',None)
         if not value and player:player.stop()
     public.toggled.connect(public_toggle);layout.addWidget(public)
     note=QLabel('선택한 MP3/WAV는 이 PC에만 보관됩니다. 로그인 후 팝업·경고음은 환경설정의 전체 효과음 설정을 따릅니다.');note.setWordWrap(True);layout.addWidget(note)
-    layout.addWidget(action('이 창 닫기',dialog.accept));dialog.finished.connect(lambda *_:(sound.stop(),warning.stop()));dialog.exec()
+    layout.addWidget(action('이 창 닫기',dialog.accept));dialog.finished.connect(lambda *_:[sound.stop() for sound,_,_ in sounds]);dialog.exec()

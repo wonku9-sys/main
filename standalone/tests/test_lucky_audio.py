@@ -39,7 +39,7 @@ def test_lucky_draw_once_per_visible_result_open_on_show_close_stops(app,tmp_pat
     monkeypatch.setattr(page.open_sound,'stop',lambda:events.append('stop-open'))
     monkeypatch.setattr(page.draw_sound,'play',lambda:events.append('draw'))
     monkeypatch.setattr(page.draw_sound,'stop',lambda:events.append('stop-draw'))
-    dialog.show();app.processEvents();assert events.count('open')==1
+    dialog.show();app.processEvents();QTest.qWait(30);app.processEvents();assert events.count('open')==1
     page.draw();page.finish_draw();assert events.count('draw')==1
     page.finish_draw();assert events.count('draw')==1
     page.draw_five();page.finish_draw();assert len(page.results)==5 and events.count('draw')==2
@@ -109,3 +109,20 @@ def test_login_warning_settings_build_and_keep_their_sources_separate(app,tmp_pa
         buttons['로그인 사운드 파일 선택'].click();assert login.source is not None and login.source!=warning.source
         return QDialog.DialogCode.Accepted
     monkeypatch.setattr(QDialog,'exec',inspect);lucky_audio.login_sound_settings()
+
+
+def test_mouse_cues_are_separate_toggleable_and_right_click_requires_menu(app,tmp_path,monkeypatch):
+    from PySide6.QtCore import QEvent
+    from PySide6.QtWidgets import QWidget,QMenu
+    from pos2 import lucky_audio,ui_sounds
+    from pos2.popup_policy import PopupPolicy
+    click=controller(tmp_path,'click');context=controller(tmp_path,'context')
+    monkeypatch.setattr(lucky_audio,'mouse_sound',lambda kind:click if kind=='click' else context)
+    click.set_enabled(False);context.set_enabled(True)
+    assert not ui_sounds.play_global_cue('click') and context.enabled
+    events=[];monkeypatch.setattr(ui_sounds,'play_global_cue',lambda kind:events.append(kind))
+    policy=PopupPolicy();widget=QWidget();menu=QMenu();app._sy_context_requested_at=0
+    policy.eventFilter(menu,QEvent(QEvent.Type.Show));assert not events
+    policy.eventFilter(widget,QEvent(QEvent.Type.ContextMenu));assert not events
+    policy.eventFilter(menu,QEvent(QEvent.Type.Show));assert events==['context']
+    policy.eventFilter(menu,QEvent(QEvent.Type.Show));assert events==['context']
