@@ -22,4 +22,4 @@ BASIC_VIEWS = {
     "product_units": "확장단위", "retirement": "퇴출대상", "weighted_products": "저울상품",
     "product_changes": "상품변경로그", "user_access": "직원접속로그",
 }
-FORM_VIEWS = {"quotations": ("견적서", "quotation"), "statements": ("거래명세서", "statement"), "member_tax": ("(세금)계산서 참고자료", "tax_reference")}
+FORM_VIEWS = {"quotations": ("견적서", "quotation"), "statements": ("거래명세서", "statement"), "member_tax": ("(세금)계산서 참고자료", "tax_reference"), "orders":("주문서","order")}

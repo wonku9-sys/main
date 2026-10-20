@@ -38,16 +38,16 @@ CREATE TABLE IF NOT EXISTS inventory_count_lines (
  id INTEGER PRIMARY KEY, count_id INTEGER NOT NULL REFERENCES inventory_counts(id) ON DELETE CASCADE,
  product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE RESTRICT,
  product_name TEXT NOT NULL, base_unit TEXT NOT NULL,
- expected_qty INTEGER NOT NULL CHECK(expected_qty>=0),
+ expected_qty INTEGER NOT NULL CHECK(ABS(expected_qty)<=9000000000000),
  counted_qty INTEGER NOT NULL CHECK(counted_qty>=0),
- expected_cost INTEGER NOT NULL CHECK(expected_cost>=0),
+ expected_cost INTEGER NOT NULL CHECK(ABS(expected_cost)<=9000000000000),
  counted_cost INTEGER NOT NULL CHECK(counted_cost>=0),
  last_event_id INTEGER NOT NULL DEFAULT 0,
  UNIQUE(count_id,product_id)
 );
 CREATE TABLE IF NOT EXISTS inventory_closes (
  id INTEGER PRIMARY KEY, month TEXT NOT NULL UNIQUE, date TEXT NOT NULL,
- stock_cost INTEGER NOT NULL CHECK(stock_cost>=0), item_count INTEGER NOT NULL,
+ stock_cost INTEGER NOT NULL CHECK(ABS(stock_cost)<=9000000000000), item_count INTEGER NOT NULL,
  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT, created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS inventory_close_lines (
@@ -55,7 +55,7 @@ CREATE TABLE IF NOT EXISTS inventory_close_lines (
  product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE RESTRICT,
  product_code TEXT NOT NULL, product_name TEXT NOT NULL, base_unit TEXT NOT NULL,
  category TEXT NOT NULL, supplier_name TEXT NOT NULL,
- stock_qty INTEGER NOT NULL CHECK(stock_qty>=0), stock_cost INTEGER NOT NULL CHECK(stock_cost>=0),
+ stock_qty INTEGER NOT NULL CHECK(ABS(stock_qty)<=9000000000000), stock_cost INTEGER NOT NULL CHECK(ABS(stock_cost)<=9000000000000),
  UNIQUE(close_id,product_id)
 );
 CREATE TABLE IF NOT EXISTS cash_closes (
@@ -219,7 +219,7 @@ class OperationsMixin:
             for item in items:
                 try:
                     product_id = int(item["product_id"])
-                    expected = qty(item["expected_qty"], allow_zero=True)
+                    expected = qty(item["expected_qty"], allow_zero=True, signed=True)
                     counted = qty(item["counted_qty"], allow_zero=True)
                 except (KeyError, TypeError, ValueError):
                     raise ValueError("실사 상품과 장부수량·실사수량을 올바르게 입력하세요.") from None
@@ -239,7 +239,7 @@ class OperationsMixin:
                     raise ValueError("실사일 이후 재고이동이 있습니다. 현재 날짜로 실사하세요.")
                 counted_cost = rounded(
                     Decimal(product["stock_cost"]) * counted / expected
-                    if expected else Decimal(product["purchase_price"]) * counted / (1000 * product["price_basis"])
+                    if expected>0 and product['stock_cost']>=0 else Decimal(product["purchase_price"]) * counted / (1000 * product["price_basis"])
                 )
                 rows.append((product_id, product["name"], product["base_unit"], expected,
                              counted, product["stock_cost"], counted_cost, latest[0]))
@@ -366,7 +366,7 @@ class OperationsMixin:
                 "GROUP BY p.id ORDER BY p.code,p.id", (end,),
             ).fetchall()
             for row in rows:
-                if row["asof_qty"] < 0 or row["asof_cost"] < 0:
+                if not self._settings_values()['allow_negative_stock'] and (row["asof_qty"] < 0 or row["asof_cost"] < 0):
                     raise ValueError(f"{row['name']}: 해당 월말 기준 재고가 음수입니다. 거래일자를 확인하세요.")
                 if row["asof_qty"] == 0 and row["asof_cost"] != 0:
                     raise ValueError(f"{row['name']}: 월말 수량은 0인데 원가가 남습니다. 거래일자를 확인하세요.")

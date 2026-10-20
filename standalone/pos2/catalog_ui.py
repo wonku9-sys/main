@@ -831,6 +831,8 @@ class ProductDialog(QDialog):
             self.record = dict(latest)
         self.stock_quantity.setText(f"{_quantity(self.record.get('stock_qty', 0))} {self.record.get('base_unit', self.unit.currentText())}")
         self.stock_cost.setText(f"{_won(self.record.get('stock_cost', 0))} 원")
+        for key,label in (('stock_qty',self.stock_quantity),('stock_cost',self.stock_cost)):
+            label.setStyleSheet('color:#B42318;font-weight:700' if Decimal(str(self.record.get(key,0)))<0 else '')
         def timestamp(key, default):
             value = self.record.get(key)
             if not value:
@@ -1395,6 +1397,7 @@ class SettingsPage(Page):
         super().__init__(window, "매장 설정 · 백업", "서버 없이 이 PC의 SQLite 파일에 모든 업무자료를 저장합니다.")
         self.fields = {}
         _button("이메일 발송 설정",self.mail_settings,self.actions)
+        _button('점포 등록정보',lambda:self.window.open_page('store_profile'),self.actions)
         business = QGroupBox("매장 기본정보")
         form = QFormLayout(business)
         for key, label in (("store_name", "매장명"), ("business_no", "사업자등록번호"),
@@ -1406,7 +1409,10 @@ class SettingsPage(Page):
         sounds=QGroupBox('프로그램 효과음');sound_form=QFormLayout(sounds)
         from .popup_sound import sound_checkbox
         self.sound_enabled=sound_checkbox(self.store);sound_form.addRow(self.sound_enabled)
-        sound_note=QLabel('메뉴·팝업 열기/닫기·저장·수정·삭제에 짧은 효과음을 냅니다. 변경 즉시 현재 계정에 저장됩니다. 배경 음악은 별도 설정입니다.');sound_note.setWordWrap(True);sound_form.addRow(sound_note)
+        sound_note=QLabel('메뉴·팝업 열기/닫기·저장·수정·삭제·경고에 짧은 효과음을 냅니다. 변경 즉시 현재 계정에 저장됩니다. 배경 음악은 별도 설정입니다.');sound_note.setWordWrap(True);sound_form.addRow(sound_note)
+        from .lucky_audio import login_sound_settings
+        from .widgets import action
+        sound_form.addRow(action('로그인·경고 사운드 설정',lambda:login_sound_settings(self)))
         self.body.addWidget(sounds)
         calculation = QGroupBox("금액 계산 · 반올림")
         calculation_form = QFormLayout(calculation)
@@ -1415,6 +1421,10 @@ class SettingsPage(Page):
         calculation_note = QLabel("단가는 소수점 두 자리까지 입력합니다. 행 금액은 선택한 기준으로 계산하고, 결제·잔액은 0.01원까지 보존합니다.\n설정 변경은 새 전표에만 적용하며 기존 전표의 계산 방식은 유지합니다.")
         calculation_note.setWordWrap(True)
         calculation_form.addRow(calculation_note)
+        self.negative_stock=QCheckBox('재고 부족 시 마이너스 재고로 거래 기록 허용')
+        calculation_form.addRow(self.negative_stock)
+        negative_note=QLabel('부족분 원가는 상품장 매입단가 등으로 잠정 계산됩니다. 매입 입고를 확인하고 실사로 원가 차이를 조정하세요. 수량 0에 원가가 남으면 월마감 전 실사가 필요합니다.')
+        negative_note.setWordWrap(True);calculation_form.addRow(negative_note)
         self.body.addWidget(calculation)
         points = QGroupBox("회원 포인트 정책")
         point_form = QFormLayout(points)
@@ -1499,6 +1509,7 @@ class SettingsPage(Page):
         for key, field in self.fields.items():
             field.setText(str(settings.get(key, defaults.get(key, ""))))
         self.point_enabled.setChecked(bool(settings.get("point_enabled", True)))
+        self.negative_stock.setChecked(bool(settings.get('allow_negative_stock',True)))
         policy = self.store.backup_schedule()
         self.backup_mode.setCurrentIndex(self.backup_mode.findData(policy["mode"]))
         self.backup_frequency.setCurrentIndex(self.backup_frequency.findData(policy["frequency"]))
@@ -1550,6 +1561,7 @@ class SettingsPage(Page):
             if not 0 <= values["earn_bps"] <= 10000 or values["point_min"] < 0 or values["point_step"] <= 0:
                 raise ValueError("적립률은 0~10000, 최소 사용은 0 이상, 사용 단위는 1 이상으로 입력하세요.")
             values["point_enabled"] = self.point_enabled.isChecked()
+            values['allow_negative_stock']=self.negative_stock.isChecked()
             values["rounding_mode"] = self.rounding_mode.currentData()
             values["backup_schedule"] = self.backup_schedule_values()
             self.store.save_settings(values)

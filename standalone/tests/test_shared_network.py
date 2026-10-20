@@ -104,6 +104,7 @@ def test_unconfirmed_write_blocks_different_write_until_safe_cancel(network,monk
 
 def test_atomic_concurrent_sales_cannot_oversell(network):
     owner,_,clients,_,_,customer,product=network
+    owner.save_settings({'allow_negative_stock':False})
     data={'kind':'sale','date':'2026-10-19','partner_id':customer,'lines':[{'product_id':product,'qty':'800','unit_price':'3800.75'}]}
     def sell(client):
         try:return client.post_document(data)
@@ -111,6 +112,22 @@ def test_atomic_concurrent_sales_cannot_oversell(network):
     with ThreadPoolExecutor(2) as pool:results=list(pool.map(sell,clients))
     assert sum(value is not None for value in results)==1
     assert owner.products()[0]['stock_qty']=='200.000'
+
+def test_atomic_concurrent_sales_allow_exact_negative_stock_when_enabled(network):
+    owner,_,clients,_,_,customer,product=network
+    assert owner._settings_values()['allow_negative_stock'] is True
+    data={'kind':'sale','date':'2026-10-19','partner_id':customer,'lines':[{'product_id':product,'qty':'800','unit_price':'3800.75'}]}
+    with ThreadPoolExecutor(2) as pool:results=list(pool.map(lambda client:client.post_document(data),clients))
+    assert len(set(results))==2 and owner.products()[0]['stock_qty']=='-600.000'
+    assert owner.db.execute('SELECT SUM(qty_delta) FROM stock_events WHERE product_id=?',(product,)).fetchone()[0]==-600000
+
+def test_two_clients_convert_one_order_to_one_sale(network):
+    owner,_,clients,_,_,customer,product=network
+    identifier=owner.save_sales_form('order',{'date':'2026-10-19','partner_id':customer,'lines':[{'product_id':product,'qty':'100','unit_price':'3800.75'}]})
+    before=len(owner.documents())
+    with ThreadPoolExecutor(2) as pool:results=list(pool.map(lambda client:client.post_order_sale(identifier),clients))
+    assert len(set(results))==1 and len(owner.documents())==before+1
+    assert clients[0].store_profile()['store_name']==owner.store_profile()['store_name']
 
 def test_stale_product_and_draft_edits_are_rejected_for_host_and_client(network):
     owner,_,(second,third),_,_,_,product=network

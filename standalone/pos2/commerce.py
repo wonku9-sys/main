@@ -370,41 +370,39 @@ class CommerceMixin:
                 continue
             before = cumulative[item["product_id"]]
             after = before + item["base_qty"]
-            if after > product["stock_qty"]:
+            if after > product["stock_qty"] and not self._settings_values()['allow_negative_stock']:
                 raise ValueError(f"{product['name']} 재고가 부족합니다. 중복 상품 행의 합계도 확인하세요.")
-            item["cost"] = rounded(Decimal(product["stock_cost"]) * after / product["stock_qty"]) - rounded(
-                Decimal(product["stock_cost"]) * before / product["stock_qty"])
+            # Negative/zero balances use the catalogue basis provisionally.
+            # Never divide by zero or silently rewrite earlier line costs.
+            basis=(Decimal(product['stock_cost'])/product['stock_qty']
+                   if product['stock_qty']>0 and product['stock_cost']>=0
+                   else Decimal(product['purchase_price'])/(1000*product['price_basis']))
+            item["cost"] = rounded(basis*after)-rounded(basis*before)
             cumulative[item["product_id"]] = after
 
     def post_document(self, data, draft_id=None):
         with self._tx():
-            self._require("trade")
-            self._require_trade_write(data, draft_id)
-            self._check_edit_snapshot('documents',draft_id,data)
-            prepared = self._prepare_trade(data, posting=True)
-            if prepared["date"] > calendar_date.today().isoformat():
-                raise ValueError("미래 거래는 확정할 수 없습니다. 예정 거래는 초안으로 보관하세요.")
-            self._assert_open(prepared["date"])
-            if prepared["kind"] == "sale":
-                self._assign_sale_costs(prepared)
-            identifier = self._write_trade(prepared, "posted", draft_id)
-            points_used, earned = prepared["points_used"], 0
-            if prepared["kind"] == "sale" and prepared["member_id"]:
-                earned = self._sale_points(identifier, prepared["member_id"], prepared["total"], points_used)
-            elif prepared["kind"] == "sale_return" and prepared["member_id"]:
-                points_used, earned = self._reverse_sale_points(identifier, prepared["source_id"], prepared["total"])
-            self.db.execute("UPDATE documents SET points_used=?,points_earned=?,cash_paid=0 WHERE id=?",
-                            (points_used, earned, identifier))
-            direction = 1 if prepared["kind"] in {"purchase", "sale_return"} else -1
-            for item in prepared["lines"]:
-                if item["tracked"]:
-                    self._move(item["product_id"], direction * item["base_qty"], direction * item["cost"],
-                               prepared["kind"], prepared["memo"], identifier, prepared["date"])
-            if prepared["paid"]:
-                self._insert_trade_payment(identifier, prepared["paid"], prepared["date"], prepared["method"], "등록 시 정산")
-            self._audit("post", "document", identifier,
-                        {"kind": prepared["kind"], "total": prepared["total"], "points_used": points_used})
-            return identifier
+            return self._post_document_in_tx(data,draft_id)
+
+    def _post_document_in_tx(self,data,draft_id=None):
+        if not self.db.in_transaction:raise RuntimeError('전표 확정에는 업무 트랜잭션이 필요합니다.')
+        self._require('trade');self._require_trade_write(data,draft_id)
+        self._check_edit_snapshot('documents',draft_id,data)
+        prepared=self._prepare_trade(data,posting=True)
+        if prepared['date']>calendar_date.today().isoformat():raise ValueError('미래 거래는 확정할 수 없습니다. 예정 거래는 초안으로 보관하세요.')
+        self._assert_open(prepared['date'])
+        if prepared['kind']=='sale':self._assign_sale_costs(prepared)
+        identifier=self._write_trade(prepared,'posted',draft_id)
+        points_used,earned=prepared['points_used'],0
+        if prepared['kind']=='sale' and prepared['member_id']:earned=self._sale_points(identifier,prepared['member_id'],prepared['total'],points_used)
+        elif prepared['kind']=='sale_return' and prepared['member_id']:points_used,earned=self._reverse_sale_points(identifier,prepared['source_id'],prepared['total'])
+        self.db.execute('UPDATE documents SET points_used=?,points_earned=?,cash_paid=0 WHERE id=?',(points_used,earned,identifier))
+        direction=1 if prepared['kind'] in {'purchase','sale_return'} else -1
+        for item in prepared['lines']:
+            if item['tracked']:self._move(item['product_id'],direction*item['base_qty'],direction*item['cost'],prepared['kind'],prepared['memo'],identifier,prepared['date'])
+        if prepared['paid']:self._insert_trade_payment(identifier,prepared['paid'],prepared['date'],prepared['method'],'등록 시 정산')
+        self._audit('post','document',identifier,dict(kind=prepared['kind'],total=prepared['total'],points_used=points_used))
+        return identifier
 
     def _move(self, product_id, qty_delta, cost_delta, kind, reason, document_id=None, date=None):
         if not self.db.in_transaction:
@@ -419,12 +417,17 @@ class CommerceMixin:
         if not isinstance(qty_delta, int) or not isinstance(cost_delta, int):
             raise ValueError("내부 재고 이동은 정수로 계산해야 합니다.")
         balance_qty, balance_cost = product["stock_qty"] + qty_delta, product["stock_cost"] + cost_delta
-        if min(balance_qty, balance_cost) < 0:
+        negative_allowed=self._settings_values()['allow_negative_stock']
+        improves_qty=product['stock_qty']<0 and qty_delta>=0
+        improves_cost=product['stock_cost']<0 and cost_delta>=0
+        if not negative_allowed and (balance_qty<0 and not improves_qty or balance_cost<0 and not improves_cost):
             raise ValueError("재고 수량 또는 원가액이 부족하여 처리할 수 없습니다.")
-        if max(abs(qty_delta), abs(cost_delta), balance_qty, balance_cost) > LIMIT:
+        if max(abs(qty_delta), abs(cost_delta), abs(balance_qty), abs(balance_cost)) > LIMIT:
             raise ValueError("재고 허용 범위를 초과했습니다.")
-        if balance_qty == 0 and balance_cost != 0:
+        if not negative_allowed and product['stock_qty']>=0 and balance_qty == 0 and balance_cost != 0:
             raise ValueError("수량 0에 원가 잔액이 남는 이동은 처리할 수 없습니다. 재고 실사를 확인하세요.")
+        if balance_qty<0 or balance_cost<0 or balance_qty==0 and balance_cost:
+            reason=(text(reason,'재고 사유',maximum=1500)+' · 부족/원가 잠정: 입고 확인·실사 필요').strip(' ·')
         self.db.execute("UPDATE products SET stock_qty=?,stock_cost=?,updated_at=? WHERE id=?",
                         (balance_qty, balance_cost, now(), product_id))
         self.db.execute(

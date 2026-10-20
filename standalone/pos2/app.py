@@ -106,6 +106,8 @@ SECTIONS = [
     ("0. 관리자 모드", [("permissions", "권한 설정", "admin")]),
     ("나의 기록", [("diary","보안 일기장",()),("household","가계부",()),("worklog","업무일지",()),("lucky_numbers","행운의 숫자",())]),
 ]
+SECTIONS[1][1].append(('store_profile','점포 등록정보','admin'))
+SECTIONS[3][1].append(('orders','주문서','trade'))
 
 
 class LoginDialog(FormDialog):
@@ -141,6 +143,8 @@ class LoginDialog(FormDialog):
         self.password.returnPressed.connect(self.submit)
         self.body.addWidget(action("로그인 암호 찾기 · 이메일 인증",self.reset_by_email))
         self.body.addWidget(action("이메일 주소 등록 · 발송 설정",self.setup_recovery_email))
+        from .lucky_audio import login_sound_settings
+        self.body.addWidget(action('로그인·경고 사운드 설정',lambda:login_sound_settings(self)))
         if network_path:
             from .shared_ui import NetworkSettingsDialog
             self.body.addWidget(action('PC 연결 설정',lambda:NetworkSettingsDialog(network_path,store,self).exec()))
@@ -196,6 +200,9 @@ class LoginDialog(FormDialog):
             if replacing:
                 self.store.change_password(self.password.text(),value)
                 self.new_password.clear();self.new_confirm.clear()
+            if self.store.popup_sound_enabled():
+                from .lucky_audio import login_sound
+                login_sound().play()
             self.accept()
         except (ValueError, PermissionError) as exc:
             self.error(exc)
@@ -434,7 +441,8 @@ class MainWindow(QMainWindow):
                 self.nav_actions[key] = nav
                 if title=="나의 기록":
                     from .personal_icons import personal_icon
-                    button=action({"diary":"일기장  ·  별도 암호","household":"가계부  ·  나의 수입·지출","worklog":"업무일지  ·  오늘의 업무","lucky_numbers":"행운의 숫자  ·  재미있는 추첨"}[key],lambda checked=False,target=key:self.open_page(target))
+                    button=action({"diary":"일기장","household":"가계부","worklog":"업무일지","lucky_numbers":"행운의 숫자"}[key],lambda checked=False,target=key:self.open_page(target))
+                    button.setAccessibleName(caption)
                     button.setIcon(personal_icon(key));button.setIconSize(QSize(24,24))
                     attach_help(button,hint);self.personal_layout.addWidget(button)
         self.personal_panel.setVisible(bool(self.personal_navigation_root.childCount()))
@@ -478,6 +486,11 @@ class MainWindow(QMainWindow):
 
     def enable_runtime(self):
         self.navigation.enable()
+        from .unsaved_work import CrashJournal
+        self.crash_journal=CrashJournal(self)
+        recover=QAction('미저장 작업 복구',self);recover.triggered.connect(self.crash_journal.show_center);self.toolbar.addAction(recover)
+        recover.setToolTip('비정상 종료 전에 암호화 보관된 임시 작업을 확인하고 입력창으로 복구합니다. 복구만으로 저장·재고 확정은 하지 않습니다.')
+        if self.crash_journal.rows():QTimer.singleShot(900,self.crash_journal.offer)
         self._backup_runtime_enabled = True
         self.backup_timer.start()
         self.alert_timer.start()
@@ -568,6 +581,7 @@ class MainWindow(QMainWindow):
         self.alert_timer.stop()
         self.popup_timer.stop()
         self.navigation.disable()
+        if hasattr(self,'crash_journal'):self.crash_journal.stop()
         self.sounds.stop()
         if self.shared_refresh:self.shared_refresh.stop()
         if self.shared_service:self.shared_service.stop()
@@ -625,6 +639,8 @@ class MainWindow(QMainWindow):
         from .supplier_ui import SuppliersPage
         factories = {"overview": lambda: OverviewPage(self), "products": lambda: ProductsPage(self), "suppliers": lambda: PartnersPage(self, "supplier"), "customers": lambda: PartnersPage(self, "customer"), "purchases": lambda: TradesPage(self, "purchase"), "sales": lambda: TradesPage(self, "sale"), "ledger": lambda: LedgerPage(self), "inventory": lambda: InventoryPage(self), "counts": lambda: CountsPage(self), "closings": lambda: ClosingsPage(self), "members": lambda: MembersPage(self), "promotions": lambda: PromotionsPage(self), "prices": lambda: PricesPage(self), "gifts": lambda: GiftsPage(self), "reports": lambda: ReportPage(self), "commission": lambda: CommissionPage(self), "labels": lambda: LabelsPage(self), "users": lambda: UsersPage(self), "settings": lambda: SettingsPage(self)}
         factories["categories"] = lambda: CategoriesPage(self)
+        from .store_profile_ui import StoreProfilePage
+        factories['store_profile']=lambda:StoreProfilePage(self)
         factories["payments"] = lambda: SupplierPaymentsPage(self)
         factories["permissions"] = lambda: PermissionsPage(self)
         factories["home"] = lambda: HomePage(self)
@@ -1129,6 +1145,37 @@ def main(argv=None):
                             lucky.page.reset(False);lucky.show();lucky.page.draw_six()
                             for _ in range(120):lucky.page.machine.motion.advance(1/60,True)
                             capture('-lucky-mixing',lucky);lucky.close()
+                            # New paper workflows use the same saved snapshot in
+                            # the editor, native preview, PNG and email payload.
+                            window.open_page('store_profile');capture('-store-profile',window)
+                            from .offline_ui import SalesFormDialog
+                            customer=store.trade_partners('customer')[0]
+                            sample_product=store.trade_products()[0]
+                            order_id=store.save_sales_form('order',dict(date=today,partner_id=customer['id'],memo='인수 시 수량·규격 확인',lines=[dict(product_id=sample_product['id'],qty='2',unit_price=str(sample_product['sale_price']))],order=dict(delivery_date=today,assignee='담당자',phone='010-0000-0000',address='점포 앞 · 예시',delivery_note='도착 전 연락',order_type='phone')))
+                            window.open_page('orders');capture('-orders',window)
+                            order_editor=SalesFormDialog(window,'orders',store.sales_form(order_id),parent=window);capture('-order-editor',order_editor);order_editor.close()
+                            from .commercial_paper import paper_document,paper_images
+                            paper=paper_document(store.sales_form(order_id),'주문서')
+                            assert next(paper_images(paper)).save(str(args.screenshot.with_name(args.screenshot.stem+'-paper-a4.png')))
+                            from PySide6.QtPrintSupport import QPrinter,QPrintPreviewDialog
+                            printer=QPrinter();printer.setOutputFormat(QPrinter.OutputFormat.PdfFormat)
+                            preview=QPrintPreviewDialog(printer,window);preview.paintRequested.connect(paper.print_);capture('-commercial-preview',preview);preview.close()
+                            from .arcade_ui import ArcadeLobby,ScoreBook,GAMES
+                            lobby=ArcadeLobby();lobby.book=ScoreBook(directory/'smoke-arcade-scores.json');lobby.book.add('blocks','체험 플레이어',1250,'게임 종료');lobby.refresh();capture('-arcade-lobby',lobby)
+                            for game_kind in GAMES:
+                                game=lobby.launch(game_kind);game.paused=False;capture('-game-'+game_kind,game);game.close()
+                            roms=lobby.roms();capture('-approved-game-library',roms);roms.close()
+                            lobby.close()
+                            # Windows smoke uses real DPAPI, not a test cipher.
+                            from .unsaved_work import CrashJournal,RecoveryCenter
+                            window.navigation.enable();journal=CrashJournal(window);window.crash_journal=journal
+                            window.open_page('products');unsaved=ProductDialog(store,parent=window);unsaved.show();app.processEvents();unsaved.fields['name'].setText('임시 복구 검증 상품');journal.capture(unsaved)
+                            if sys.platform=='win32':
+                                rows=journal.rows();assert len(rows)==1
+                                assert journal.read(rows[0]['identifier'])['values']
+                                assert '임시 복구 검증 상품'.encode() not in next(journal.root.glob('*.draft')).read_bytes()
+                            recovery=RecoveryCenter(journal);capture('-crash-recovery',recovery);recovery.accept()
+                            journal.forget(unsaved);window.navigation.suspended=True;unsaved.close();journal.stop();window.navigation.disable();window.navigation.suspended=False
                     if args.smoke_test:
                         print(f"PASS standalone-v2: {len(window.items)} desktop pages, returns, expanded units, persistence, backup restore, no legacy imports", flush=True)
                         app.exit(0)

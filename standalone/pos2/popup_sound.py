@@ -9,7 +9,7 @@ from PySide6.QtWidgets import QApplication,QCheckBox
 
 def sound_checkbox(store):
     box=QCheckBox('전체 효과음');box.setChecked(store.popup_sound_enabled())
-    box.setToolTip('메뉴·창 열기/닫기·저장·수정·삭제 소리를 켜거나 끕니다. 현재 계정 설정이며 배경 음악은 별도입니다.')
+    box.setToolTip('메뉴·창 열기/닫기·저장·수정·삭제·경고·로그인 소리를 켜거나 끕니다. 현재 계정 설정이며 배경 음악은 별도입니다.')
     box.toggled.connect(store.save_popup_sound_enabled)
     return box
 

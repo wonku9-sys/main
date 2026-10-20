@@ -76,6 +76,11 @@ def show_personal(page,kind,dialog):
 def close_independent_windows(desktop):
     from shiboken6 import isValid
     lucky=getattr(QApplication.instance(),'_sy_lucky_window',None)
+    app=QApplication.instance()
+    for game in getattr(app,'_sy_arcade_windows',[]):
+        if isValid(game):game.close()
+    lobby=getattr(app,'_sy_arcade_lobby',None)
+    if lobby is not None and isValid(lobby):lobby.close()
     if lucky is not None and isValid(lucky):lucky.close()
     for dialog in list(getattr(desktop,'personal_windows',{}).values())+list(getattr(desktop,'popup_windows',{}).values()):
         if dialog.isVisible():

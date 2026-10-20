@@ -37,7 +37,7 @@ CREATE TABLE IF NOT EXISTS member_profiles (
 );
 CREATE TABLE IF NOT EXISTS sales_forms (
  id INTEGER PRIMARY KEY, number TEXT NOT NULL UNIQUE,
- kind TEXT NOT NULL CHECK(kind IN ('quotation','statement','tax_reference')),
+ kind TEXT NOT NULL CHECK(kind IN ('quotation','statement','tax_reference','order')),
  date TEXT NOT NULL, valid_until TEXT NOT NULL DEFAULT '',
  partner_id INTEGER NOT NULL REFERENCES partners(id) ON DELETE RESTRICT,
  member_id INTEGER REFERENCES members(id) ON DELETE RESTRICT,
@@ -46,6 +46,14 @@ CREATE TABLE IF NOT EXISTS sales_forms (
  content TEXT NOT NULL, memo TEXT NOT NULL DEFAULT '',
  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
  created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS sales_order_details (
+ form_id INTEGER PRIMARY KEY REFERENCES sales_forms(id) ON DELETE CASCADE,
+ delivery_date TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'received'
+ CHECK(status IN ('received','printed','completed','cancelled')),
+ order_type TEXT NOT NULL DEFAULT 'phone' CHECK(order_type IN ('phone','visit','internet')),
+ assignee TEXT NOT NULL DEFAULT '', phone TEXT NOT NULL DEFAULT '', address TEXT NOT NULL DEFAULT '',
+ delivery_note TEXT NOT NULL DEFAULT '', document_id INTEGER REFERENCES documents(id) ON DELETE RESTRICT
 );
 """
 
@@ -143,12 +151,14 @@ class OfflineFeaturesMixin:
                 return key
         raise ValueError("문서 종류를 확인하세요.")
 
-    def sales_forms(self, kind, start, end, search=""):
+    def sales_forms(self, kind, start, end, search="", status='', date_basis='date'):
         self.require_menu(self._form_menu(kind))
         start, end = day(start), day(end)
         if start > end:
             raise ValueError("조회 기간을 확인하세요.")
-        return [dict(r) for r in self.db.execute("SELECT f.*,p.name partner_name FROM sales_forms f JOIN partners p ON p.id=f.partner_id WHERE f.kind=? AND f.date BETWEEN ? AND ? AND (f.number LIKE ? OR p.name LIKE ? OR f.memo LIKE ?) ORDER BY f.date DESC,f.id DESC", (kind, start, end, *[f"%{text(search)}%"]*3))]
+        if status not in {'','received','printed','completed','cancelled'} or date_basis not in {'date','delivery_date'}:raise ValueError('조회 조건을 확인하세요.')
+        field='o.delivery_date' if kind=='order' and date_basis=='delivery_date' else 'f.date'
+        return [dict(r) for r in self.db.execute(f"SELECT f.*,p.name partner_name,o.delivery_date,o.status order_status,o.assignee FROM sales_forms f JOIN partners p ON p.id=f.partner_id LEFT JOIN sales_order_details o ON o.form_id=f.id WHERE f.kind=? AND {field} BETWEEN ? AND ? AND (?='' OR o.status=?) AND (f.number LIKE ? OR p.name LIKE ? OR f.memo LIKE ?) ORDER BY f.date DESC,f.id DESC", (kind, start, end,status,status, *[f"%{text(search)}%"]*3))]
 
     def sales_form(self, identifier):
         row = self.db.execute("SELECT * FROM sales_forms WHERE id=?", (identifier,)).fetchone()
@@ -156,11 +166,17 @@ class OfflineFeaturesMixin:
             raise ValueError("문서를 찾을 수 없습니다.")
         self.require_menu(self._form_menu(row["kind"]))
         result = dict(row)
+        result['_edit_token']=self._edit_snapshot('sales_forms',identifier)
         result.update(json.loads(result.pop("content")))
         for line in result["lines"]:
             for key in ("unit_price", "total"):
                 line[key] = int(line[key])
         result["source_states"] = [dict(r) for source in result.get("source_ids", []) for r in self.db.execute("SELECT id,number,status FROM documents WHERE id=?", (source,))]
+        if row['kind']=='order':
+            details=self.db.execute('SELECT * FROM sales_order_details WHERE form_id=?',(identifier,)).fetchone()
+            result['order']=dict(details) if details else {}
+            if result['order'].get('document_id'):
+                result['source_states'].extend(dict(r) for r in self.db.execute('SELECT id,number,status FROM documents WHERE id=?',(result['order']['document_id'],)))
         return result
 
     def form_sources(self, member_only=False):
@@ -171,15 +187,19 @@ class OfflineFeaturesMixin:
         menu = self._form_menu(kind)
         with self._tx():
             self._require_capability(menu, "edit" if identifier else "create")
+            self._check_edit_snapshot('sales_forms',identifier,data)
             old = self.db.execute("SELECT * FROM sales_forms WHERE id=? AND kind=?", (identifier, kind)).fetchone() if identifier else None
             if identifier and not old:
                 raise ValueError("문서를 찾을 수 없습니다.")
+            if kind=='order' and old:
+                link=self.db.execute('SELECT document_id FROM sales_order_details WHERE form_id=?',(identifier,)).fetchone()
+                if link and link[0]:raise ValueError('판매 등록된 주문서는 수정할 수 없습니다. 연결된 판매전표를 확인하세요.')
             date = day(data.get("date"))
             valid_until = day(data["valid_until"]) if data.get("valid_until") else ""
             if valid_until and valid_until < date:
                 raise ValueError("유효기한은 작성일 이후로 지정하세요.")
             memo = text(data.get("memo", ""), "메모")
-            if old and not (kind == "quotation" and data.get("lines") and not json.loads(old["content"]).get("source_ids")):
+            if old and not (kind in {"quotation","order"} and data.get("lines") and not json.loads(old["content"]).get("source_ids")):
                 # Keep an issued paper's items, company and price snapshots.
                 content, total, mode, partner, member = old["content"], old["total"], old["rounding_mode"], old["partner_id"], old["member_id"]
             else:
@@ -205,13 +225,16 @@ class OfflineFeaturesMixin:
                         raise ValueError("회원이 지정된 판매전표를 선택하세요.")
                     total = sum(d["total"] for d in docs)
                 else:
-                    if kind != "quotation":
+                    if kind not in {"quotation","order"}:
                         raise ValueError("원판매전표를 선택하세요. 이 문서는 실제 판매내역을 기준으로 작성합니다.")
                     prepared = self._prepare_trade(dict(data, kind="sale", paid=0, points_used=0), posting=False)
                     partner, member, mode = prepared["partner_id"], prepared["member_id"], prepared["rounding_mode"]
                     lines = prepared["lines"]
                     for line in lines:
                         line["qty"] = qtext(line["input_qty"])
+                        line['barcode']=line['product'].get('barcode','') if isinstance(line['product'],dict) else line['product']['barcode']
+                        line['specification']=line['product']['specification']
+                        line['product_code']=line['product']['code']
                     total = prepared["total"]
                 if not 0 <= total <= LIMIT:
                     raise ValueError("문서 합계가 허용 범위를 초과합니다.")
@@ -221,16 +244,54 @@ class OfflineFeaturesMixin:
                     profile = self.db.execute("SELECT * FROM member_profiles WHERE member_id=?", (member,)).fetchone()
                     if profile:
                         member_info.update(dict(profile))
-                content = json.dumps({"lines": lines, "source_ids": sources, "seller": self._settings_values(), "customer": customer, "member": member_info}, ensure_ascii=False, default=str)
+                recipient=data.get('recipient',{})
+                if not isinstance(recipient,dict):raise ValueError('공급받는 자 정보를 확인하세요.')
+                for key in ('name','business_no','representative','business_type','business_category','address','phone','fax'):
+                    if key in recipient:customer[key]=text(recipient[key],key,key=='name',500)
+                seller=json.loads(old['content'])['seller'] if old else self.store_profile()
+                content = json.dumps({"lines": lines, "source_ids": sources, "seller": seller, "customer": customer, "member": member_info}, ensure_ascii=False, default=str)
             stamp = now()
             if old:
                 self.db.execute("UPDATE sales_forms SET date=?,valid_until=?,memo=?,updated_at=?,partner_id=?,member_id=?,total=?,rounding_mode=?,content=? WHERE id=?", (date, valid_until, memo, stamp, partner, member, total, mode, content, identifier))
             else:
-                prefix = {"quotation": "EST", "statement": "STM", "tax_reference": "TAX-REF"}[kind]
+                prefix = {"quotation": "EST", "statement": "STM", "tax_reference": "TAX-REF",'order':'ORD'}[kind]
                 number = f"{prefix}-{date.replace('-', '')}-{uuid4().hex[:10].upper()}"
                 identifier = self.db.execute("INSERT INTO sales_forms(number,kind,date,valid_until,partner_id,member_id,total,rounding_mode,content,memo,user_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)", (number,kind,date,valid_until,partner,member,total,mode,content,memo,self.actor["id"],stamp,stamp)).lastrowid
+            if kind=='order':
+                values=data.get('order',{})
+                if not isinstance(values,dict):raise ValueError('주문 정보를 확인하세요.')
+                delivery=day(values['delivery_date']) if values.get('delivery_date') else date
+                order_type=values.get('order_type','phone')
+                if order_type not in {'phone','visit','internet'}:raise ValueError('주문 유형을 선택하세요.')
+                details=tuple(text(values.get(key,''),key,maximum=2000 if key=='delivery_note' else 500) for key in ('assignee','phone','address','delivery_note'))
+                self.db.execute('INSERT INTO sales_order_details(form_id,delivery_date,order_type,assignee,phone,address,delivery_note) VALUES(?,?,?,?,?,?,?) ON CONFLICT(form_id) DO UPDATE SET delivery_date=excluded.delivery_date,order_type=excluded.order_type,assignee=excluded.assignee,phone=excluded.phone,address=excluded.address,delivery_note=excluded.delivery_note',(identifier,delivery,order_type,*details))
             self._audit("update" if old else "create", "sales_form", identifier, {"kind": kind, "total": total, "non_posting": True})
             return identifier
+
+    def set_order_status(self,identifier,status):
+        with self._tx():
+            self._require_capability('orders','edit')
+            record=self.sales_form(identifier)
+            if record['kind']!='order' or status not in {'received','printed','completed','cancelled'}:raise ValueError('주문 상태를 확인하세요.')
+            if record['order'].get('document_id') and status=='cancelled':raise ValueError('판매된 주문입니다. 원판매전표의 반품·취소 기능을 사용하세요.')
+            if record['order'].get('status')=='cancelled' and status!='received':raise ValueError('취소 주문은 먼저 다시 접수하세요.')
+            self.db.execute('UPDATE sales_order_details SET status=? WHERE form_id=?',(status,identifier))
+            self.db.execute('UPDATE sales_forms SET updated_at=? WHERE id=?',(now(),identifier))
+            self._audit('update','sales_order',identifier,{'status':status})
+
+    def post_order_sale(self,identifier,paid='0',method='cash'):
+        with self._tx():
+            self._require_capability('orders','edit');self._require_capability('sales','create')
+            record=self.sales_form(identifier)
+            if record['kind']!='order' or record['order'].get('status')=='cancelled':raise ValueError('유효한 주문서를 선택하세요.')
+            if record['order'].get('document_id'):
+                if self._trade_row(record['order']['document_id'])['status']!='posted':raise ValueError('연결된 판매전표가 취소되었습니다. 원전표를 확인하고 필요하면 새 주문서를 작성하세요.')
+                return record['order']['document_id']
+            data=dict(kind='sale',date=calendar_date.today().isoformat(),partner_id=record['partner_id'],member_id=record['member_id'],paid=paid,method=method,memo='주문서 '+record['number'],rounding_mode=record['rounding_mode'],lines=[dict(product_id=line['product_id'],unit_id=line['unit_id'],qty=line['qty'],unit_price=amount(line['unit_price'])) for line in record['lines']])
+            document=self._post_document_in_tx(data)
+            self.db.execute("UPDATE sales_order_details SET document_id=?,status='completed' WHERE form_id=?",(document,identifier))
+            self._audit('post','sales_order',identifier,{'document_id':document})
+            return document
 
     def delete_sales_form(self, identifier):
         with self._tx():
@@ -238,6 +299,7 @@ class OfflineFeaturesMixin:
             if not row:
                 raise ValueError("문서를 찾을 수 없습니다.")
             self._require_capability(self._form_menu(row["kind"]), "delete")
+            if row['kind']=='order' and self.db.execute('SELECT document_id FROM sales_order_details WHERE form_id=?',(identifier,)).fetchone()[0]:raise ValueError('판매된 주문서는 삭제할 수 없습니다.')
             self.db.execute("DELETE FROM sales_forms WHERE id=?", (identifier,))
             self._audit("delete", "sales_form", identifier, {"number": row["number"], "non_posting": True})
 

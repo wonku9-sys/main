@@ -103,6 +103,7 @@ def test_expanded_units_share_stock_and_use_registered_separate_price(shop):
 
 
 def test_duplicate_sale_rows_cannot_bypass_stock_or_partially_post(shop):
+    shop[0].save_settings({'allow_negative_stock':False})
     trade(shop, quantity="1")
     store, _, _, product = shop
     before = store.db.execute("SELECT COUNT(*) FROM documents").fetchone()[0]

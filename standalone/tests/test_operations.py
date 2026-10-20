@@ -204,6 +204,7 @@ def test_month_lock_prevents_backdated_documents_count_application_and_cancel(sh
 
 def test_month_negative_historical_snapshot_is_rejected_atomically(shop):
     store = shop[0]
+    store.save_settings({'allow_negative_stock':False})
     trade(shop, date="2025-02-01")
     trade(shop, "sale", quantity="1", price=200, date="2025-01-10")
     assert balance(shop) == (9000, 900)

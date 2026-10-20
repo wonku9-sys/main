@@ -6,6 +6,7 @@ from .personal_icons import personal_icon
 
 
 class ScheduleAlertDialog(QDialog):
+    _sy_warning_popup=True
     def __init__(self,records,parent=None):
         super().__init__(parent);self.setWindowTitle('기억할 일정이 있어요 · 일정 알림');self.resize(700,510)
         self.setStyleSheet('QDialog {background:#FFFBF3;} #alertBanner {background:#E9A632;border-radius:12px;} #alertTitle {font-size:25px;font-weight:700;color:#382E1B;} #alertCard {background:white;border:1px solid #E8D8BB;border-left:5px solid #D8962D;border-radius:8px;} QLabel {color:#4E493E;} QPushButton {padding:12px 20px;border-radius:9px;}')

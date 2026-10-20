@@ -4,7 +4,7 @@ import secrets
 from types import SimpleNamespace
 from PySide6.QtCore import Qt,QTimer,Signal,QRectF,QPointF,QElapsedTimer
 from PySide6.QtGui import QColor,QPainter,QPen,QFont,QLinearGradient,QRadialGradient,QPainterPath,QImage
-from PySide6.QtWidgets import QApplication,QDialog,QFrame,QHBoxLayout,QLabel,QMessageBox,QVBoxLayout,QWidget
+from PySide6.QtWidgets import QApplication,QDialog,QFrame,QHBoxLayout,QLabel,QMessageBox,QVBoxLayout,QWidget,QCheckBox,QSlider,QFileDialog
 from .widgets import Page,action
 
 COLORS=('#D2A845','#6599BF','#D47D86','#8996A4','#709D7C')
@@ -119,16 +119,47 @@ class LuckyNumbersPage(Page):
         self.six_button=action('6개 한 번에 뽑기',self.draw_six);controls.addWidget(self.six_button)
         self.five_button=action('5줄 자동 채우기',self.draw_five);controls.addWidget(self.five_button);controls.addStretch();self.body.addLayout(controls)
         tools=QHBoxLayout();tools.addWidget(action('새 추첨',lambda:self.reset()));self.copy_button=action('번호 복사',self.copy);tools.addWidget(self.copy_button);tools.addStretch();self.body.addLayout(tools)
+        from .lucky_audio import DrawSound
+        self.draw_sound=DrawSound(self);audio=QHBoxLayout();self.sound_enabled=QCheckBox('추첨 사운드');self.sound_enabled.setChecked(self.draw_sound.enabled);self.sound_enabled.toggled.connect(self.draw_sound.set_enabled);audio.addWidget(self.sound_enabled)
+        audio.addWidget(action('사운드 파일 선택',lambda:self.choose_sound()));audio.addWidget(action('소리 미리 듣기',self.draw_sound.play));audio.addWidget(QLabel('음량'))
+        self.sound_volume=QSlider(Qt.Orientation.Horizontal);self.sound_volume.setRange(0,100);self.sound_volume.setValue(self.draw_sound.volume);self.sound_volume.setMaximumWidth(130);self.sound_volume.valueChanged.connect(self.draw_sound.set_volume);audio.addWidget(self.sound_volume);audio.addStretch();self.body.addLayout(audio)
+        self.sound_status=QLabel();self.sound_status.setWordWrap(True);self.sound_status.setText(self.sound_description());self.body.addWidget(self.sound_status);self.draw_sound.problem.connect(self.sound_status.setText)
+        self.open_sound=DrawSound(self,kind='open');opening=QHBoxLayout();self.open_sound_enabled=QCheckBox('메뉴 열기 사운드');self.open_sound_enabled.setChecked(self.open_sound.enabled);self.open_sound_enabled.toggled.connect(self.open_sound.set_enabled);opening.addWidget(self.open_sound_enabled)
+        opening.addWidget(action('열기 사운드 선택',lambda:self.choose_sound('open')));opening.addWidget(action('열기 소리 미리 듣기',self.open_sound.play));opening.addWidget(QLabel('음량'))
+        self.open_sound_volume=QSlider(Qt.Orientation.Horizontal);self.open_sound_volume.setRange(0,100);self.open_sound_volume.setValue(self.open_sound.volume);self.open_sound_volume.setMaximumWidth(130);self.open_sound_volume.valueChanged.connect(self.open_sound.set_volume);opening.addWidget(self.open_sound_volume);opening.addStretch();self.body.addLayout(opening)
+        self.open_sound_status=QLabel(self.sound_description('open'));self.open_sound_status.setWordWrap(True);self.open_sound.problem.connect(self.open_sound_status.setText);self.body.addWidget(self.open_sound_status)
         self.result=QLabel();self.result.setWordWrap(True);self.body.addWidget(self.result)
         note=QLabel('재미용 무작위 번호이며 당첨을 예측하거나 확률을 높이지 않습니다. 각 줄 안에서는 중복이 없고, 줄 사이에는 같은 번호가 나올 수 있습니다. 실제 복권 구매·결제와 연결되지 않으며 결과는 파일에 저장하지 않습니다.');note.setWordWrap(True);note.setStyleSheet('color:#8A7753;background:#FFF5E0;padding:10px;border-radius:8px;');self.body.addWidget(note)
         self.timer=QTimer(self);self.timer.setInterval(30);self.timer.timeout.connect(self.animate);self.update_result()
+        from .arcade_ui import open_arcade
+        self.actions.addWidget(action('🕹 미니 오락실 · 게임',open_arcade))
     def refresh(self):self.update_result()
+    def sound_description(self,kind='draw'):
+        sound=self.draw_sound if kind=='draw' else self.open_sound;name=sound.settings.value('display_name','',type=str)
+        return ('추첨 소리: ' if kind=='draw' else '열기 소리: ')+name+' · 이 PC에만 저장' if name else ('추첨 MP3는 ‘사운드 파일 선택’에서 지정하세요.' if kind=='draw' else '메뉴 열기 MP3는 ‘열기 사운드 선택’에서 지정하세요.')
+    def choose_sound(self,kind='draw'):
+        name,_=QFileDialog.getOpenFileName(self,'내 PC에서만 사용할 추첨 사운드 선택','','오디오 파일 (*.mp3 *.wav)')
+        if not name:return
+        sound=self.draw_sound if kind=='draw' else self.open_sound;status=self.sound_status if kind=='draw' else self.open_sound_status
+        try:sound.register(name);status.setText(self.sound_description(kind))
+        except (ValueError,OSError) as exc:status.setText(str(exc))
+    def showEvent(self,event):
+        super().showEvent(event)
+        # Popup accessibility wrapping can reparent/show the page twice in one
+        # event cycle. Play only once, after the final visible layout settles.
+        if not getattr(self,'_open_sound_pending',False):
+            self._open_sound_pending=True;QTimer.singleShot(0,self,self.play_open_sound)
+    def play_open_sound(self):
+        self._open_sound_pending=False
+        if self.isVisible():self.open_sound.play()
+    def hideEvent(self,event):self.draw_sound.stop();self.open_sound.stop();super().hideEvent(event)
     def draw(self):
         self.start_draw(0)
     def draw_six(self):self.start_draw(1)
     def draw_five(self):self.start_draw(5-len(self.results))
     def start_draw(self,batch_rows):
         if self.timer.isActive() or len(self.results)>=5:return
+        self.open_sound.stop()
         if len(self.drawn)==6:self.remaining=list(range(1,46));self.drawn=[]
         self.batch_rows=batch_rows;self.ticks=0;self.machine.running=True;self.machine.number=None;self.timer.start();self.update_result()
     def animate(self):
@@ -144,6 +175,7 @@ class LuckyNumbersPage(Page):
                 number=secrets.choice(self.remaining);self.remaining.remove(number);self.drawn.append(number)
             if len(self.drawn)==6:self.results.append(sorted(self.drawn))
         self.batch_rows=0;self.machine.running=False;self.machine.number=self.drawn[-1];self.machine.update();self.update_result()
+        self.draw_sound.play() # One cue when the result appears, also for a batch.
     def update_result(self):
         for i,items in enumerate(self.rows):
             values=self.results[i] if i<len(self.results) else self.drawn if i==len(self.results) and len(self.drawn)<6 else []
@@ -157,7 +189,7 @@ class LuckyNumbersPage(Page):
         self.result.setText('5줄 추첨 완료 · 새 추첨을 누르면 다시 시작합니다.' if complete else f'{len(self.results)} / 5줄 완성 · '+(f'다음 줄 {pending} / 6개 · ' if pending else '')+'한 개씩 또는 자동으로 뽑아 보세요.')
     def reset(self,confirm=True):
         if confirm and (self.drawn or self.results) and QMessageBox.question(self,'새 추첨','현재 5줄의 번호를 모두 지우고 새로 뽑을까요?',QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No,QMessageBox.StandardButton.No)!=QMessageBox.StandardButton.Yes:return
-        self.timer.stop();self.remaining=list(range(1,46));self.drawn=[];self.results=[];self.batch_rows=0;self.machine.running=False;self.machine.number=None;self.machine.update();self.update_result()
+        self.timer.stop();self.draw_sound.stop();self.remaining=list(range(1,46));self.drawn=[];self.results=[];self.batch_rows=0;self.machine.running=False;self.machine.number=None;self.machine.update();self.update_result()
     def copy(self):
         if self.results:QApplication.clipboard().setText('행운의 숫자 (재미용)\n'+'\n'.join(f'{chr(65+i)}: '+', '.join(map(str,values)) for i,values in enumerate(self.results)))
 
@@ -167,7 +199,7 @@ class LuckyNumbersDialog(QDialog):
         super().__init__(None);self.setWindowTitle('행운의 숫자 · SY POS');self.resize(970,760)
         self.setWindowModality(Qt.WindowModality.NonModal)
         layout=QVBoxLayout(self);self.page=LuckyNumbersPage(SimpleNamespace(store=None));layout.addWidget(self.page);layout.addWidget(action('닫기',self.close))
-    def closeEvent(self,event):self.page.timer.stop();self.page.machine.running=False;self.page.update_result();event.accept()
+    def closeEvent(self,event):self.page.timer.stop();self.page.draw_sound.stop();self.page.open_sound.stop();self.page.machine.running=False;self.page.update_result();event.accept()
     def reject(self):self.close()
 
 

@@ -34,7 +34,7 @@ def state(owner):
     if name == "SupplierGroupsDialog":
         return owner.loaded_kind, owner.group_id, tuple(owner.checked_members())
     if name in {"ProductDialog", "SettingsPage"}:
-        extras = ("product_status", "tax_mode", "supplier", "unit", "price_basis", "tracked", "memo") if name == "ProductDialog" else ("point_enabled", "rounding_mode")
+        extras = ("product_status", "tax_mode", "supplier", "unit", "price_basis", "tracked", "memo") if name == "ProductDialog" else ("point_enabled", "rounding_mode", "negative_stock")
         basic = tuple((key, _value(field)) for key, field in owner.fields.items()), tuple(_value(getattr(owner, key)) for key in extras)
         return (basic, owner.backup_schedule_values()) if name == "SettingsPage" else basic
     controls = [control for control in owner.findChildren(QWidget) if isinstance(control, (QLineEdit, QComboBox, QCheckBox, QDateEdit, QTextEdit, QSpinBox, QDoubleSpinBox,QTimeEdit))]
@@ -58,6 +58,8 @@ def ask_unsaved(owner):
 def mark_saved(owner):
     guard = getattr(owner, "_navigation_guard", None)
     if guard:
+        journal=getattr(guard.window,'crash_journal',None)
+        if journal:journal.forget(owner)
         guard.track(owner)
 
 
@@ -95,9 +97,9 @@ class NavigationGuard(QObject):
         if owner is None:
             return False
         name = type(owner).__name__
-        if name in {"LoginDialog", "PartnerPicker", "ProductPicker", "CategoryDialog", "SupplierPicker"}:
+        if name in {"LoginDialog", "PartnerPicker", "ProductPicker", "CategoryDialog", "SupplierPicker","DocumentMailDialog"}:
             return False
-        if name in {"SettingsPage", "PermissionsPage", "ProductDialog", "TradeDialog", "CountEditor", "SupplierPaymentDialog", "SupplierDialog", "SupplierGroupsDialog", "SalesFormDialog","DiaryDialog","HouseholdDialog"}:
+        if name in {"StoreProfilePage","SettingsPage", "PermissionsPage", "ProductDialog", "TradeDialog", "CountEditor", "SupplierPaymentDialog", "SupplierDialog", "SupplierGroupsDialog", "SalesFormDialog","DiaryDialog","HouseholdDialog"}:
             return not getattr(owner, "readonly", False)
         return isinstance(owner, QDialog) and bool(owner.findChildren(QDialogButtonBox)) and bool(getattr(owner, "fields", None))
 
@@ -105,6 +107,8 @@ class NavigationGuard(QObject):
         if self.enabled and self.editable(owner):
             owner._navigation_guard = self
             self.snapshots[owner] = state(owner)
+            journal=getattr(self.window,'crash_journal',None)
+            if journal:journal.bind(owner)
 
     def changed(self, owner):
         try:
@@ -125,7 +129,7 @@ class NavigationGuard(QObject):
                 name = type(owner).__name__
                 if name in {"ProductDialog", "TradeDialog"}:
                     result = owner.save(False)
-                elif name in {"CountEditor", "SupplierPaymentDialog", "SettingsPage", "PermissionsPage", "SupplierDialog", "SupplierGroupsDialog","DiaryDialog","HouseholdDialog"}:
+                elif name in {"StoreProfilePage","CountEditor", "SupplierPaymentDialog", "SettingsPage", "PermissionsPage", "SupplierDialog", "SupplierGroupsDialog","DiaryDialog","HouseholdDialog"}:
                     result = owner.save()
                 else:
                     result = None
@@ -143,6 +147,8 @@ class NavigationGuard(QObject):
                 self.saving = False
         elif choice != QMessageBox.StandardButton.Discard:
             return False
+        journal=getattr(self.window,'crash_journal',None)
+        if journal:journal.forget(owner)
         self.track(owner)
         return True
 

@@ -248,6 +248,10 @@ class DataGrid(QTableWidget):
         for row_index, values in enumerate(rows):
             for column, value in enumerate(values):
                 item = Cell(value)
+                item.setToolTip(str(value if value is not None else ''))
+                if isinstance(value,(int,Decimal)) and not isinstance(value,bool) and value<0:
+                    item.setForeground(QColor('#B42318'))
+                    item.setToolTip('음수 값입니다. 부족 재고·취소·차감 내역과 거래일자를 확인하세요.')
                 if column == 0 and records is not None:
                     item.setData(Qt.ItemDataRole.UserRole, records[row_index])
                 self.setItem(row_index, column, item)

@@ -56,7 +56,9 @@ def test_popup_fixed_query_native_frame_resize_and_fullscreen_restore(desktop):
     assert not popup.windowFlags() & Qt.WindowType.MSWindowsFixedSizeDialogHint
     assert not popup.windowFlags() & Qt.WindowType.FramelessWindowHint
     assert popup.windowFlags() & Qt.WindowType.WindowMaximizeButtonHint
-    for size in (QSize(700,500),QSize(1100,760),QSize(760,540)):
+    # Stay inside the small Windows CI desktop; the OS legitimately clamps
+    # client sizes larger than its available screen (including native borders).
+    for size in (QSize(700,500),QSize(900,650),QSize(760,540)):
         popup.resize(size);app.processEvents();assert popup.size()==size
         pos=bar.pos();scroll=window.scrollers['worklog']
         scroll.verticalScrollBar().setValue(scroll.verticalScrollBar().maximum());app.processEvents()

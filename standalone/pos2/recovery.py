@@ -25,10 +25,10 @@ CREATE TABLE IF NOT EXISTS restore_state (
  id INTEGER PRIMARY KEY CHECK(id=1), token TEXT NOT NULL
 );
 INSERT OR IGNORE INTO restore_state(id,token) VALUES(1,'');
-PRAGMA user_version=211;
+PRAGMA user_version=212;
 """
-SUPPORTED_VERSIONS = {200, 201, 202, 203, 204, 205, 206, 207, 208,209,210,211}
-SCHEMA_VERSION = 211
+SUPPORTED_VERSIONS = {200, 201, 202, 203, 204, 205, 206, 207, 208,209,210,211,212}
+SCHEMA_VERSION = 212
 APPLICATION_ID = 1398362162
 
 
@@ -57,6 +57,21 @@ def _validate_database(db):
         raise ValueError("지원하지 않는 백업 버전입니다. 같은 독립판 버전의 백업을 선택하세요.")
     expected = dict(_expected_objects())
     actual = _objects(db)
+    if version<212:
+        if ('table','sales_order_details') not in actual:expected.pop(('table','sales_order_details'),None)
+        changes={
+            'products': [('CHECK(ABS(stock_qty)<=9000000000000)','CHECK(stock_qtyBETWEEN0AND9000000000000)'),('CHECK(ABS(stock_cost)<=9000000000000)','CHECK(stock_costBETWEEN0AND9000000000000)')],
+            'stock_events': [('CHECK(ABS(balance_qty)<=9000000000000)','CHECK(balance_qtyBETWEEN0AND9000000000000)'),('CHECK(ABS(balance_cost)<=9000000000000)','CHECK(balance_costBETWEEN0AND9000000000000)')],
+            'inventory_count_lines': [('CHECK(ABS(expected_qty)<=9000000000000)','CHECK(expected_qty>=0)'),('CHECK(ABS(expected_cost)<=9000000000000)','CHECK(expected_cost>=0)')],
+            'inventory_closes':[('CHECK(ABS(stock_cost)<=9000000000000)','CHECK(stock_cost>=0)')],
+            'inventory_close_lines':[('CHECK(ABS(stock_qty)<=9000000000000)','CHECK(stock_qty>=0)'),('CHECK(ABS(stock_cost)<=9000000000000)','CHECK(stock_cost>=0)')],
+            'sales_forms':[("'tax_reference','order'","'tax_reference'")],
+        }
+        for table,pairs in changes.items():
+            key=('table',table)
+            if key in expected and actual.get(key)!=expected[key]:
+                for before,after in pairs:
+                    if before not in actual.get(key,'') and after in actual.get(key,''):expected[key]=expected[key].replace(before,after)
     if version<211 and ('table','household_plans') not in actual:expected.pop(('table','household_plans'),None)
     for table in ('work_log_details','work_log_files'):
         if version<211 and ('table',table) not in actual:expected.pop(('table',table),None)
@@ -139,6 +154,7 @@ def _validate_database(db):
                 raise ValueError("invalid points policy")
         if type(settings.get("point_enabled", True)) is not bool or not all(isinstance(settings.get(key, ""), str) for key in ("store_name", "business_no", "phone", "address")):
             raise ValueError("invalid settings")
+        if type(settings.get('allow_negative_stock',True)) is not bool or not all(isinstance(settings.get(key,''),str) for key in ('representative','business_type','business_category','fax','store_email','bank','account','account_holder')):raise ValueError('invalid store profile')
         if "backup_schedule" in settings:
             validate_schedule(settings["backup_schedule"])
         if "online_info" in settings:

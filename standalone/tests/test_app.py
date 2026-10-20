@@ -90,6 +90,7 @@ def test_scoped_menus_and_all_allowed_pages_refresh(context, permission, keys):
     from pos2.offline_menus import REPORT_VIEWS,SALES_VIEWS,BASIC_VIEWS,MEMBER_VIEWS
     added = set(REPORT_VIEWS) if permission=="reports" else set(SALES_VIEWS)|{"quotations","statements","sales_held","sales_cancelled"} if permission=="trade" else set(BASIC_VIEWS)-{"user_access"} if permission=="catalog" else set(MEMBER_VIEWS)|{"member_tax"} if permission=="loyalty" else set()
     added |= {"diary","worklog","household","lucky_numbers"}
+    if permission=='trade':added.add('orders')
     assert set(window.items) == keys | {"home"} | purchase_views | added
     assert window.current_key == "home"
     for key in keys | purchase_views | added:

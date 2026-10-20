@@ -39,6 +39,8 @@ DEFAULT_SETTINGS = {
     "rounding_mode": "decimal",
     "backup_schedule": DEFAULT_BACKUP_SCHEDULE,
     "store_name": "SY POS", "business_no": "", "phone": "", "address": "",
+    "representative":"", "business_type":"", "business_category":"", "fax":"", "store_email":"",
+    "bank":"", "account":"", "account_holder":"", "allow_negative_stock":True,
     "earn_bps": 100, "point_min": 1000, "point_step": 100, "point_enabled": True,
 }
 
@@ -92,6 +94,8 @@ class Store(InventoryReportingMixin, CatalogMixin, CommerceMixin, OperationsMixi
                 raise ValueError("더 최신 버전의 장부입니다. 같은 버전 이상의 프로그램으로 실행하세요.")
             self.db.execute("PRAGMA journal_mode=WAL")
             self.db.execute("PRAGMA synchronous=FULL")
+            from .schema_upgrade import upgrade_business_schema
+            upgrade_business_schema(self)
             initialize(self.db)
             self.db.execute(f"PRAGMA application_id={APPLICATION_ID}")
             self._init_loyalty()
@@ -149,11 +153,12 @@ class Store(InventoryReportingMixin, CatalogMixin, CommerceMixin, OperationsMixi
         return self._current_restore_token(),self.db.execute('SELECT COALESCE(MAX(id),0) FROM audit').fetchone()[0]
 
     def _edit_snapshot(self,table,identifier):
-        if table not in {'products','documents'}:raise ValueError('편집 대상이 잘못되었습니다.')
+        if table not in {'products','documents','sales_forms'}:raise ValueError('편집 대상이 잘못되었습니다.')
         from .shared_protocol import fingerprint
         row=self.db.execute(f'SELECT * FROM {table} WHERE id=?',(identifier,)).fetchone()
         value={'record':dict(row) if row else None}
         if table=='documents':value['lines']=[dict(r) for r in self.db.execute('SELECT * FROM document_lines WHERE document_id=? ORDER BY id',(identifier,))]
+        if table=='sales_forms':value['order']=[dict(r) for r in self.db.execute('SELECT * FROM sales_order_details WHERE form_id=?',(identifier,))]
         return fingerprint(value)
 
     def _check_edit_snapshot(self,table,identifier,data):
@@ -348,6 +353,12 @@ class Store(InventoryReportingMixin, CatalogMixin, CommerceMixin, OperationsMixi
         self._require("admin")
         return self._settings_values()
 
+    def store_profile(self):
+        self._require()
+        keys=('store_name','business_no','representative','business_type','business_category','phone','fax','address','store_email','bank','account','account_holder')
+        values=self._settings_values()
+        return {key:values[key] for key in keys}
+
     def calculation_policy(self):
         self._require()
         return {"rounding_mode": self._settings_values()["rounding_mode"]}
@@ -379,7 +390,7 @@ class Store(InventoryReportingMixin, CatalogMixin, CommerceMixin, OperationsMixi
                 value = validate_schedule(value)
             elif key == "online_info":
                 value = validate_online(value)
-            elif key == "point_enabled":
+            elif key in {"point_enabled","allow_negative_stock"}:
                 if not isinstance(value, bool):
                     raise ValueError("포인트 사용 여부는 체크 값이어야 합니다.")
             else:

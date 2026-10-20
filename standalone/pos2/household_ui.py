@@ -275,7 +275,7 @@ class HouseholdDialog(QDialog):
             self.store.save_household_memo(self.key,self.memo_date,self.memo.toPlainText());self.memo_saved=self.snapshot();mark_saved(self);self.refresh();return True
         except (ValueError,PermissionError) as exc:QMessageBox.warning(self,"메모 저장",str(exc));return False
     def editor(self,record=None,initial=None):
-        record=record or {};values=dict(initial or {},**record);dialog=FormDialog("가계부 수입·지출",self);dialog.resize(650,780)
+        record=record or {};values=dict(initial or {},**record);dialog=FormDialog("가계부 수입·지출",self);dialog.resize(650,780);dialog._recovery_record_id=record.get('id');dialog._recovery_role='household_entry'
         from .household_finance_ui import account_choices
         from .household_finance import VEHICLE_TYPES
         account=dialog.combo('account','통장',account_choices(self.store,self.key),values.get('account_id',''))

@@ -732,6 +732,7 @@ class TradeDialog(QDialog):
                 if unit.get("active", True):
                     row["unit"].addItem(f"{unit['name']} (×{amount(unit['factor'])})", unit["id"])
             row["stock"].setText(f"{amount(product['stock_qty'])} {product['base_unit']}" if product.get("tracked", True) else "재고 미관리")
+            row['stock'].setStyleSheet('color:#B42318;font-weight:700' if Decimal(str(product['stock_qty']))<0 else '')
             row["spec"].setText(product["specification"])
             row["category"].setText(" / ".join(filter(None, (product["category"], product["category_mid"], product["category_small"]))))
             row["supplier"].setText(product.get("supplier_name") or "미지정")

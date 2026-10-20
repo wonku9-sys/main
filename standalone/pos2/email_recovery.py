@@ -89,6 +89,8 @@ class EmailDelivery:
     _config: bytes = field(repr=False)
     _recipient: str = field(repr=False)
     _body: str = field(repr=False)
+    _subject: str = field(default='[SY POS] 이메일 인증 · 암호 재설정 안내',repr=False)
+    _attachments: tuple = field(default=(),repr=False)
 
     def send(self):
         """Run in a UI worker; it must never access a SQLite connection."""
@@ -98,8 +100,10 @@ class EmailDelivery:
                 raise ValueError("발송 설정을 이 Windows 사용자 계정에서 열 수 없습니다. ‘이메일 발송 설정’에서 앱 비밀번호를 다시 저장하세요.") from None
             message=EmailMessage()
             message["From"],message["To"]=config["sender"],self._recipient
-            message["Subject"]="[SY POS] 이메일 인증 · 암호 재설정 안내"
+            message["Subject"]=self._subject
             message.set_content(self._body)
+            for filename,payload in self._attachments:
+                message.add_attachment(payload,maintype='image',subtype='png',filename=filename)
             context=ssl.create_default_context()
             if config["mode"]=="ssl":
                 connection=smtplib.SMTP_SSL(config["host"],config["port"],timeout=10,context=context)
@@ -123,6 +127,7 @@ class EmailDelivery:
             raise ValueError("메일을 발송하지 못했습니다. 인터넷·SMTP 설정·앱 비밀번호를 확인하세요. 기존 암호는 변경되지 않았습니다.") from None
         finally:
             self._body=""
+            self._attachments=()
 
 
 class EmailRecoveryMixin:

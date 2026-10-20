@@ -45,6 +45,7 @@ MENU_POLICIES = {
     "users": ("사용자 관리", ("admin",), ()),
     "permissions": ("권한 설정", ("admin",), ()),
     "settings": ("매장 설정 · 백업", ("admin",), ()),
+    "store_profile":("점포 등록정보",("admin",),()),
 }
 from .offline_menus import REPORT_VIEWS, SALES_VIEWS, BASIC_VIEWS, MEMBER_VIEWS, FORM_VIEWS
 MENU_POLICIES.update({key: (value[0], (value[3],), ()) for key, value in {**REPORT_VIEWS, **SALES_VIEWS}.items()})

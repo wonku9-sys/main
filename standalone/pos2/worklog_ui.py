@@ -69,7 +69,7 @@ class WorkLogPage(Page):
         self._context=menu;menu.popup(self.grid.viewport().mapToGlobal(position))
 
     def editor(self,record=None):
-        r=record or {};details=self.store.work_log_detail(r['id']) if r else {};d=FormDialog('업무일지 등록정보',self);d.resize(1050,800)
+        r=record or {};details=self.store.work_log_detail(r['id']) if r else {};d=FormDialog('업무일지 등록정보',self);d.resize(1050,800);d._recovery_record_id=r.get('id');d._recovery_role='worklog'
         title=d.field('title','제목 *',r.get('title',''));when=date_field(r.get('date'));d.form.addRow('업무일',when)
         status=d.combo('status','상태',[(v,k) for k,v in STATUSES.items()],details.get('status','active'));category=d.field('category','업무 구분',details.get('category','일반업무'));customer=d.field('customer','고객사·거래처',details.get('customer',''))
         working=QCheckBox('근무일로 집계');working.setChecked(details.get('working_day',True));d.form.addRow(working)

@@ -55,6 +55,9 @@ def accessible_content(dialog):
 
 class PopupPolicy(QObject):
     def eventFilter(self,watched,event):
+        if isinstance(watched,QDialog) and event.type() in {QEvent.Type.Show,QEvent.Type.Hide}:
+            from .ui_sounds import play_dialog_cue
+            play_dialog_cue(watched,event)
         if isinstance(watched,QMenu) and event.type()==QEvent.Type.Show:
             from .menu_icons import decorate_menu
             decorate_menu(watched)

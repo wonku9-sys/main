@@ -17,6 +17,24 @@ def iso(field):
     return field.date().toString("yyyy-MM-dd")
 
 
+def compact_form(form,columns=3):
+    """Keep label/field pairs together, without a long full-width input stack."""
+    from PySide6.QtWidgets import QWidget,QGridLayout
+    panel=QWidget();grid=QGridLayout(panel);grid.setContentsMargins(0,0,0,0);grid.setHorizontalSpacing(8);grid.setVerticalSpacing(7)
+    rows=[]
+    while form.rowCount():rows.append(form.takeRow(0))
+    for index,row in enumerate(rows):
+        y,x=divmod(index,columns);x*=2
+        label=row.labelItem.widget() if row.labelItem else None
+        field=row.fieldItem.widget() if row.fieldItem else None
+        if label is not None:grid.addWidget(label,y,x)
+        if field is not None:
+            grid.addWidget(field,y,x+1)
+            if isinstance(label,QLabel):label.setBuddy(field)
+    for column in range(columns):grid.setColumnStretch(column*2+1,1)
+    form.addRow(panel)
+
+
 class OfflineReportPage(Page):
     def __init__(self, window, key):
         self.menu_key = key
@@ -294,22 +312,63 @@ class SalesFormDialog(FormDialog):
         self.date = date_field((record or {}).get("date"))
         from .date_input import DateInput
         self.valid=DateInput((record or {}).get('valid_until',''))
-        self.fields['valid_until']=self.valid;self.form.addRow('유효기간 · 직접 입력 / 달력 선택 (선택)',self.valid)
+        self.fields['valid_until']=self.valid;self.form.addRow('유효기간',self.valid)
+        self.valid.setToolTip('선택 입력: 숫자 직접 입력 또는 달력에서 날짜 선택')
         self.memo = self.field("memo","메모",(record or {}).get("memo",""))
         self.form.addRow("작성일",self.date)
         self.partner = QComboBox()
-        if self.kind == "quotation":
+        if self.kind in {"quotation","order"}:
             for r in self.store.trade_partners("customer"): self.partner.addItem(f"{r['code']} · {r['name']}",r["id"])
         elif record:
             self.partner.addItem(record["customer"]["name"],record["partner_id"])
+        source_customer={}
+        if self.source_ids and not record:
+            source=next((r for r in self.store.form_sources(self.kind=='tax_reference') if r['id']==self.source_ids[0]),{})
+            source_customer=next((r for r in self.store.trade_partners('customer') if r['id']==source.get('partner_id')),{})
+            self.partner.addItem(source_customer.get('name','원전표 판매처'),source.get('partner_id'))
         self.form.addRow("판매처",self.partner)
-        self.manual = self.kind == "quotation" and not self.source_ids and not (record or {}).get("source_ids")
+        self.manual = self.kind in {"quotation","order"} and not self.source_ids and not (record or {}).get("source_ids")
+        if self.kind=='order' and (record or {}).get('order',{}).get('document_id'):self.readonly=True
+        if self.readonly:self.manual=False
+        self.member=QComboBox();self.member.addItem('비회원',None)
+        for member in self.store.trade_members():
+            if member['active']:self.member.addItem(f"{member['code']} · {member['name']}",member['id'])
+        self.member.setCurrentIndex(max(0,self.member.findData((record or {}).get('member_id'))));self.member.setEnabled(self.manual and not self.readonly)
+        self.form.addRow('회원 (선택)',self.member)
+        self.recipient_fields={}
+        from PySide6.QtWidgets import QGroupBox,QFormLayout
+        supplier=(record or {}).get('seller') or self.store.store_profile()
+        info=QLabel('공급자: '+supplier['store_name']+' / '+supplier.get('business_no','')+' / '+supplier.get('representative','')+' / '+supplier.get('phone',''))
+        info.setWordWrap(True);self.body.addWidget(info)
+        party=QGroupBox('공급받는 자 · 문서에 표시할 정보');party_form=QFormLayout(party)
+        for field,label in (('name','상호'),('business_no','사업자번호'),('representative','대표자'),('address','주소'),('phone','전화'),('business_type','업태'),('business_category','종목')):
+            entry=QLineEdit(str((record or {}).get('customer',source_customer).get(field,'')));entry.setMaxLength(500)
+            self.recipient_fields[field]=entry;party_form.addRow(label,entry)
+        self.body.addWidget(party)
+        compact_form(party_form)
+        if not record and not self.source_ids:
+            def customer_changed():
+                customer=next((r for r in self.store.trade_partners('customer') if r['id']==self.partner.currentData()),{})
+                for field,entry in self.recipient_fields.items():entry.setText(str(customer.get(field,'')))
+            self.partner.currentIndexChanged.connect(customer_changed);customer_changed()
+        self.order_fields={}
+        if self.kind=='order':
+            values=(record or {}).get('order',{})
+            self.delivery_date=date_field(values.get('delivery_date'));self.form.addRow('배달 예정일',self.delivery_date)
+            self.order_type=QComboBox()
+            for title,value in (('전화','phone'),('방문','visit'),('인터넷 · 수동 접수','internet')):self.order_type.addItem(title,value)
+            self.order_type.setCurrentIndex(max(0,self.order_type.findData(values.get('order_type','phone'))));self.form.addRow('주문 유형',self.order_type)
+            for field,label in (('assignee','배달 담당'),('phone','배달 연락처'),('address','배달 주소'),('delivery_note','배달 설명')):
+                entry=QLineEdit(str(values.get(field,'')));self.order_fields[field]=entry;self.form.addRow(label,entry)
         self.rows = []
         self.rounding_mode = (record or {}).get("rounding_mode",self.store.calculation_policy()["rounding_mode"])
         self.body.addWidget(QLabel("견적서·거래명세서·계산서 참고자료는 재고·매출·결제·포인트를 변경하지 않습니다. 세금 신고·전자세금계산서 발행 기능이 아닙니다."))
         self.table = QTableWidget(0,6)
         self.table.setHorizontalHeaderLabels(["상품","단위","수량","단가","금액","삭제"])
         self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.horizontalHeader().setStretchLastSection(False)
+        for column,width in enumerate((330,150,110,115,115,80)):self.table.setColumnWidth(column,width)
+        self.table.setMinimumHeight(220)
         self.body.addWidget(self.table,1)
         self.products = {r["id"]:r for r in self.store.trade_products()} if self.manual else {}
         self.total = QLabel()
@@ -337,7 +396,13 @@ class SalesFormDialog(FormDialog):
             else:
                 self.body.addWidget(QLabel(f"선택한 판매전표 {len(self.source_ids)}개 · 저장 후 원판매전표의 상품·금액·판매처가 고정됩니다."))
                 self.table.hide()
+        compact_form(self.form)
         self.finish(self.save)
+        output=QHBoxLayout()
+        output.addWidget(action('적용 · 저장',lambda:self.save(False),primary=True))
+        for title,mode in (('인쇄 미리보기 · 프린터','preview'),('PDF 저장','pdf'),('이미지 저장','image'),('이미지 이메일 전송','email')):
+            output.addWidget(action(title,lambda checked=False,mode=mode:self.output(mode)))
+        self.body.addLayout(output)
         self.recalculate()
         if self.readonly:
             for control in self.findChildren(QLineEdit): control.setReadOnly(True)
@@ -421,13 +486,29 @@ class SalesFormDialog(FormDialog):
             self.total.setText(f"합계 {won(total)}원 · {'원 단위 반올림' if self.rounding_mode=='won' else '소수점 두 자리 보존'}")
         except ValueError: self.total.setText("수량과 단가를 확인하세요.")
 
-    def save(self):
+    def save(self,close=True):
         if self.readonly: return
         try:
             data = {"date":iso(self.date),"valid_until":self.valid.text(),"memo":self.memo.text(),"source_ids":self.source_ids,"partner_id":self.partner.currentData(),"rounding_mode":self.rounding_mode,"lines":[{"product_id":r["product"].currentData(),"unit_id":r["unit"].currentData(),"qty":r["qty"].text(),"unit_price":r["price"].text()} for r in self.rows]}
+            data['recipient']={field:entry.text() for field,entry in self.recipient_fields.items()}
+            data['member_id']=self.member.currentData()
+            data['_expected_token']=(self.record or {}).get('_edit_token')
+            if self.kind=='order':data['order']=dict(delivery_date=iso(self.delivery_date),order_type=self.order_type.currentData(),**{field:entry.text() for field,entry in self.order_fields.items()})
             self.saved_id = self.store.save_sales_form(self.kind,data,(self.record or {}).get("id"))
-            mark_saved(self); self.accept()
+            self.record=self.store.sales_form(self.saved_id);mark_saved(self)
+            if close:self.accept()
+            return True
         except (ValueError,PermissionError) as exc: self.error(exc)
+
+    def output(self,mode):
+        try:
+            guard=getattr(self,'_navigation_guard',None)
+            if not self.record or guard and guard.changed(self):
+                if QMessageBox.question(self,'문서 저장','현재 입력한 문서를 저장한 뒤 출력할까요? 재고·결제는 변경되지 않습니다.',QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No,QMessageBox.StandardButton.No)!=QMessageBox.StandardButton.Yes:return
+                if not self.save(False):return
+            from .paper_output_ui import output_paper
+            output_paper(self.store,self.record['id'],FORM_VIEWS[self.menu_key][0],self,mode)
+        except (ValueError,PermissionError,OSError) as exc:self.error(exc)
 
     @staticmethod
     def paper_grid(record):
@@ -447,20 +528,41 @@ class SalesFormsPage(Page):
         self.start,self.end,self.search = date_field(),date_field(),QLineEdit()
         self.search.setPlaceholderText("문서번호 · 판매처 · 메모")
         for control in (self.start,QLabel("~"),self.end,self.search): row.addWidget(control)
+        if self.kind=='order':
+            self.date_basis=QComboBox();self.date_basis.addItem('주문일','date');self.date_basis.addItem('배달일','delivery_date');row.insertWidget(0,self.date_basis)
+            self.status_filter=QComboBox()
+            for title,value in (('전체 상태',''),('접수','received'),('인쇄','printed'),('완료','completed'),('취소','cancelled')):self.status_filter.addItem(title,value)
+            row.addWidget(self.status_filter)
         row.addWidget(action("조회",self.refresh)); row.addWidget(action("문서 인쇄·PDF",self.print_paper)); row.addWidget(action("문서 엑셀",self.export_paper))
         self.body.addLayout(row)
+        output=QHBoxLayout()
+        for title,mode in (('인쇄 미리보기 · 프린터','preview'),('PDF 저장','pdf'),('이미지 저장','image'),('이미지 이메일 전송','email')):
+            output.addWidget(action(title,lambda checked=False,mode=mode:self.output(mode)))
+        self.body.addLayout(output)
+        if self.kind=='order':
+            states=QHBoxLayout()
+            for title,status in (('접수','received'),('인쇄 완료 표시','printed'),('완료','completed'),('취소','cancelled')):states.addWidget(action(title,lambda checked=False,status=status:self.order_status(status)))
+            states.addWidget(action('판매 등록 · 중복 방지',self.order_sale,primary=True));self.body.addLayout(states)
         self.grid = self.table(["작성일","문서번호","판매처","합계","유효기한","메모"])
         self.grid.cellDoubleClicked.connect(lambda *_:self.edit())
 
     def refresh(self):
-        rows = self.store.sales_forms(self.kind,iso(self.start),iso(self.end),self.search.text())
+        rows = self.store.sales_forms(self.kind,iso(self.start),iso(self.end),self.search.text(),self.status_filter.currentData() if self.kind=='order' else '',self.date_basis.currentData() if self.kind=='order' else 'date')
         self.grid.fill([[r["date"],r["number"],r["partner_name"],r["total"],r["valid_until"],r["memo"]] for r in rows],rows)
+        if self.kind=='order':
+            self.grid.setSortingEnabled(False)
+            self.grid.setColumnCount(9);self.grid.setHorizontalHeaderLabels(['작성일','문서번호','판매처','합계','유효기한','메모','배달일','상태','담당'])
+            for index in range(self.grid.rowCount()):
+                row=self.grid.item(index,0).data(Qt.ItemDataRole.UserRole)
+                from .widgets import Cell
+                for column,value in enumerate((row['delivery_date'],{'received':'접수','printed':'인쇄','completed':'완료','cancelled':'취소'}.get(row['order_status'],'미지정'),row['assignee']),6):self.grid.setItem(index,column,Cell(value))
+            self.grid.setSortingEnabled(True)
 
     def add(self):
         if not can_action(self.store.actor,self.menu_key,"create"):
             self.fail("문서 등록 권한이 없습니다."); return
         source_ids = []
-        if self.kind != "quotation":
+        if self.kind not in {"quotation","order"}:
             picker = QDialog(self); picker.setWindowTitle("원판매전표 선택 · 같은 판매처·회원끼리 선택"); picker.resize(1000,650)
             layout = QVBoxLayout(picker)
             grid = DataGrid(["일자","전표번호","판매처","회원","합계"])
@@ -497,11 +599,33 @@ class SalesFormsPage(Page):
         return record,info
 
     def print_paper(self):
+        self.output('preview')
+
+    def output(self,mode):
+        row=self.grid.selected()
+        if not row:self.notify('문서를 선택하세요.');return
         try:
-            data = self.output_data()
-            if data:
-                grid = SalesFormDialog.paper_grid(data[0]); grid.print_pages(self,self.title,data[1]); grid.deleteLater()
-        except (ValueError,PermissionError) as exc: self.fail(exc)
+            from .paper_output_ui import output_paper
+            output_paper(self.store,row['id'],self.title,self,mode)
+        except (ValueError,PermissionError,OSError) as exc:self.fail(exc)
+
+    def order_status(self,status):
+        row=self.grid.selected()
+        if row:
+            try:self.store.set_order_status(row['id'],status);self.refresh()
+            except (ValueError,PermissionError) as exc:self.fail(exc)
+
+    def order_sale(self):
+        row=self.grid.selected()
+        if not row:return
+        form=FormDialog('주문을 실제 판매로 등록',self)
+        paid=form.field('paid','이번 결제액 (외상은 0)','0.00');method=QComboBox();method.addItem('현금','cash');method.addItem('계좌이체','transfer');form.form.addRow('결제 수단',method)
+        form.body.addWidget(QLabel('실제 판매전표와 재고가 반영됩니다. 같은 주문은 한 번만 판매됩니다.'))
+        def save():
+            try:
+                identifier=self.store.post_order_sale(row['id'],paid.text(),method.currentData());form.accept();self.notify(f'판매전표 #{identifier} 등록·확인 완료');self.refresh()
+            except (ValueError,PermissionError) as exc:form.error(exc)
+        form.finish(save);form.exec()
 
     def export_paper(self):
         try:

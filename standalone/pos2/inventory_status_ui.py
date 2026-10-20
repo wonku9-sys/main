@@ -84,6 +84,7 @@ class InventoryStatusPage(Page):
                     if row['row_kind']=='group':self.grid.item(index,0).setIcon(folder_icon(min(3,max(1,len(row['path'])))))
             totals=report['totals'];self.total.setText(f"합계 {totals['item_count']:,}개 상품 · {quantity_text(totals['quantities'])} · 장부원가 {won(totals['stock_cost'])}원"+('' if report['snapshot'] else f" · 상품장 매입가액 {won(totals['purchase_total'])}원 · 판매가액 {won(totals['sale_total'])}원"))
             self.summary.setText(('마감 자료가 없습니다. ‘현금 · 월재고 마감’에서 먼저 월말 마감하세요.' if not report['closed_at'] else f"저장된 월말 마감: {self.month.currentData()} · {report['closed_at']}\n마감 당시 상품명·대분류·공급사·수량·장부원가만 보존합니다. 중·소분류/단가/과면세는 과거값이 없어 재계산하지 않습니다.") if report['snapshot'] else '분류를 더블클릭하면 하위 단계로 이동합니다. 하위분류 표시는 중·소분류와 상품까지 펼칩니다. 소계는 중복 합산하지 않습니다.\n매입가액·판매가액은 현재 상품장의 1단위/100g 기준이며, 장부원가는 이동평균 원가입니다. 재고관리 제외 상품은 집계하지 않습니다.')
+            self.summary.setText(self.summary.text()+'\n음수 재고의 원가와 이익은 잠정값입니다. 부족 입고를 확인하고 원가 차이는 재고실사로 조정하세요.')
         except (ValueError,PermissionError) as exc:self.grid.fill([]);self.total.clear();self.summary.clear();self.fail(exc)
 
     def focus_scan(self):self.search.setFocus();self.search.selectAll()
