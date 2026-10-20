@@ -320,7 +320,8 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(f"SY POS 독립판 {__version__} · 단독 사용 / 선택형 PC 공유" + (" [체험]" if demo else ""))
         self.setWindowIcon(app_icon())
         self.resize(1500, 930)
-        self.setMinimumSize(1060, 680)
+        self.setMinimumSize(920, 600)
+        self.statusBar().setSizeGripEnabled(True)
         central = QWidget()
         layout = QHBoxLayout(central)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -370,7 +371,13 @@ class MainWindow(QMainWindow):
         top.addWidget(action('오늘의 글귀',self.show_inspiration))
         if self.network_path:top.addWidget(action('PC 연결 · 공유',self.configure_network))
         top.addWidget(action("로그아웃", self.logout))
-        right.addWidget(header)
+        # Account controls must not force a wide minimum window size.
+        header_scroll=QScrollArea();header_scroll.setObjectName('accountHeaderScroll')
+        header_scroll.setWidgetResizable(True);header_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        header_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        header_scroll.setWidget(header)
+        header_scroll.setFixedHeight(header.sizeHint().height()+self.style().pixelMetric(QStyle.PixelMetric.PM_ScrollBarExtent))
+        right.addWidget(header_scroll)
         if demo:
             banner = QLabel("체험 모드 · 실제 거래자료와 분리된 샘플입니다. 스캔·반품·실사·라벨을 시험할 수 있습니다.")
             banner.setObjectName("notice")
@@ -380,6 +387,8 @@ class MainWindow(QMainWindow):
             banner.setObjectName("notice")
             right.addWidget(banner)
         self.shared_notice=QLabel();self.shared_notice.setObjectName('notice');self.shared_notice.setWordWrap(True);self.shared_notice.hide();right.addWidget(self.shared_notice)
+        from .query_bar import QueryBar
+        self.query_bar=QueryBar('첫화면',self.refresh,self);right.addWidget(self.query_bar)
         self.stack = QStackedWidget()
         right.addWidget(self.stack, 1)
         layout.addLayout(right, 1)
@@ -432,6 +441,7 @@ class MainWindow(QMainWindow):
         for title, callback, standard in (("첫화면", self.go_home, QStyle.StandardPixmap.SP_DirHomeIcon), ("상품장", lambda: self.open_page("products"), QStyle.StandardPixmap.SP_FileDialogContentsView), ("매입전표", lambda: self.open_page("purchases"), QStyle.StandardPixmap.SP_ArrowDown), ("판매 등록", lambda: self.new_trade("sale"), QStyle.StandardPixmap.SP_ArrowUp), ("F8 스캔", self.focus_scan, QStyle.StandardPixmap.SP_FileDialogDetailedView), ("조회", self.refresh, QStyle.StandardPixmap.SP_BrowserReload), ("엑셀 저장", self.export, QStyle.StandardPixmap.SP_DialogSaveButton), ("인쇄", self.print, QStyle.StandardPixmap.SP_FileIcon)):
             if title == "상품장" and not self.allowed("catalog") or title in ("매입전표", "판매 등록") and not self.allowed("trade"):
                 continue
+            if title=='조회':continue  # The single highlighted query control is fixed above the workspace.
             tool = QAction(self.style().standardIcon(standard), title, self)
             attach_help(tool, ACTION_HELP[title])
             tool.triggered.connect(callback)
@@ -662,6 +672,7 @@ class MainWindow(QMainWindow):
             if key in self.popup_windows and self.popup_windows[key].isVisible():
                 self.popup_windows[key].showNormal();self.popup_windows[key].raise_();self.popup_windows[key].activateWindow()
                 self.current_key,self.current_page=key,page
+                self.query_bar.context.setText(page.title)
                 return True
             page.setEnabled(True)
             page.refresh()
@@ -674,6 +685,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "조회 실패", str(exc))
             return False
         self.current_key, self.current_page = key, page
+        self.query_bar.context.setText(page.title)
         self.sounds.play('menu')
         if self.popup_menus and key in {'diary','household'}:
             # Keep the settings/landing page cached, but do not open a second
@@ -1094,6 +1106,12 @@ def main(argv=None):
                             assert window.pages['worklog'].grid.isVisible()
                             capture('-worklog-independent',window.popup_windows['worklog'])
                             capture('-independent-windows',window.popup_windows['purchases'])
+                            popup=window.popup_windows['worklog'];popup.resize(720,520);app.processEvents()
+                            bar=popup.query_bar;position=bar.pos()
+                            window.scrollers['worklog'].verticalScrollBar().setValue(window.scrollers['worklog'].verticalScrollBar().maximum())
+                            app.processEvents();assert bar.isVisible() and bar.pos()==position and popup.isSizeGripEnabled()
+                            capture('-resized-fixed-query',popup)
+                            popup.resize(1180,800)
                             from .private_session import remember_key
                             single_key=store.unlock_diary('Smoke-Diary-Only-2026!');remember_key(store,'diary',single_key);single_key[:]=bytes(len(single_key))
                             window.open_page('diary');app.processEvents()

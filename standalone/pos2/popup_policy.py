@@ -1,7 +1,7 @@
 """Resizable dialogs, maximize/fullscreen controls and accessible overflow."""
 from PySide6.QtCore import QEvent,QObject,Qt
 from PySide6.QtGui import QAction,QKeySequence
-from PySide6.QtWidgets import QApplication,QDialog,QScrollArea,QVBoxLayout,QWidget,QMenu,QPushButton,QHBoxLayout
+from PySide6.QtWidgets import QApplication,QDialog,QScrollArea,QVBoxLayout,QWidget,QMenu,QPushButton,QHBoxLayout,QSizeGrip
 
 EXCLUDED={'QMessageBox','QInputDialog','QFileDialog','QPrintDialog','QPrintPreviewDialog'}
 
@@ -9,7 +9,13 @@ EXCLUDED={'QMessageBox','QInputDialog','QFileDialog','QPrintDialog','QPrintPrevi
 def window_controls(dialog):
     if getattr(dialog,'_window_controls',False):return
     dialog._window_controls=True
-    dialog.setWindowFlags(dialog.windowFlags()|Qt.WindowType.WindowMinMaxButtonsHint|Qt.WindowType.WindowSystemMenuHint)
+    # Keep the native Windows frame: every edge and corner remains resizable.
+    flags=dialog.windowFlags() & ~Qt.WindowType.MSWindowsFixedSizeDialogHint
+    dialog.setWindowFlags(flags|Qt.WindowType.WindowMinMaxButtonsHint|Qt.WindowType.WindowSystemMenuHint)
+    dialog.setSizeGripEnabled(True)
+    for grip in dialog.findChildren(QSizeGrip):
+        grip.setAccessibleName('창 크기 조절')
+        grip.setToolTip('모서리나 창 테두리를 드래그해 크기를 조절합니다. 최대화·전체화면에서는 창모드로 복원하세요.')
     toggle=QAction('전체화면 / 창모드 (F11)',dialog);toggle.setShortcut(QKeySequence('F11'))
     toggle.triggered.connect(lambda:dialog.showNormal() if dialog.isFullScreen() else dialog.showFullScreen())
     dialog.addAction(toggle)
@@ -22,7 +28,7 @@ def accessible_content(dialog):
     if layout is None:return
     # Already scrollable private cashbooks keep their existing surface/layout.
     existing=layout.itemAt(0).widget() if layout.count() else None
-    if not isinstance(existing,QScrollArea):
+    if not isinstance(existing,QScrollArea) and not getattr(dialog,'_fixed_query_header',False):
         surface=QWidget();surface.setObjectName('popupSurface');surface.setLayout(layout)
         outer=QVBoxLayout(dialog);outer.setContentsMargins(0,0,0,0)
         scroll=QScrollArea(dialog);scroll.setObjectName('popupScroll');scroll.setWidgetResizable(True)

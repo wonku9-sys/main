@@ -1,7 +1,6 @@
 """Modeless desktop windows with one owner, permission checks and safe shutdown."""
 from PySide6.QtCore import QEvent, Qt
-from PySide6.QtWidgets import QApplication,QDialog, QHBoxLayout, QVBoxLayout, QMessageBox
-from .widgets import action
+from PySide6.QtWidgets import QApplication,QDialog, QVBoxLayout, QMessageBox
 
 
 class PageWindow(QDialog):
@@ -12,7 +11,10 @@ class PageWindow(QDialog):
         self.setWindowTitle(page.title+' · SY POS');self.setWindowIcon(desktop.windowIcon())
         self.resize(1180,800);self.setMinimumSize(780,540)
         layout=QVBoxLayout(self);layout.setContentsMargins(0,0,0,0)
-        tools=QHBoxLayout();tools.addWidget(action('첫화면',desktop.go_home));tools.addWidget(action('새로고침',self.refresh));tools.addStretch();tools.addWidget(action('이 창 닫기',self.close));layout.addLayout(tools)
+        from .query_bar import QueryBar
+        self._fixed_query_header=True
+        self.query_bar=QueryBar(page.title,self.refresh,self,home=desktop.go_home,close=self.close)
+        layout.addWidget(self.query_bar)
         layout.addWidget(scroll,1)
         # QStackedWidget hides non-current pages explicitly. Reparenting that
         # scroll area into a dialog does not clear its hidden flag by itself.
@@ -34,6 +36,7 @@ class PageWindow(QDialog):
             owner=self._desktop_owner
             owner.current_page,owner.current_key=self.page,self.key
             owner.location.setText('독립 창  /  '+self.page.title)
+            owner.query_bar.context.setText(self.page.title)
         return super().event(event)
 
     def closeEvent(self,event):
