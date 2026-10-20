@@ -31,6 +31,14 @@ def test_query_stays_at_top_across_menus_and_scrolls(desktop):
         assert abs(bar.query_button.mapTo(bar,bar.query_button.rect().center()).x()-bar.rect().center().x())<=1
         if origin is None:origin=point
         assert point==origin and bar.context.text()==window.current_page.title
+        assert bar is window.current_page.header
+        nav=window.navigation_bar
+        assert bar.mapTo(window,QPoint()).y()>=nav.mapTo(window,QPoint(0,nav.height())).y()
+        assert not nav.findChildren(type(bar.query_button)) or all('조회' not in b.text() for b in nav.findChildren(type(bar.query_button)))
+        for button in window.current_page.findChildren(type(bar.query_button)):
+            reference=getattr(button,'_sy_query_handler',None)
+            handler=reference() if reference else None
+            if getattr(handler,'__self__',None) is window.current_page and '조회' in button.text():assert not button.isVisible()
         scroller=window.scrollers[key];scroller.verticalScrollBar().setValue(scroller.verticalScrollBar().maximum())
         app.processEvents();assert bar.query_button.mapTo(window,bar.query_button.rect().topRight())==origin
     assert 'F5' in bar.query_button.toolTip() and '#F6CE63' in bar.styleSheet()
@@ -53,6 +61,8 @@ def test_button_and_f5_query_same_page_and_respect_unsaved_cancel(desktop,monkey
 def test_popup_fixed_query_native_frame_resize_and_fullscreen_restore(desktop):
     app,_,window=desktop;window.popup_menus=True;window.open_page('worklog');app.processEvents()
     popup=window.popup_windows['worklog'];bar=popup.query_bar
+    assert bar is popup.page.header
+    assert bar.mapTo(popup,QPoint()).y()>=popup.navigation_bar.height()
     assert popup.isSizeGripEnabled() and popup.findChildren(QSizeGrip)
     assert not popup.windowFlags() & Qt.WindowType.MSWindowsFixedSizeDialogHint
     assert not popup.windowFlags() & Qt.WindowType.FramelessWindowHint
@@ -86,21 +96,33 @@ def test_main_and_product_dialog_resize_keep_overflow_accessible(desktop):
 
 
 @pytest.mark.parametrize('width',(380,700,1000))
-@pytest.mark.parametrize('popup',(False,True))
-def test_query_is_truly_centered_with_asymmetric_controls_and_long_titles(desktop,width,popup):
+@pytest.mark.parametrize('action_count',(0,4))
+def test_query_is_truly_centered_with_asymmetric_controls_and_long_titles(desktop,width,action_count):
     from pos2.query_bar import QueryBar
+    from pos2.widgets import action
     app,_,_=desktop;called=[]
-    bar=QueryBar('상품장',lambda:called.append('query'),home=(lambda:None) if popup else None,close=(lambda:None) if popup else None)
-    bar.resize(width,60);bar.show();app.processEvents()
+    bar=QueryBar('상품장',lambda:called.append('query'),description='검색 조건으로 상품을 확인합니다.')
+    for i in range(action_count):bar.actions.addWidget(action('엑셀 저장 '+str(i),lambda:None))
+    bar.resize(width,88);bar.show();app.processEvents()
     for title in ('상품장','현재고 · 공급사별 / 대분류 / 중분류 / 소분류 · '+'긴 메뉴 설명 '*20):
         bar.context.setText(title);app.processEvents()
         assert bar.context.text()==title and bar.context.toolTip()==title
         button=bar.query_button;rect=QRect(button.mapTo(bar,QPoint()),button.size())
         assert abs(rect.center().x()-bar.rect().center().x())<=1
         assert bar.rect().contains(rect) and button.isVisible()
-        for side in (bar.home_button,bar.close_button):
-            if side:
-                side_rect=QRect(side.mapTo(bar,QPoint()),side.size())
-                assert not rect.intersects(side_rect)
-                assert bar.rect().contains(side_rect)
+        for side in (bar.context,bar.action_scroll):
+            side_rect=QRect(side.mapTo(bar,QPoint()),side.size())
+            assert not rect.intersects(side_rect)
+            assert bar.rect().contains(side_rect)
+    if action_count and width==380:assert bar.action_scroll.horizontalScrollBar().maximum()>0
     bar.query_button.click();assert called==['query'];bar.close()
+
+
+def test_background_header_queries_its_own_page_not_active_popup(desktop,monkeypatch):
+    app,_,window=desktop;window.open_page('products');products=window.current_page
+    window.popup_menus=True;window.open_page('purchases');app.processEvents()
+    purchases=window.pages['purchases'];called=[]
+    monkeypatch.setattr(products,'refresh',lambda:called.append('products'))
+    monkeypatch.setattr(purchases,'refresh',lambda:called.append('purchases'))
+    products.header.query_button.click();assert called==['products']
+    window.popup_windows['purchases'].query_bar.query_button.click();assert called==['products','purchases']

@@ -70,6 +70,8 @@ def _button(label, callback, layout, primary=False):
     if primary:
         button.setObjectName("primary")
     button.clicked.connect(lambda *_: callback())
+    from .widgets import mark_query_button
+    mark_query_button(button,callback)
     from .menu_help import ACTION_HELP, attach_help
     attach_help(button, ACTION_HELP.get(label))
     restrict_button(button, callback)

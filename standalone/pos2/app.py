@@ -319,6 +319,7 @@ class MainWindow(QMainWindow):
         self.popup_menus=popup_menus;self.popup_windows={};self.personal_windows={}
         self.network_path=network_path;self.shared_service=None;self.shared_refresh=None
         self.pages, self.items, self.nav_actions, self.scrollers = {}, {}, {}, {}
+        self.page_surfaces = {}
         self.menu_keys = menu_keys(SECTIONS)
         self.purchase_navigation_item = None
         self.current_page, self.current_key = None, None
@@ -393,8 +394,8 @@ class MainWindow(QMainWindow):
             banner.setObjectName("notice")
             right.addWidget(banner)
         self.shared_notice=QLabel();self.shared_notice.setObjectName('notice');self.shared_notice.setWordWrap(True);self.shared_notice.hide();right.addWidget(self.shared_notice)
-        from .query_bar import QueryBar
-        self.query_bar=QueryBar('첫화면',self.refresh,self);right.addWidget(self.query_bar)
+        from .query_bar import NavigationBar
+        self.navigation_bar=NavigationBar('첫화면',self,home=self.go_home);right.addWidget(self.navigation_bar)
         self.stack = QStackedWidget()
         right.addWidget(self.stack, 1)
         self.personal_dock=QFrame();self.personal_dock.setObjectName('personalDock');self.personal_dock.setStyleSheet('QFrame#personalDock{background:#F8FAF7;border-top:1px solid #DDE6DE;}')
@@ -689,12 +690,15 @@ class MainWindow(QMainWindow):
                 scroll.setWidgetResizable(True)
                 scroll.setWidget(page)
                 self.pages[key], self.scrollers[key] = page, scroll
-                self.stack.addWidget(scroll)
+                from .query_bar import PageSurface
+                surface=PageSurface(page,scroll,lambda checked=False,key=key:self.refresh_page(key))
+                self.page_surfaces[key]=surface
+                self.stack.addWidget(surface)
             page = self.pages[key]
             if key in self.popup_windows and self.popup_windows[key].isVisible():
                 self.popup_windows[key].showNormal();self.popup_windows[key].raise_();self.popup_windows[key].activateWindow()
                 self.current_key,self.current_page=key,page
-                self.query_bar.context.setText(page.title)
+                self.query_bar=page.header
                 return True
             page.setEnabled(True)
             page.refresh()
@@ -707,7 +711,8 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "조회 실패", str(exc))
             return False
         self.current_key, self.current_page = key, page
-        self.query_bar.context.setText(page.title)
+        self.query_bar=page.header
+        self.navigation_bar.context.setText(page.title)
         self.sounds.play('menu')
         if self.popup_menus and key in {'diary','household'}:
             # Keep the settings/landing page cached, but do not open a second
@@ -716,10 +721,10 @@ class MainWindow(QMainWindow):
         elif self.popup_menus and key!='home' or key in self.popup_windows:
             from .independent_windows import PageWindow
             if key not in self.popup_windows:
-                self.stack.removeWidget(self.scrollers[key])
-                self.popup_windows[key]=PageWindow(self,key,page,self.scrollers[key])
+                self.stack.removeWidget(self.page_surfaces[key])
+                self.popup_windows[key]=PageWindow(self,key,page,self.page_surfaces[key])
             popup=self.popup_windows[key];popup.show();popup.raise_();popup.activateWindow()
-        else:self.stack.setCurrentWidget(self.scrollers[key])
+        else:self.stack.setCurrentWidget(self.page_surfaces[key])
         self.tree.setCurrentItem(self.items[key])
         if key == "home":
             self.reset_navigation()
@@ -734,18 +739,28 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(str(text))
 
     def refresh(self):
-        if self.current_page:
+        self.refresh_page(self.current_key)
+
+    def refresh_page(self,key):
+        # A visible background menu must query its own page even while an
+        # independent window has keyboard focus/current_page ownership.
+        page=self.pages.get(key)
+        if page is None:return
+        self._refresh_page(page,key)
+
+    def _refresh_page(self,page,key):
+        if page:
             try:
-                if not self.navigation.allow_leave(self.current_page):
+                if not self.navigation.allow_leave(page):
                     return
-                self.store.require_menu(self.current_key)
-                self.current_page.refresh()
-                self.navigation.track(self.current_page)
+                self.store.require_menu(key)
+                page.refresh()
+                self.navigation.track(page)
             except (ValueError, PermissionError) as exc:
                 if isinstance(exc, PermissionError):
-                    for grid in self.current_page.findChildren(DataGrid):
+                    for grid in page.findChildren(DataGrid):
                         grid.fill([])
-                    self.current_page.setEnabled(False)
+                    page.setEnabled(False)
                 QMessageBox.warning(self, "조회", str(exc))
 
     def new_trade(self, kind):
@@ -965,6 +980,10 @@ def main(argv=None):
                                 if bar is not None:
                                     center=bar.query_button.mapTo(bar,bar.query_button.rect().center()).x()
                                     assert abs(center-bar.rect().center().x())<=1,'Query button must stay centered'
+                                    nav=getattr(widget,'navigation_bar',None)
+                                    if nav is not None and widget.isAncestorOf(bar):
+                                        from PySide6.QtCore import QPoint
+                                        assert bar.mapTo(widget,QPoint()).y()>=nav.mapTo(widget,QPoint(0,nav.height())).y(),'Query belongs below navigation, in the page heading'
                                 target = args.screenshot.with_name(args.screenshot.stem + suffix + args.screenshot.suffix)
                                 assert widget.grab().save(str(target))
                             window.open_page("home")

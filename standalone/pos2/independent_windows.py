@@ -4,21 +4,22 @@ from PySide6.QtWidgets import QApplication,QDialog, QVBoxLayout, QMessageBox
 
 
 class PageWindow(QDialog):
-    def __init__(self,desktop,key,page,scroll):
+    def __init__(self,desktop,key,page,surface):
         super().__init__(None)
         self._desktop_owner=desktop;self.key,self.page=key,page
         self.revision=None
         self.setWindowTitle(page.title+' · SY POS');self.setWindowIcon(desktop.windowIcon())
         self.resize(1180,800);self.setMinimumSize(780,540)
-        layout=QVBoxLayout(self);layout.setContentsMargins(0,0,0,0)
-        from .query_bar import QueryBar
+        layout=QVBoxLayout(self);layout.setContentsMargins(0,0,0,0);layout.setSpacing(0)
+        from .query_bar import NavigationBar
         self._fixed_query_header=True
-        self.query_bar=QueryBar(page.title,self.refresh,self,home=desktop.go_home,close=self.close)
-        layout.addWidget(self.query_bar)
-        layout.addWidget(scroll,1)
+        self.navigation_bar=NavigationBar(page.title,self,home=desktop.go_home,close=self.close)
+        self.query_bar=page.header;self.query_bar.set_query(self.refresh)
+        layout.addWidget(self.navigation_bar)
+        layout.addWidget(surface,1)
         # QStackedWidget hides non-current pages explicitly. Reparenting that
-        # scroll area into a dialog does not clear its hidden flag by itself.
-        scroll.show()
+        # page surface into a dialog does not clear its hidden flag by itself.
+        surface.show()
         self.setWindowModality(Qt.WindowModality.NonModal)
         from .menu_shortcuts import install_window_shortcuts
         install_window_shortcuts(self, desktop)
@@ -36,7 +37,7 @@ class PageWindow(QDialog):
             owner=self._desktop_owner
             owner.current_page,owner.current_key=self.page,self.key
             owner.location.setText('독립 창  /  '+self.page.title)
-            owner.query_bar.context.setText(self.page.title)
+            owner.query_bar=self.query_bar
         return super().event(event)
 
     def closeEvent(self,event):

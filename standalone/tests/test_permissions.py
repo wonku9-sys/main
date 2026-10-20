@@ -125,7 +125,7 @@ def test_admin_permission_menu_saves_read_only_and_independent_edit_delete_flags
     assert set(window.items) == {"home", "products", "lucky_numbers"}
     assert window.open_page("products")
     products = window.pages["products"]
-    buttons = {button.text(): button for button in products.findChildren(QPushButton)}
+    buttons = {button.text(): button for surface in (products,products.header) for button in surface.findChildren(QPushButton)}
     assert any(not button.isEnabled() for name, button in buttons.items() if "등록" in name)
     with pytest.raises(PermissionError):
         shop.staff.save_user({"permissions": ["admin"]}, shop.staff_id)

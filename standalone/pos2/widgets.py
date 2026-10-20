@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
+from weakref import WeakMethod
 
 from PySide6.QtCore import QDate, QEvent, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QIcon, QPageLayout, QPainter, QPen, QPixmap, QTextDocument
@@ -44,11 +45,18 @@ def action(text, callback, primary=False, danger=False):
     result.setIcon(menu_icon(text))
     result.setObjectName("primary" if primary else "danger" if danger else "action")
     result.clicked.connect(callback)
+    mark_query_button(result,callback)
     from .menu_help import ACTION_HELP, attach_help
     attach_help(result, ACTION_HELP.get(text))
     from .permissions import restrict_button
     restrict_button(result, callback)
     return result
+
+
+def mark_query_button(button,callback):
+    # Metadata must not retain a bound page/window through a Qt child cycle.
+    if getattr(callback,'__name__','')=='refresh' and getattr(callback,'__self__',None) is not None:
+        button._sy_query_handler=WeakMethod(callback)
 
 
 def search_icon():
@@ -331,20 +339,17 @@ class Page(QWidget):
         self.body = QVBoxLayout(self)
         self.body.setContentsMargins(18, 16, 18, 15)
         self.body.setSpacing(12)
-        heading = QHBoxLayout()
-        labels = QVBoxLayout()
-        name = QLabel(title)
-        name.setObjectName("pageTitle")
-        labels.addWidget(name)
-        hint = QLabel(description)
-        hint.setObjectName("muted")
-        hint.setWordWrap(True)
-        labels.addWidget(hint)
-        heading.addLayout(labels, 1)
-        self.actions = QHBoxLayout()
-        heading.addLayout(self.actions)
-        self.body.addLayout(heading)
+        from .query_bar import QueryBar
+        self.header = QueryBar(title, self.refresh, description=description)
+        self.actions = self.header.actions
+        self.body.addWidget(self.header)
         self.grids = []
+
+    def changeEvent(self,event):
+        from shiboken6 import isValid
+        if event.type()==QEvent.Type.EnabledChange and hasattr(self,'header') and isValid(self.header) and self.header.parentWidget() is not self:
+            self.header.setEnabled(self.isEnabled())
+        super().changeEvent(event)
 
     def table(self, headers):
         result = DataGrid(headers)
