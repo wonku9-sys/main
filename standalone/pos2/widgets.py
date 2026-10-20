@@ -233,7 +233,30 @@ class Cell(QTableWidgetItem):
             return self.text() < other.text()
 
 
-class DataGrid(QTableWidget):
+class HeaderSafeTable(QTableWidget):
+    """Size titles from header metadata only; never scan all product rows."""
+    def fit_header_text(self):
+        header = self.horizontalHeader()
+        for column in range(self.columnCount()):
+            item = self.horizontalHeaderItem(column)
+            if item and not item.toolTip():
+                item.setToolTip(item.text())
+            if not self.isColumnHidden(column):
+                needed = header.sectionSizeHint(column)
+                if header.sectionSize(column) < needed:
+                    header.resizeSection(column, needed)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.fit_header_text()
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() in (QEvent.Type.FontChange, QEvent.Type.StyleChange) and self.isVisible():
+            self.fit_header_text()
+
+
+class DataGrid(HeaderSafeTable):
     def __init__(self, headers):
         super().__init__(0, len(headers))
         self.setHorizontalHeaderLabels(headers)

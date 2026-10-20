@@ -5,14 +5,14 @@ from datetime import date
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 from PySide6.QtCore import QDate, Qt, QTimer, QEvent
-from PySide6.QtGui import QKeySequence, QShortcut
+from PySide6.QtGui import QIcon, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QGridLayout, QHBoxLayout,
     QHeaderView, QInputDialog, QLabel, QLineEdit, QMessageBox, QPushButton,
     QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget, QMenu,
 )
 
-from .widgets import DataGrid, Page, ScanField, action, amount, date_field, search_icon, won
+from .widgets import DataGrid, HeaderSafeTable, Page, ScanField, action, amount, date_field, search_icon, won
 from .common import decimal as value_decimal, qty
 from .currency import public_input as money, round_amount as rounded
 
@@ -489,7 +489,9 @@ class TradeDialog(QDialog):
         scanner = QHBoxLayout()
         scanner.addWidget(QLabel("바코드 F8"))
         self.scan = ScanField()
+        self.scan.setMinimumWidth(210)
         self.scan.setPlaceholderText("USB 스캐너 입력 후 Enter · 확장단위 바코드 지원")
+        self.scan.setToolTip("바코드를 입력하거나 USB 스캐너로 읽은 뒤 Enter를 누르세요. 확장단위 바코드도 지원합니다.\n단축키: F8")
         self.scan.scanned.connect(self.scan_barcode)
         scanner.addWidget(self.scan, 1)
         self.add_button = action("품목 추가", self.add_line)
@@ -512,11 +514,11 @@ class TradeDialog(QDialog):
             self.remove_line_button.setEnabled(not self.readonly)
         scanner.addWidget(self.quote_button)
         body.addLayout(scanner)
-        self.table = QTableWidget(0, len(self.line_columns))
+        self.table = HeaderSafeTable(0, len(self.line_columns))
         self.table.setHorizontalHeaderLabels(["상품명", "규격", "바코드", "매입량" if kind.startswith("purchase") else "수량", "입력 단위", "환산량", "총수량 (기본단위)", "매입단가" if kind.startswith("purchase") else "거래단가", "매입금액" if kind.startswith("purchase") else "거래금액", "현재 판매단가 (참고)", "예상이익률", "분류", "공급사", "현재고 / 반품 가능", "삭제"])
         self.table.setSortingEnabled(False)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
-        for column, width in enumerate((220, 75, 125, 75, 85, 60, 100, 85, 95, 130, 85, 140, 150, 130, 60)):
+        for column, width in enumerate((220, 75, 125, 75, 180, 60, 100, 85, 95, 130, 85, 140, 150, 130, 60)):
             self.table.setColumnWidth(column, width)
         self.table.verticalHeader().setDefaultSectionSize(44)
         self.detail_tabs = QTabWidget()
@@ -801,6 +803,12 @@ class TradeDialog(QDialog):
         row["total"].setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         row["total"].setMargin(5)
         row["delete"] = action("×", lambda: self.remove_line(row))
+        # A decorative icon plus ordinary button padding hides the cross in
+        # the compact delete column. Keep a clear, named single-symbol action.
+        row["delete"].setIcon(QIcon())
+        row["delete"].setStyleSheet('padding:4px;')
+        row["delete"].setAccessibleName('이 품목 삭제')
+        row["delete"].setToolTip('이 품목을 전표 입력 목록에서 삭제합니다. 전표 확정 전까지 재고는 바뀌지 않습니다.')
         self.line_rows.append(row)
         self.table.setRowCount(len(self.line_rows))
         index = len(self.line_rows) - 1
@@ -846,10 +854,13 @@ class TradeDialog(QDialog):
             row["spec"].setText(product["specification"])
             row["category"].setText(" / ".join(filter(None, (product["category"], product["category_mid"], product["category_small"]))))
             row["supplier"].setText(product.get("supplier_name") or "미지정")
+            for key in ('stock','spec','category','supplier'):
+                row[key].setToolTip(row[key].text())
         else:
             row["units"] = {}
             for key in ("spec", "barcode", "factor", "base_qty", "sale_price", "margin", "category", "supplier", "stock"):
                 row[key].clear()
+                row[key].setToolTip('')
         row["unit"].blockSignals(False)
         if identifier:
             self.unit_changed(row)
@@ -897,6 +908,7 @@ class TradeDialog(QDialog):
         product = self.product_map[identifier]
         unit = row.get("units", {}).get(row["unit"].currentData()) or {}
         gram_input = row["unit"].currentData() == "grams"
+        row["unit"].setToolTip(row["unit"].currentText())
         row["price_basis"] = (row.get("source") or {}).get("price_basis", 100 if gram_input else 1 if unit else product.get("price_basis", 1))
         row["barcode"].setText(unit.get("barcode") or product["barcode"])
         row["factor"].setText(amount((row.get("source") or {}).get("factor", "0.001" if gram_input else unit.get("factor", "1"))))

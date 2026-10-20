@@ -126,3 +126,47 @@ def test_background_header_queries_its_own_page_not_active_popup(desktop,monkeyp
     monkeypatch.setattr(purchases,'refresh',lambda:called.append('purchases'))
     products.header.query_button.click();assert called==['products']
     window.popup_windows['purchases'].query_bar.query_button.click();assert called==['products','purchases']
+
+
+def test_table_headers_fit_without_scanning_product_rows(desktop,monkeypatch):
+    from pos2.widgets import DataGrid
+    app,_,_=desktop
+    grid=DataGrid(['상품코드','사업자등록번호','순지급 (환급 차감)'])
+    grid.setRowCount(35190)
+    for column in range(3):grid.setColumnWidth(column,55)
+    def forbidden(*args):pytest.fail('Header layout scanned product cells')
+    monkeypatch.setattr(grid,'item',forbidden)
+    monkeypatch.setattr(grid,'resizeColumnsToContents',forbidden)
+    grid.resize(450,300);grid.show();app.processEvents()
+    for column in range(3):
+        assert grid.columnWidth(column)>=grid.horizontalHeader().sectionSizeHint(column)
+        assert grid.horizontalHeaderItem(column).toolTip()==grid.horizontalHeaderItem(column).text()
+    grid.horizontalHeader().setStyleSheet('QHeaderView::section {font-size:20px;padding:9px;}')
+    grid.hide();grid.show();app.processEvents()
+    for column in range(3):assert grid.columnWidth(column)>=grid.horizontalHeader().sectionSizeHint(column)
+    assert grid.horizontalScrollBar().maximum()>0
+    grid.close()
+
+
+def test_purchase_input_and_delete_symbol_are_readable(desktop):
+    from pos2.workflow_ui import TradeDialog
+    app,store,window=desktop
+    dialog=TradeDialog(window,'purchase');dialog.show();dialog.resize(600,500);app.processEvents()
+    assert dialog.scan.width()>=210 and 'F8' in dialog.scan.toolTip()
+    button=dialog.line_rows[0]['delete']
+    assert button.icon().isNull() and button.width()>=button.minimumSizeHint().width()
+    assert button.accessibleName()=='이 품목 삭제'
+    header=dialog.table.horizontalHeader()
+    for column in range(dialog.table.columnCount()):assert header.sectionSize(column)>=header.sectionSizeHint(column)
+    # Long product names remain available without an all-catalogue sizing pass.
+    identifier=store.save_product(dict(name='전체 이름을 툴팁으로 확인하는 아주 긴 시험 상품명',base_unit='kg'))
+    assert dialog.apply_master_product(identifier)
+    selected=next(row for row in dialog.line_rows if row['product'].currentData()==identifier)
+    combo=selected['product']
+    assert combo.toolTip()==combo.currentText()
+    index=combo.model().index(combo.currentIndex())
+    assert index.data(Qt.ItemDataRole.ToolTipRole)==combo.currentText()
+    unit=selected['unit'];unit.setCurrentIndex(unit.findData('grams'));app.processEvents()
+    assert '100g' in unit.toolTip() and unit.toolTip()==unit.currentText()
+    assert unit.width()>=unit.minimumSizeHint().width()
+    dialog.close()

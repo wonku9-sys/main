@@ -18,6 +18,8 @@ class TradeProductModel(QAbstractListModel):
         record = self.records[index.row()]
         if role == Qt.ItemDataRole.DisplayRole:
             return f"{record['code']} · {record['name']}" if record else '상품 선택'
+        if role == Qt.ItemDataRole.ToolTipRole:
+            return f"{record['code']} · {record['name']}" if record else '상품 선택'
         if role == Qt.ItemDataRole.UserRole:
             return record['id'] if record else None
         return None
@@ -43,6 +45,8 @@ class TradeProductCombo(QComboBox):
         self.setMinimumContentsLength(18)
         self.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
         self.view().setUniformItemSizes(True)
+        self.currentIndexChanged.connect(lambda _index: self.setToolTip(self.currentText()))
+        self.setToolTip(self.currentText())
 
     def findData(self, value, role=Qt.ItemDataRole.UserRole, flags=Qt.MatchFlag.MatchExactly | Qt.MatchFlag.MatchCaseSensitive):
         if role == Qt.ItemDataRole.UserRole:
