@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import date
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
-from PySide6.QtCore import QDate, Qt
+from PySide6.QtCore import QDate, Qt, QTimer, QEvent
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QGridLayout, QHBoxLayout,
@@ -94,6 +94,18 @@ class ProductPicker(QDialog):
         self.selections, self.checked = [], {}
         self.read_permissions = read_permissions
         self.product_loader = product_loader
+        self._records_cache = None
+        self._records_revision = None
+        parent_revision = getattr(parent, 'products_revision', None)
+        if product_loader is None and parent_revision is not None and parent_revision == tuple(self.store.audit_revision()):
+            self._records_cache = [r for r in parent.products if r.get('active', True)]
+            self._records_revision = (str(self.store.actor), parent_revision)
+            self.index_records()
+        self.page = 0
+        self.search_timer = QTimer(self)
+        self.search_timer.setSingleShot(True)
+        self.search_timer.setInterval(250)
+        self.search_timer.timeout.connect(self.refresh)
         self.on_apply = None; self.applied_batches = 0
         self.setWindowTitle("상품 검색")
         self.resize(1080, 600)
@@ -117,8 +129,15 @@ class ProductPicker(QDialog):
         self.keep_open.setChecked(True); self.keep_open.hide(); body.addWidget(self.keep_open)
         self.result_label = QLabel(); body.addWidget(self.result_label)
         self.grid = DataGrid(["선택", "상품코드", "상품명", "규격", "바코드", "단위", "공급사", "매입가", "판매가", "현재고"])
+        from PySide6.QtWidgets import QAbstractItemView
+        self.grid.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.grid.setStyleSheet('QTableWidget::item:selected {background:#176CB0;color:white;}')
+        self.grid.setToolTip('방향키: 상품 이동 · 드래그/Ctrl/Shift: 여러 행 선택\nSpace: 선택 상품을 전표에 추가 · F8: 선택행 체크 · F9: 선택행 체크해제')
+        self.grid.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.grid.customContextMenuRequested.connect(self.context_menu)
+        self.grid.installEventFilter(self)
         body.addWidget(self.grid, 1)
-        self.search.textChanged.connect(self.refresh)
+        self.search.textChanged.connect(self.search_changed)
         self.supplier_only.toggled.connect(self.refresh)
         self.grid.itemChanged.connect(self.check_changed)
         self.grid.cellDoubleClicked.connect(lambda *_: self.choose())
@@ -143,6 +162,12 @@ class ProductPicker(QDialog):
         buttons.accepted.connect(self.choose)
         buttons.rejected.connect(self.reject)
         body.addWidget(buttons)
+        pages = QHBoxLayout()
+        pages.addWidget(action('이전 500개', lambda: self.move_page(-1)))
+        pages.addWidget(action('다음 500개', lambda: self.move_page(1)))
+        self.page_label = QLabel()
+        pages.addWidget(self.page_label, 1)
+        body.addLayout(pages)
         self.search.returnPressed.connect(lambda: self.apply_checked() if self.checked else self.choose())
         for button in self.findChildren(QPushButton):
             button.setAutoDefault(False)
@@ -151,29 +176,87 @@ class ProductPicker(QDialog):
                                    ('F7', lambda:self.supplier_only.toggle() if self.supplier_only.isEnabled() else None),
                                    ('F8', lambda:self.check_current(True)), ('F9', lambda:self.check_current(False))):
             shortcut=QShortcut(QKeySequence(sequence),self);shortcut.activated.connect(callback);self.shortcuts.append(shortcut)
-        single=QShortcut(QKeySequence('Space'),self.grid);single.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut);single.activated.connect(self.choose);self.shortcuts.append(single)
         enter=QShortcut(QKeySequence('Return'),self.grid);enter.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut);enter.activated.connect(lambda:self.apply_checked() if self.checked else self.choose());self.shortcuts.append(enter)
         self.refresh()
 
     def set_apply_callback(self, callback):
         self.on_apply = callback; self.keep_open.show()
 
+    def eventFilter(self, watched, event):
+        if watched is self.grid and event.type() == QEvent.Type.KeyPress and event.key() == Qt.Key.Key_Space:
+            if not event.isAutoRepeat():
+                self.apply_selected()
+            event.accept()
+            return True
+        return super().eventFilter(watched, event)
+
     def focus_search(self):
         self.search.setFocus(); self.search.selectAll()
 
     def check_current(self, checked):
-        row=self.grid.currentRow()
-        if row>=0:self.grid.item(row,0).setCheckState(Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked)
+        for index in self.grid.selectionModel().selectedRows():
+            self.grid.item(index.row(),0).setCheckState(Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked)
+
+    def apply_selected(self):
+        indices = self.grid.selectionModel().selectedRows()
+        if len(indices) <= 1:
+            return self.choose()
+        self.selections = [(self.grid.item(index.row(), 0).data(Qt.ItemDataRole.UserRole), None) for index in indices]
+        self.record, self.unit_id = self.selections[0]
+        self.deliver()
+
+    def context_menu(self, point):
+        item = self.grid.itemAt(point)
+        if item is not None and not item.isSelected():
+            self.grid.selectRow(item.row())
+        menu = QMenu(self)
+        for label, callback in (('선택 상품 적용 (Space)', self.apply_selected),
+                ('체크된 상품 적용 (Enter)', self.apply_checked),
+                ('선택행 체크 (F8)', lambda: self.check_current(True)),
+                ('선택행 체크해제 (F9)', lambda: self.check_current(False)),
+                ('현재 페이지 모두 체크', lambda: self.check_all(True)),
+                ('모든 체크해제', lambda: self.check_all(False))):
+            menu.addAction(label, callback)
+        menu.addSeparator(); menu.addAction('이 창 닫기', self.reject)
+        menu.exec(self.grid.viewport().mapToGlobal(point))
 
     def records(self, search='', supplier_id=None):
-        if self.product_loader is None:return self.store.trade_products(search,supplier_id)
+        # Revalidate authority even on cache hits; an audit/restore change invalidates it.
+        self.store._require(*(('trade',) if self.product_loader is None else self.read_permissions))
+        revision = (str(self.store.actor), tuple(self.store.audit_revision()))
+        if self._records_cache is None or revision != self._records_revision:
+            self._records_cache = self.store.trade_products() if self.product_loader is None else self.product_loader()
+            self._records_revision = revision
+            self.index_records()
         query=search.casefold()
-        return [r for r in self.product_loader() if r.get('active',True)
+        return [r for r in self._records_cache if r.get('active',True)
                 and (not supplier_id or r.get('supplier_id')==supplier_id)
-                and query in ' '.join(str(r.get(key,'')) for key in ('code','barcode','name','specification')).casefold()]
+                and query in self._search_text[r['id']]]
+
+    def index_records(self):
+        self._search_text = {r['id']: ' '.join(str(r.get(key,'')) for key in ('code','barcode','name','specification')).casefold()
+                            + ' ' + ' '.join(r.get('unit_barcodes', [])) for r in self._records_cache}
+
+    def search_changed(self, *_):
+        if len(self._records_cache or []) > 500:
+            self.search_timer.start()
+        else:
+            self.refresh()
+
+    def move_page(self, direction):
+        self.page += direction
+        self.render_records()
 
     def refresh(self, *_):
-        records = self.records(self.search.text().strip(), self.supplier_id if self.supplier_only.isChecked() else None)
+        self.search_timer.stop()
+        self.matches = self.records(self.search.text().strip(), self.supplier_id if self.supplier_only.isChecked() else None)
+        self.page = 0
+        self.render_records()
+
+    def render_records(self):
+        count = len(self.matches)
+        self.page = max(0, min(self.page, max(0, (count-1)//500)))
+        records = self.matches[self.page*500:(self.page+1)*500]
         # A scope change must not silently apply checked products hidden outside it.
         if self.supplier_only.isChecked():
             self.checked = {key: row for key, row in self.checked.items() if row.get("supplier_id") == self.supplier_id}
@@ -185,10 +268,15 @@ class ProductPicker(QDialog):
             cell.setFlags(cell.flags() | Qt.ItemFlag.ItemIsUserCheckable)
             cell.setCheckState(Qt.CheckState.Checked if record["id"] in self.checked else Qt.CheckState.Unchecked)
         self.grid.blockSignals(False)
-        self.supplier_label.setText((self.supplier_name if self.supplier_only.isChecked() else "전체 공급사 상품") + f" · {len(records):,}개")
+        self.supplier_label.setText((self.supplier_name if self.supplier_only.isChecked() else "전체 공급사 상품") + f" · {count:,}개")
+        self.page_label.setText(f'{self.page+1} / {max(1,(count+499)//500)}쪽 · 모두 체크는 현재 표시된 500개까지 적용')
         self.update_checked_count()
         if records:
             self.grid.selectRow(0)
+
+    def done(self, result):
+        self.search_timer.stop()
+        super().done(result)
 
     def update_checked_count(self):
         self.apply_checked_button.setText(f"체크된 상품 적용 ({len(self.checked):,})")
@@ -235,7 +323,7 @@ class ProductPicker(QDialog):
         self.applied_batches+=1;self.checked.clear()
         self.result_label.setText(f'{len(selections):,}개 품목을 입력 목록에 추가했습니다. 전표는 최종 저장 전입니다.')
         if not self.keep_open.isChecked():self.accept();return
-        self.selections=[];self.search.clear();self.refresh();self.focus_search()
+        self.selections=[];self.search.blockSignals(True);self.search.clear();self.search.blockSignals(False);self.refresh();self.focus_search()
 
     def choose(self):
         record = self.grid.selected()
@@ -326,8 +414,13 @@ class TradeDialog(QDialog):
         self.rounding_mode = (self.record or self.source or {}).get("rounding_mode", self.store.calculation_policy()["rounding_mode"])
         self.saved_id = None
         self.line_rows = []
+        before = tuple(self.store.audit_revision())
         self.products = self.store.products()
+        self.products_revision = before if before == tuple(self.store.audit_revision()) else None
         self.product_map = {p["id"]: p for p in self.products}
+        from .trade_product_model import TradeProductModel
+        self.product_model = TradeProductModel([p for p in self.products if p['active'] or self.readonly or self.is_return], self)
+        self._batch_lines = False
         self.line_columns = ("product", "spec", "barcode", "qty", "unit", "factor", "base_qty", "price", "total", "sale_price", "margin", "category", "supplier", "stock", "delete")
         self.setWindowTitle(("새 반품전표" if self.is_return else "새 매입전표") if kind.startswith("purchase") and not self.record else f"{KINDS[kind]} 전표 · " + (self.record["number"] if self.record else "새 전표"))
         self.resize(1180, 820)
@@ -533,6 +626,7 @@ class TradeDialog(QDialog):
         lines = (self.record or {}).get("lines") or (self.source or {}).get("lines") or []
         source_lines = self.source or (self.store.document(self.record["source_id"]) if self.is_return and self.record and self.record.get("source_id") else {})
         source_map = {line["id"]: line for line in source_lines.get("lines", [])}
+        self._batch_lines = True
         for line in lines:
             if self.source and Decimal(str(line.get("remaining_qty", line["input_qty"]))) <= 0:
                 continue
@@ -544,6 +638,7 @@ class TradeDialog(QDialog):
                 row["saved_line"] = line
         if not lines and not self.readonly:
             self.add_line()
+        self._batch_lines = False
         if self.readonly:
             for widget in (self.date, self.partner, self.pick_button, self.member, self.scan, self.add_button, self.search_button, self.quote_button, self.paid, self.method, self.points, self.memo):
                 widget.setEnabled(False)
@@ -652,11 +747,14 @@ class TradeDialog(QDialog):
         self.store.require_menu("products")
         if self.readonly or self.is_return:
             return False
-        product = next((row for row in self.store.products() if row["id"] == identifier and row["active"]), None)
+        product = self.store.catalog_product(identifier)
+        if not product['active']:
+            product = None
         if not product:
             raise ValueError("유효한 상품을 다시 선택하세요.")
         self.product_map[identifier] = product
         self.products = [row for row in self.products if row["id"] != identifier] + [product]
+        self.product_model.ensure(product)
         row = next((row for row in self.line_rows if row["product"].currentData() == identifier), None)
         if row is None:
             row = self.add_line(identifier, quantity="0" if product["base_unit"] == "g" else "1")
@@ -683,13 +781,11 @@ class TradeDialog(QDialog):
     def add_line(self, product_id=None, unit_id=None, quantity="1", price=None, source_line=None):
         if isinstance(product_id, bool):
             product_id = None
+        if product_id in self.product_map:
+            self.product_model.ensure(self.product_map[product_id])
         row = {"source": source_line}
-        product = row["product"] = QComboBox()
-        product.addItem("상품 선택", None)
-        for item in self.products:
-            if not item["active"] and not (self.readonly or self.is_return):
-                continue
-            product.addItem(f"{item['code']} · {item['name']}", item["id"])
+        from .trade_product_model import TradeProductCombo
+        product = row["product"] = TradeProductCombo(self.product_model)
         unit = row["unit"] = QComboBox()
         row["qty"], row["price"] = QLineEdit(str(quantity)), QLineEdit("0" if price is None else str(price))
         row["total"], row["stock"] = QLabel(), QLabel()
@@ -766,21 +862,28 @@ class TradeDialog(QDialog):
 
     def apply_picked_products(self, selections):
         if self.readonly or self.is_return:return
-        for record, unit_id in selections:
-            if not record:
-                continue
-            self.product_map[record["id"]] = record
-            row = next((r for r in self.line_rows if not r["product"].currentData()), None)
-            if row is None:
-                if not any(item["id"] == record["id"] for item in self.products):
+        if sum(bool(r['product'].currentData()) for r in self.line_rows) + sum(bool(record) for record, _ in selections) > 2000:
+            raise ValueError('매입전표 한 건은 최대 2,000개 품목입니다. 별도 전표로 나눠 추가하세요.')
+        self._batch_lines = True
+        self.table.setUpdatesEnabled(False)
+        try:
+            for record, unit_id in selections:
+                if not record:
+                    continue
+                if record['id'] not in self.product_map:
                     self.products.append(record)
-                row = self.add_line(record["id"], unit_id)
-            else:
-                if row["product"].findData(record["id"]) < 0:
-                    row["product"].addItem(f"{record['code']} · {record['name']}", record["id"])
-                row["product"].setCurrentIndex(row["product"].findData(record["id"]))
-                row["unit"].setCurrentIndex(max(0, row["unit"].findData(unit_id)))
-            self.table.setCurrentCell(self.line_rows.index(row), 3)
+                self.product_map[record["id"]] = record
+                self.product_model.ensure(record)
+                row = next((r for r in self.line_rows if not r["product"].currentData()), None)
+                if row is None:
+                    row = self.add_line(record["id"], unit_id)
+                else:
+                    row["product"].setCurrentIndex(row["product"].findData(record["id"]))
+                    row["unit"].setCurrentIndex(max(0, row["unit"].findData(unit_id)))
+                self.table.setCurrentCell(self.line_rows.index(row), 3)
+        finally:
+            self._batch_lines = False
+            self.table.setUpdatesEnabled(True)
         self.recalculate()
 
     def unit_changed(self, row):
@@ -825,6 +928,11 @@ class TradeDialog(QDialog):
             if not found:
                 raise ValueError("등록되지 않은 바코드입니다. 상품 등록에서 먼저 확인하세요.")
             product_id = found["product"]["id"]
+            product = found['product']
+            if product_id not in self.product_map:
+                self.products.append(product)
+            self.product_map[product_id] = product
+            self.product_model.ensure(product)
             unit_id = found["unit"]["id"] if found.get("unit") else None
             for row in self.line_rows:
                 if row["product"].currentData() == product_id and row["unit"].currentData() == unit_id:
@@ -854,6 +962,8 @@ class TradeDialog(QDialog):
             _warn(self, exc)
 
     def recalculate(self, *_):
+        if self._batch_lines:
+            return
         total = taxable = exempt = estimated_sale = 0
         quantities, invalid = {}, False
         for row in self.line_rows:
@@ -1078,6 +1188,8 @@ class TradesPage(Page):
         self.kind = kind
         super().__init__(window, "매입전표" if kind == "purchase" else "매출장", "매입등록 → 공급사 → 상품·수량·매입가 → 저장. 반품은 전표 창의 ‘반품’에 체크합니다." if kind == "purchase" else "기간과 거래처를 선택해 전표를 조회합니다.")
         self.actions.addWidget(action("매입등록" if kind == "purchase" else "매출등록", self.new_trade, True))
+        if kind == 'purchase':
+            self.actions.addWidget(action('매입 엑셀 불러오기', self.import_excel))
         filters = QHBoxLayout()
         self.start, self.end = _dates(filters, self.refresh)
         self.status = QComboBox()
@@ -1136,6 +1248,15 @@ class TradesPage(Page):
             index = self.partner_filter.count() - 1
         self.partner_filter.setCurrentIndex(index)
         self.refresh()
+
+    def import_excel(self):
+        from .purchase_import_ui import PurchaseImportDialog
+        try:
+            dialog = PurchaseImportDialog(self.store, self.window)
+            dialog.imported.connect(self.refresh)
+            dialog.exec()
+        except (ValueError, PermissionError) as exc:
+            self.fail(exc)
 
     def refresh(self):
         try:

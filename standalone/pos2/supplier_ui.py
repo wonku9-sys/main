@@ -361,6 +361,11 @@ class SuppliersPage(Page):
         groups.addWidget(action("조회 (F5)", self.refresh))
         self.body.addLayout(groups)
         self.grid = self.table(["코드", "공급사명", "구분", "사업자번호", "대표자", "담당자", "전화", "팩스", "휴대폰", "결제방법", "결제유형", "그룹", "은행명", "계좌번호", "예금주", "현재 외상잔액", "상태"])
+        from PySide6.QtWidgets import QAbstractItemView
+        self.grid.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.grid.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.grid.customContextMenuRequested.connect(self.context_menu)
+        self.grid.setToolTip('Ctrl+클릭: 여러 공급사 선택 · Shift+클릭: 범위 선택\n우클릭: 선택 공급사 유효/무효 변경')
         self.summary = QLabel()
         self.body.addWidget(self.summary)
         tools = QHBoxLayout()
@@ -418,13 +423,74 @@ class SuppliersPage(Page):
             self.refresh()
 
     def set_active(self):
-        row = self.grid.selected()
-        if row and confirm(self, "공급사 유효 변경", f"'{row['name']}'을 {'무효' if row['active'] else '유효'}로 변경할까요? 기존 거래와 잔액은 보존합니다."):
+        rows = self.selected_suppliers()
+        if rows:
+            self.change_active(not all(row['active'] for row in rows))
+
+    def selected_suppliers(self):
+        return [self.grid.item(index.row(), 0).data(Qt.ItemDataRole.UserRole)
+                for index in self.grid.selectionModel().selectedRows()]
+
+    def change_active(self, active):
+        rows = self.selected_suppliers()
+        if rows and confirm(self, '공급사 상태 변경', f"선택한 공급사 {len(rows):,}개를 {'유효' if active else '무효'}로 변경할까요? 기존 거래와 잔액은 보존합니다."):
             try:
-                self.store.save_partner({"active": not row["active"]}, row["id"])
+                self.store.set_suppliers_active([row['id'] for row in rows], active)
                 self.refresh()
             except (ValueError, PermissionError) as exc:
                 self.fail(exc)
+
+    def context_menu(self, point):
+        item = self.grid.itemAt(point)
+        if item is None:
+            return
+        try:
+            self.store.require_menu('suppliers')
+        except PermissionError as exc:
+            self.fail(exc); return
+        if not item.isSelected():
+            self.grid.selectRow(item.row())
+        self.make_context_menu().exec(self.grid.viewport().mapToGlobal(point))
+
+    def make_context_menu(self):
+        from PySide6.QtWidgets import QMenu
+        menu = QMenu(self)
+        menu.addAction('등록정보 / 수정', self.edit)
+        menu.addAction('줄여보기', lambda: self.grid.verticalHeader().setDefaultSectionSize(25))
+        menu.addAction('펼쳐보기', lambda: self.grid.verticalHeader().setDefaultSectionSize(38))
+        for label, columns in (('사람/연락처 보기', (4, 5, 6, 7, 8)), ('계좌정보 보기', (12, 13, 14))):
+            entry = menu.addAction(label); entry.setCheckable(True)
+            entry.setChecked(all(not self.grid.isColumnHidden(c) for c in columns))
+            entry.toggled.connect(lambda shown, cols=columns: [self.grid.setColumnHidden(c, not shown) for c in cols])
+        menu.addSeparator()
+        editable = bool(self.selected_suppliers()) and can_action(self.store.actor, 'suppliers', 'edit')
+        for label, active in (('선택 공급사 유효', True), ('선택 공급사 무효', False)):
+            entry = menu.addAction(label, lambda checked=False, value=active: self.change_active(value))
+            entry.setEnabled(editable)
+        methods = menu.addMenu('선택 공급사 결제방법')
+        for label, method in (('현금', 'cash'), ('계좌이체', 'transfer')):
+            entry = methods.addAction(label, lambda checked=False, value=method: self.change_payment_method(value))
+            entry.setEnabled(editable)
+        columns = menu.addMenu('열 선택')
+        for column in range(self.grid.columnCount()):
+            entry = columns.addAction(self.grid.horizontalHeaderItem(column).text())
+            entry.setCheckable(True); entry.setChecked(not self.grid.isColumnHidden(column))
+            entry.toggled.connect(lambda shown, c=column: self.grid.setColumnHidden(c, not shown))
+        menu.addSeparator()
+        menu.addAction('모두 선택', self.grid.selectAll)
+        menu.addAction('선택 해제', self.grid.clearSelection)
+        return menu
+
+    def change_payment_method(self, method):
+        rows = self.selected_suppliers()
+        label = '현금' if method == 'cash' else '계좌이체'
+        if not rows or not confirm(self, '공급사 결제방법', f'선택 공급사 {len(rows)}개의 기본 결제방법을 {label}(으)로 바꿀까요? 기존 결제 이력은 변경하지 않습니다.'):
+            return
+        try:
+            self.store.set_supplier_payment_method([r['id'] for r in rows], method)
+            self.refresh()
+        except (ValueError, PermissionError) as exc:
+            self.fail(exc)
 
     def group_manager(self):
         SupplierGroupsDialog(self.window).exec()

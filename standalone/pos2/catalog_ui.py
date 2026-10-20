@@ -1660,11 +1660,17 @@ class SettingsPage(Page):
         self.backup_every.setRange(1, 365)
         self.backup_every.setSuffix("일 간격")
         schedule_form.addRow("기간 간격", self.backup_every)
-        self.backup_exit = QCheckBox("프로그램 종료 시 자동 백업 (수동 방식에서도 적용)")
+        self.backup_exit = QCheckBox("프로그램 종료 시 자동 백업")
         schedule_form.addRow(self.backup_exit)
-        tip = QLabel("설정 저장을 누르면 적용됩니다. 자동 일정은 프로그램 실행 중에 동작하며, 놓친 일정은 다음 실행 때 한 번 백업합니다.\n종료 시에는 저장 확인을 마친 뒤 백업합니다. 강제 종료·정전 시에는 실행되지 않습니다. ‘지금 백업’은 언제든 사용 가능합니다.")
+        tip = QLabel("자동 백업은 정상 종료 시에만 실행합니다. 로그인 직후·매입 입력 중에는 실행하지 않습니다.\n설정 저장 후 적용됩니다. 강제 종료·정전 시에는 종료 백업이 실행되지 않습니다. ‘지금 백업’은 언제든 사용 가능합니다.")
         tip.setWordWrap(True)
         schedule_form.addRow(tip)
+        # Retain legacy schedule values for compatibility, without offering an inactive schedule.
+        for field in (self.backup_mode, self.backup_frequency, self.backup_time, day_widget, self.backup_every):
+            field.hide()
+            label = schedule_form.labelForField(field)
+            if label:
+                label.hide()
         self.body.addWidget(schedule)
         self.backup_mode.currentIndexChanged.connect(self.update_backup_controls)
         self.backup_frequency.currentIndexChanged.connect(self.update_backup_controls)

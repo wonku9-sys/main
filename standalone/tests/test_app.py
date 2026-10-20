@@ -1,4 +1,5 @@
 import pytest
+import time
 from PySide6.QtCore import QCoreApplication, QEvent, Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QMessageBox
@@ -13,6 +14,9 @@ def context(tmp_path, monkeypatch):
     monkeypatch.setattr(QMessageBox, "warning", lambda *_: QMessageBox.StandardButton.Ok)
     store = Store(tmp_path / "new-standalone.db")
     yield app, store
+    for worker in list(getattr(app, '_sy_catalog_workers', [])):
+        worker.wait(10000)
+    app.processEvents()
     for widget in app.topLevelWidgets():
         widget.close()
         widget.deleteLater()
@@ -37,6 +41,12 @@ def test_first_admin_login_has_default_hint_and_enter_authenticates(context):
     dialog.new_password.setText('First-Password-2026!');dialog.new_confirm.setText('First-Password-2026!')
     dialog.password.setFocus()
     QTest.keyClick(dialog.password, Qt.Key.Key_Return)
+    for _ in range(100):
+        if store.actor is not None:
+            break
+        app.processEvents()
+        time.sleep(0.05)
+    assert dialog.login_worker is not None and not dialog.login_worker.isRunning()
     assert store.users_count() == 1
     assert store.actor["role"] == "admin" and store.actor["code"] == "admin"
 

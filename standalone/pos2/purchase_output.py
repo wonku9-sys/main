@@ -60,7 +60,7 @@ def quantity_text(record):
 
 
 def line_values(index,line):
-    unit=line['unit_name']+(' (100g당)' if line.get('price_basis')==100 else '')
+    unit=line['unit_name']+(' (100g당)' if line.get('price_basis')==100 and '100g' not in line['unit_name'] else '')
     return [index,line['code'],line['product_name'],line['specification'],unit,Decimal(str(line['qty'])),Decimal(str(line['unit_price'])),Decimal(str(line['total'])),'과' if line['tax_mode']=='taxable' else '면']
 
 

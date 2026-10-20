@@ -31,6 +31,53 @@ CREATE TABLE IF NOT EXISTS supplier_group_members (
 
 
 class SupplierMixin:
+    def set_supplier_payment_method(self, identifiers, method):
+        if method not in ('cash', 'transfer') or not isinstance(identifiers, (list, tuple)) or not 1 <= len(identifiers) <= 10000:
+            raise ValueError('공급사와 결제방법을 선택하세요.')
+        if any(type(i) is not int or i <= 0 for i in identifiers):
+            raise ValueError('공급사 선택을 확인하세요.')
+        with self._tx():
+            self._require_capability('suppliers', 'edit')
+            rows = []
+            for identifier in dict.fromkeys(identifiers):
+                row = self.db.execute("SELECT id,name FROM partners WHERE id=? AND kind='supplier'", (identifier,)).fetchone()
+                if not row:
+                    raise ValueError('삭제되었거나 공급사가 아닌 항목이 있습니다.')
+                rows.append(row)
+            changed = 0
+            for row in rows:
+                before = self._supplier_profile(row['id'])['settlement_method']
+                if before == method:
+                    continue
+                self._save_supplier_profile(row['id'], {'settlement_method': method})
+                self._audit('update', 'partner', row['id'], {'name': row['name'], 'settlement_method_before': before, 'settlement_method_after': method})
+                changed += 1
+        return changed
+
+    def set_suppliers_active(self, identifiers, active):
+        """Change only supplier availability, atomically and without touching ledgers."""
+        if type(active) is not bool or not isinstance(identifiers, (list, tuple)) or not identifiers:
+            raise ValueError('공급사와 유효/무효 상태를 선택하세요.')
+        if len(identifiers) > 10000 or any(type(i) is not int or i <= 0 for i in identifiers):
+            raise ValueError('공급사 선택을 확인하세요.')
+        identifiers = list(dict.fromkeys(identifiers))
+        with self._tx():
+            self._require_capability('suppliers', 'edit')
+            rows = []
+            for identifier in identifiers:
+                row = self.db.execute("SELECT id,name,active FROM partners WHERE id=? AND kind='supplier'", (identifier,)).fetchone()
+                if not row:
+                    raise ValueError('삭제되었거나 공급사가 아닌 항목이 있습니다. 다시 조회하세요.')
+                rows.append(row)
+            changed = 0
+            for row in rows:
+                if bool(row['active']) == active:
+                    continue
+                self.db.execute('UPDATE partners SET active=? WHERE id=?', (int(active), row['id']))
+                self._audit('update', 'partner', row['id'], {'name': row['name'], 'active_before': bool(row['active']), 'active_after': active})
+                changed += 1
+        return changed
+
     def _init_supplier_management(self):
         if not self.db.execute("SELECT 1 FROM supplier_groups LIMIT 1").fetchone():
             for code, name in (("10", "장부"), ("20", "회전결제"), ("30", "마감일지정결제")):

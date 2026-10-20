@@ -237,6 +237,15 @@ class CatalogMixin:
         self._require("trade")
         return self.products(search=search, supplier_id=supplier_id, active_only=True)
 
+    def catalog_product(self, identifier):
+        self._require('catalog', 'trade')
+        row = self.db.execute('SELECT p.*,s.name AS supplier_name FROM products p LEFT JOIN partners s ON s.id=p.supplier_id WHERE p.id=?', (identifier,)).fetchone()
+        if row is None:
+            raise ValueError('상품을 찾을 수 없습니다.')
+        result = self._public_product(row)
+        result['unit_barcodes'] = [u[0] for u in self.db.execute("SELECT barcode FROM product_units WHERE product_id=? AND barcode<>''", (identifier,))]
+        return result
+
     def _product_used(self, identifier):
         return bool(self.db.execute("SELECT 1 FROM document_lines WHERE product_id=? UNION ALL SELECT 1 FROM stock_events WHERE product_id=? UNION ALL SELECT 1 FROM inventory_count_lines WHERE product_id=? UNION ALL SELECT 1 FROM inventory_close_lines WHERE product_id=? LIMIT 1", (identifier, identifier, identifier, identifier)).fetchone())
 

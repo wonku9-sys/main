@@ -135,12 +135,13 @@ class LoginDialog(FormDialog):
         self.hint.setWordWrap(True)
         self.hint.setObjectName("notice" if default_available else "muted")
         self.body.addWidget(self.hint)
-        box = self.finish(self.submit)
+        self.login_worker = None
+        box = self.finish(self.start_submit)
         save = box.button(box.StandardButton.Save)
         save.setText("로그인")
         save.setAutoDefault(False)
         save.setDefault(False)
-        self.password.returnPressed.connect(self.submit)
+        self.password.returnPressed.connect(self.start_submit)
         self.body.addWidget(action("로그인 암호 찾기 · 이메일 인증",self.reset_by_email))
         self.body.addWidget(action("이메일 주소 등록 · 발송 설정",self.setup_recovery_email))
         from .lucky_audio import login_sound_settings
@@ -206,6 +207,76 @@ class LoginDialog(FormDialog):
             self.accept()
         except (ValueError, PermissionError) as exc:
             self.error(exc)
+
+    def start_submit(self):
+        # The LAN client owns a separate private Store; do not move it between threads.
+        if type(self.store) is not Store or self.store.path is None:
+            return self.submit()
+        if self.login_worker and self.login_worker.isRunning():
+            return
+        try:
+            replacing = self.code.text().strip() == 'admin' and self.store.default_login_available()
+            replacement = self.new_password.text() if replacing and self.new_password else ''
+            if replacing and (not self.new_confirm or replacement != self.new_confirm.text() or not 8 <= len(replacement) <= 128):
+                raise ValueError('처음 사용할 새 로그인 암호를 8~128자로 입력하고 확인해 주세요.')
+            self.store.actor = None
+            self.store.lock_diary(); self.store.lock_household()
+            from .background_store import StoreTask
+            self.login_worker = StoreTask(self, self.store, 'login',
+                (self.code.text(), self.password.text(), replacement, self.selected_target), login=True)
+            self.setEnabled(False)
+            self.hint.setText('로그인 확인 중입니다… 잠시 기다려 주세요.')
+            self._login_result = self._login_error = None
+            self.login_worker.succeeded.connect(lambda result: setattr(self, '_login_result', result))
+            self.login_worker.failed.connect(lambda message: setattr(self, '_login_error', message))
+            self.login_worker.finished.connect(self.finish_background_login)
+            self.login_worker.start()
+        except (ValueError, PermissionError) as exc:
+            self.error(exc)
+
+    def finish_background_login(self):
+        self.setEnabled(True)
+        if self._login_error is not None:
+            self.login_failed(self._login_error)
+        elif self._login_result is not None:
+            self.login_completed(self._login_result)
+        self._login_result = None
+
+    def login_completed(self, session):
+        try:
+            row = self.store.db.execute('SELECT * FROM users WHERE id=?', (session['actor']['id'],)).fetchone()
+            if (not row or not row['active'] or row['password_hash'] != session['password_hash']
+                    or self.store._current_restore_token() != session['restore_token']):
+                raise PermissionError('로그인 중 계정 또는 장부가 변경되었습니다. 다시 로그인하세요.')
+            self.store.actor = self.store._public_user(row)
+            self.store._session_password_hash = session['password_hash']
+            self.store._restore_token = session['restore_token']
+            self.store.require_menu(self.selected_target)
+            if self.new_password:
+                self.new_password.clear(); self.new_confirm.clear()
+            if self.store.popup_sound_enabled():
+                from .lucky_audio import login_sound
+                login_sound().play()
+            self.accept()
+        except (ValueError, PermissionError) as exc:
+            self.store.actor = None
+            self.login_failed(str(exc))
+
+    def login_failed(self, message):
+        self.setEnabled(True)
+        self.hint.setText('로그인 정보를 확인하고 다시 시도하세요.')
+        self.error(message)
+
+    def reject(self):
+        if self.login_worker and self.login_worker.isRunning():
+            return
+        super().reject()
+
+    def closeEvent(self, event):
+        if self.login_worker and self.login_worker.isRunning():
+            event.ignore()
+        else:
+            event.accept(); super().reject()
 
 
 from .home_ui import HomePage
@@ -478,9 +549,7 @@ class MainWindow(QMainWindow):
         self.maintenance_timer = QTimer(self)
         self.maintenance_timer.setInterval(60 * 60 * 1000)
         self.maintenance_timer.timeout.connect(self.maintain_backups)
-        self.maintenance_timer.start()
         self.popup_timer=QTimer(self);self.popup_timer.setInterval(3000);self.popup_timer.timeout.connect(self.refresh_popups);self.popup_timer.start()
-        QTimer.singleShot(500, self.maintain_backups)
         self.backup_timer = QTimer(self)
         self.backup_timer.setInterval(60_000)
         self.backup_timer.timeout.connect(self.scheduled_backup)
@@ -496,9 +565,7 @@ class MainWindow(QMainWindow):
         recover.setToolTip('비정상 종료 전에 암호화 보관된 임시 작업을 확인하고 입력창으로 복구합니다. 복구만으로 저장·재고 확정은 하지 않습니다.')
         if self.crash_journal.rows():QTimer.singleShot(900,self.crash_journal.offer)
         self._backup_runtime_enabled = True
-        self.backup_timer.start()
         self.alert_timer.start()
-        QTimer.singleShot(1500, self.scheduled_backup)
         QTimer.singleShot(2000,self.show_desk_alerts)
         self.pages["home"].enable_online()
 
@@ -520,16 +587,8 @@ class MainWindow(QMainWindow):
         except (ValueError,PermissionError,OSError) as exc:self.notify(str(exc))
 
     def scheduled_backup(self):
-        if not self._backup_runtime_enabled or not self.isVisible() or QApplication.activeModalWidget() is not None:
-            return
-        try:
-            result = self.store.run_scheduled_backup()
-            if result:
-                self.notify(f"자동 백업 완료: {Path(result).name}")
-                if "settings" in self.pages:
-                    self.pages["settings"].refresh_backups()
-        except (ValueError, PermissionError, OSError) as exc:
-            self.notify(f"자동 백업 실패: {exc} · 설정에서 백업 폴더를 확인하세요.")
+        # Automatic backups run only during normal exit, never while entering data.
+        return None
 
     def prepare_exit(self):
         from .independent_windows import close_independent_windows
@@ -579,7 +638,7 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         from shiboken6 import isValid
         if any(isValid(worker) and worker.isRunning() for worker in getattr(QApplication.instance(),'_sy_catalog_workers',[])):
-            QMessageBox.warning(self,'상품 엑셀 작업 중','엑셀 분석·등록이 완료된 후 프로그램을 종료하세요.');event.ignore();return
+            QMessageBox.warning(self,'작업 처리 중','분석·등록 작업이 완료된 후 프로그램을 종료하세요.');event.ignore();return
         if not self.prepare_exit():
             event.ignore()
             return
@@ -944,6 +1003,19 @@ def main(argv=None):
                         decoded=verify_default_audio()
                         assert len(decoded)==6 and all(frames>0 for frames in decoded.values())
                         print('PASS default MP3: six original files decoded to PCM; no speaker playback claimed',flush=True)
+                        from .demo import DEMO_CODE, DEMO_PASSWORD
+                        from time import monotonic, sleep
+                        async_login=LoginDialog(store,window);async_login.code.setText(DEMO_CODE);async_login.password.setText(DEMO_PASSWORD)
+                        login_errors=[];async_login.error=lambda error:login_errors.append(str(error))
+                        async_login.start_submit()
+                        deadline=monotonic()+15
+                        while (async_login.login_worker.isRunning() or store.actor is None) and monotonic()<deadline:
+                            app.processEvents();sleep(.01)
+                        app.processEvents()
+                        assert not async_login.login_worker.isRunning() and not login_errors and store.actor, f'Background login failed: {login_errors}'
+                        assert async_login.result()==QDialog.DialogCode.Accepted
+                        async_login.deleteLater()
+                        print('PASS background login: separate SQLite connection, UI completion and valid session',flush=True)
                         if sys.platform=='win32':
                             from .shared_smoke import run as shared_smoke
                             assert shared_smoke(directory/'isolated-network-proof')
@@ -1005,6 +1077,14 @@ def main(argv=None):
                             output_xlsx=args.screenshot.parent/'purchase-voucher-smoke.xlsx';purchase_workbook(voucher).save(output_xlsx)
                             from openpyxl import load_workbook
                             output_book=load_workbook(output_xlsx);assert output_book.active['A1'].value=='매 입 전 표';assert output_book.active['B5'].value==voucher['supplier']['name'];output_book.close()
+                            from .purchase_import import plan_files
+                            from .purchase_import_ui import PurchaseImportDialog
+                            imported_plan=plan_files([output_xlsx],store.purchase_import_catalog(),purchase.partner.currentData(),purchase.date.date().toString('yyyy-MM-dd'))
+                            assert not imported_plan[0]['error'], imported_plan[0]['error']
+                            preview_import=PurchaseImportDialog(store,window);preview_import.loaded(imported_plan);preview_import.busy(False)
+                            capture('-purchase-excel-import',preview_import)
+                            assert len(imported_plan[0]['lines'])==len(voucher['lines'])
+                            preview_import.close();app.processEvents();assert not preview_import.isVisible()
                             from .catalog_import_ui import CatalogImportDialog
                             idle_import=CatalogImportDialog(store,window);idle_import.show();app.processEvents();idle_import.close();app.processEvents();assert not idle_import.isVisible(),'Idle Excel importer must close'
                             idle_import.deleteLater()
@@ -1018,6 +1098,14 @@ def main(argv=None):
                             capture('-product-search-continuous',picker)
                             picker.close()
                             purchase.close()
+                            window.open_page('suppliers')
+                            supplier_page=window.pages['suppliers'];supplier_page.grid.selectAll()
+                            supplier_menu=supplier_page.make_context_menu()
+                            assert any(a.text()=='선택 공급사 무효' for a in supplier_menu.actions())
+                            capture('-supplier-bulk-selected',window.popup_windows.get('suppliers',window))
+                            supplier_menu.popup(supplier_page.grid.viewport().mapToGlobal(supplier_page.grid.viewport().rect().center()))
+                            app.processEvents();capture('-supplier-bulk-menu',supplier_menu)
+                            supplier_menu.close()
                             source = next((store.document(row["id"]) for row in store.documents(kind="purchase", status="posted") if any(float(line["remaining_qty"]) > 0 for line in store.document(row["id"])["lines"])), None)
                             assert source is not None
                             returned = TradeDialog(window, "purchase_return", source=source)

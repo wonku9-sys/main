@@ -36,6 +36,11 @@ READS=READS|{'store_profile'}
 READS=READS|{'product_member_prices'}
 WRITES=WRITES|{'set_order_status','post_order_sale'}
 WRITES=WRITES|{'seed_catalog_categories'}
+WRITES=WRITES|{'set_suppliers_active'}
+WRITES=WRITES|{'set_supplier_payment_method'}
+READS=READS|{'purchase_import_catalog'}
+READS=READS|{'catalog_product'}
+WRITES=WRITES|{'import_purchase_drafts'}
 
 def encode(value):
     def default(item):
