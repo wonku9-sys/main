@@ -66,7 +66,7 @@ def test_login_plays_actual_default_through_media_pipeline_only_after_success(ap
         def __init__(self,*_):self.errorOccurred=SimpleNamespace(connect=lambda _:None)
         def setAudioOutput(self,output):pass
         def stop(self):events.append('stop')
-        def setSource(self,url):events.append(('source',url.toLocalFile()))
+        def setSource(self,url):events.append(('source',Path(url.toLocalFile())))
         def play(self):events.append('play')
     class Output:
         def __init__(self,*_):pass
@@ -81,7 +81,7 @@ def test_login_plays_actual_default_through_media_pipeline_only_after_success(ap
         dialog=LoginDialog(store);dialog.code.setText('owner');dialog.password.setText('incorrect');monkeypatch.setattr(dialog,'error',lambda *_:None)
         dialog.submit();assert not events
         dialog.password.setText('Owner-Password-2026!');dialog.submit()
-        assert ('source',str(default_source('login'))) in events and events.count('play')==1
+        assert ('source',default_source('login')) in events and events.count('play')==1
         sound.set_enabled(False);assert not sound.play() and events.count('play')==1
     finally:store.close()
 
