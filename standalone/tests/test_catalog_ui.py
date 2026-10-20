@@ -47,7 +47,7 @@ def test_product_dialog_real_tabs_and_persistent_apply_does_not_duplicate(app, s
     root = store.save_category({"name": "한우"})
     store.save_category({"name": "냉장육", "parent_id": root})
     dialog = ProductDialog(store)
-    assert [dialog.tabs.tabText(i) for i in range(dialog.tabs.count())] == ["상품정보", "매입이력", "판매이력", "재고이력", "변경기록", "확장단위"]
+    assert [dialog.tabs.tabText(i) for i in range(dialog.tabs.count())] == ["상품정보", "매입정보", "판매정보", "재고정보", "변경로그", "회원지정가", "확장단위"]
     assert not any(button.isEnabled() for button in dialog.unit_buttons)
     dialog.fields["name"].setText("한우 등심")
     dialog.fields["barcode"].setText("000000001234")
@@ -197,7 +197,8 @@ def test_catalog_only_staff_can_view_scoped_history_without_admin_audit(app, sho
     store.logout()
     store.login("catalog", "Catalog2026!")
     dialog = ProductDialog(store, get_product(store, product))
-    assert dialog.tabs.count() == 6
+    assert dialog.tabs.count() == 7
+    assert dialog.member_price_grid.rowCount()==0 and not dialog.member_price_add.isEnabled()
     assert dialog.audit_table.rowCount() == 1
     with pytest.raises(PermissionError):
         store.audit_log()

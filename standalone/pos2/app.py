@@ -345,16 +345,15 @@ class MainWindow(QMainWindow):
         side.addWidget(independent)
         self.tree = QTreeWidget()
         self.tree.setObjectName("navTree")
+        self.tree.setStyleSheet('QTreeWidget#navTree{font-size:11px;} QTreeWidget#navTree::item{padding:3px 5px;min-height:17px;}')
         self.tree.setHeaderHidden(True)
         self.tree.setIndentation(12)
         self.tree.itemClicked.connect(lambda item, _: self.open_page(item.data(0, Qt.ItemDataRole.UserRole)) if item.data(0, Qt.ItemDataRole.UserRole) else None)
         side.addWidget(self.tree, 1)
         self.personal_panel=QFrame()
         self.personal_panel.setStyleSheet("QFrame {background:#F1EDF7;border:1px solid #E3DCEC;border-radius:9px;} QLabel {background:transparent;border:0;color:#785F8F;font-weight:600;} QPushButton {text-align:left;background:white;border:1px solid #DED4E9;padding:10px;}")
-        self.personal_layout=QVBoxLayout(self.personal_panel)
+        self.personal_layout=QHBoxLayout(self.personal_panel);self.personal_layout.setContentsMargins(12,7,12,7);self.personal_layout.setSpacing(9)
         self.personal_layout.addWidget(QLabel("나의 기록"))
-        side.addSpacing(10)
-        side.addWidget(self.personal_panel)
         self.personal_navigation_root=QTreeWidgetItem(["나의 기록"])
         side.addWidget(QLabel("● 로컬 SQLite · 서버 불필요"))
         side.addWidget(QLabel("자료 저장: data-v2\n기존 프로그램 DB와 별도"))
@@ -398,6 +397,8 @@ class MainWindow(QMainWindow):
         self.query_bar=QueryBar('첫화면',self.refresh,self);right.addWidget(self.query_bar)
         self.stack = QStackedWidget()
         right.addWidget(self.stack, 1)
+        self.personal_dock=QFrame();self.personal_dock.setObjectName('personalDock');self.personal_dock.setStyleSheet('QFrame#personalDock{background:#F8FAF7;border-top:1px solid #DDE6DE;}')
+        dock=QHBoxLayout(self.personal_dock);dock.setContentsMargins(12,7,12,7);dock.addStretch();dock.addWidget(self.personal_panel);dock.addStretch();right.addWidget(self.personal_dock)
         layout.addLayout(right, 1)
         self.toolbar = QToolBar("업무 바로가기", self)
         self.toolbar.setMovable(False)
@@ -444,8 +445,10 @@ class MainWindow(QMainWindow):
                     button=action({"diary":"일기장","household":"가계부","worklog":"업무일지","lucky_numbers":"행운의 숫자"}[key],lambda checked=False,target=key:self.open_page(target))
                     button.setAccessibleName(caption)
                     button.setIcon(personal_icon(key));button.setIconSize(QSize(24,24))
+                    button.setMinimumWidth(button.fontMetrics().horizontalAdvance(button.text())+button.iconSize().width()+36)
                     attach_help(button,hint);self.personal_layout.addWidget(button)
         self.personal_panel.setVisible(bool(self.personal_navigation_root.childCount()))
+        self.personal_dock.setVisible(bool(self.personal_navigation_root.childCount()))
         for title, callback, standard in (("첫화면", self.go_home, QStyle.StandardPixmap.SP_DirHomeIcon), ("상품장", lambda: self.open_page("products"), QStyle.StandardPixmap.SP_FileDialogContentsView), ("매입전표", lambda: self.open_page("purchases"), QStyle.StandardPixmap.SP_ArrowDown), ("판매 등록", lambda: self.new_trade("sale"), QStyle.StandardPixmap.SP_ArrowUp), ("F8 스캔", self.focus_scan, QStyle.StandardPixmap.SP_FileDialogDetailedView), ("조회", self.refresh, QStyle.StandardPixmap.SP_BrowserReload), ("엑셀 저장", self.export, QStyle.StandardPixmap.SP_DialogSaveButton), ("인쇄", self.print, QStyle.StandardPixmap.SP_FileIcon)):
             if title == "상품장" and not self.allowed("catalog") or title in ("매입전표", "판매 등록") and not self.allowed("trade"):
                 continue
@@ -573,6 +576,9 @@ class MainWindow(QMainWindow):
             self.notify("백업 정리를 완료하지 못했습니다. 설정에서 백업 폴더를 확인하세요.")
 
     def closeEvent(self, event):
+        from shiboken6 import isValid
+        if any(isValid(worker) and worker.isRunning() for worker in getattr(QApplication.instance(),'_sy_catalog_workers',[])):
+            QMessageBox.warning(self,'상품 엑셀 작업 중','엑셀 분석·등록이 완료된 후 프로그램을 종료하세요.');event.ignore();return
         if not self.prepare_exit():
             event.ignore()
             return
@@ -1166,6 +1172,23 @@ def main(argv=None):
                                 game=lobby.launch(game_kind);game.paused=False;capture('-game-'+game_kind,game);game.close()
                             roms=lobby.roms();capture('-approved-game-library',roms);roms.close()
                             lobby.close()
+                            # Synthetic catalogue only. Never package uploaded
+                            # supplier/price lists or personal business records.
+                            store.seed_catalog_categories();window.open_page('products');capture('-catalog-tree-tax',window.popup_windows.get('products',window))
+                            from decimal import Decimal
+                            record=store.products()[0];store.save_product(dict(sale_price=str(record['sale_price']+Decimal('0.25'))),record['id'])
+                            member_id=store.save_member(dict(code='SMOKE-FIXED',name='지정가 검증 회원'));store.save_member_price(dict(member_id=member_id,product_id=record['id'],price='123.45'))
+                            editor=ProductDialog(store,next(r for r in store.products() if r['id']==record['id']),window);capture('-product-tax-details',editor)
+                            editor.tabs.setCurrentIndex(4);capture('-product-change-log',editor);editor.tabs.setCurrentIndex(5);capture('-product-member-prices',editor);editor.close()
+                            from openpyxl import Workbook
+                            import xlrd
+                            assert xlrd.__version__=='2.0.2'
+                            workbook=Workbook();sheet=workbook.active;sheet.append(['상품명','규격','바코드','공급사','매입가','판매가'])
+                            sheet.append(['생삼겹살','g','SAMPLE-RAW','예시 공급사','1000.25','2000.50']);sheet.append(['양념갈비','팩','SAMPLE-COOKED','예시 공급사','2000.25','3000.50']);sheet.append(['분류 검토 상품','','SAMPLE-REVIEW','예시 공급사','0','0'])
+                            excel=directory/'synthetic-catalog.xlsx';workbook.save(excel)
+                            from .catalog_import import plan_excel
+                            from .catalog_import_ui import CatalogImportDialog
+                            importer=CatalogImportDialog(store,window);importer.loaded(plan_excel(excel));capture('-catalog-excel-preview',importer);importer.close()
                             # Windows smoke uses real DPAPI, not a test cipher.
                             from .unsaved_work import CrashJournal,RecoveryCenter
                             window.navigation.enable();journal=CrashJournal(window);window.crash_journal=journal

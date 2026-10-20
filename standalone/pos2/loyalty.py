@@ -217,6 +217,10 @@ class LoyaltyMixin:
         self._member_row(member_id)
         return [dict(row) for row in self.db.execute("SELECT m.*,p.name AS product_name,p.code AS product_code FROM member_prices m JOIN products p ON p.id=m.product_id WHERE member_id=? ORDER BY p.name", (member_id,))]
 
+    def product_member_prices(self,product_id):
+        self._require('loyalty');self.require_menu('member_prices')
+        return [dict(row) for row in self.db.execute('SELECT x.id,x.member_id,x.product_id,x.price,m.code,m.name,m.active FROM member_prices x JOIN members m ON m.id=x.member_id WHERE x.product_id=? ORDER BY m.code',(product_id,))]
+
     def save_member_price(self, data):
         with self._tx():
             self._require("loyalty")

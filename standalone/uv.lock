@@ -289,7 +289,7 @@ wheels = [
 
 [[package]]
 name = "seoyoung-pos-standalone"
-version = "2.4.0rc10"
+version = "2.4.0rc11"
 source = { editable = "." }
 dependencies = [
     { name = "cryptography" },
@@ -298,6 +298,7 @@ dependencies = [
     { name = "openpyxl" },
     { name = "pyside6" },
     { name = "python-barcode" },
+    { name = "xlrd" },
 ]
 
 [package.optional-dependencies]
@@ -317,6 +318,7 @@ requires-dist = [
     { name = "pyside6", specifier = "==6.8.3" },
     { name = "pytest", marker = "extra == 'dev'", specifier = "==8.3.5" },
     { name = "python-barcode", specifier = "==0.16.1" },
+    { name = "xlrd", specifier = "==2.0.2" },
     { name = "zxing-cpp", marker = "extra == 'dev'", specifier = "==2.3.0" },
 ]
 provides-extras = ["dev"]
@@ -339,6 +341,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/76/a1/f1958c9d00176044ab00464cd89b6969ef3a7d2ed12d316ff1eda3dec88f/shiboken6-6.8.3-cp39-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:295a003466ca2cccf6660e2f2ceb5e6cef4af192a48a196a32d46b6f0c9ec5cb", size = 204730, upload-time = "2025-03-27T12:07:29.773Z" },
     { url = "https://files.pythonhosted.org/packages/a8/8d/48ba0b33953592e54b688f2dceb06274f419f7743a3ea0f4e48faf837652/shiboken6-6.8.3-cp39-abi3-manylinux_2_39_aarch64.whl", hash = "sha256:2b1a41348102952d2a5fbf3630bddd4d44112e18058b5e4cf505e51f2812429d", size = 201025, upload-time = "2025-03-27T12:07:31.272Z" },
     { url = "https://files.pythonhosted.org/packages/aa/29/e77f3fba5337f2d98f977eece0fd24cda6cf7d83be2699514d2ca1d34f6c/shiboken6-6.8.3-cp39-abi3-win_amd64.whl", hash = "sha256:bca3a94513ce9242f7d4bbdca902072a1631888e0aa3a8711a52cc5dbe93588f", size = 1150998, upload-time = "2025-03-27T12:07:33.38Z" },
+]
+
+[[package]]
+name = "xlrd"
+version = "2.0.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/07/5a/377161c2d3538d1990d7af382c79f3b2372e880b65de21b01b1a2b78691e/xlrd-2.0.2.tar.gz", hash = "sha256:08b5e25de58f21ce71dc7db3b3b8106c1fa776f3024c54e45b45b374e89234c9", size = 100167, upload-time = "2025-06-14T08:46:39.039Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/1a/62/c8d562e7766786ba6587d09c5a8ba9f718ed3fa8af7f4553e8f91c36f302/xlrd-2.0.2-py2.py3-none-any.whl", hash = "sha256:ea762c3d29f4cca48d82df517b6d89fbce4db3107f9d78713e48cd321d5c9aa9", size = 96555, upload-time = "2025-06-14T08:46:37.766Z" },
 ]
 
 [[package]]

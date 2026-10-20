@@ -233,5 +233,7 @@ def test_personal_menu_labels_fit_and_store_profile_is_connected(desktop,shop):
     assert {'일기장','가계부','업무일지','행운의 숫자'}<={b.text() for b in buttons}
     for button in buttons:
         assert button.fontMetrics().horizontalAdvance(button.text())+button.iconSize().width()+30<=button.width()
+    assert window.personal_panel.parentWidget() is window.personal_dock
+    assert window.personal_dock.geometry().top()>window.stack.geometry().top()
     window.open_page('store_profile');page=window.current_page;page.fields['representative'].setText('홍 대표');assert page.save()
     assert shop[0].store_profile()['representative']=='홍 대표'

@@ -18,7 +18,7 @@ from pos2 import __version__
 
 ROOT = Path(__file__).resolve().parent
 APP = "SY-POS"
-DISTRIBUTIONS = ("PySide6", "PySide6-Essentials", "PySide6-Addons", "shiboken6", "openpyxl", "et-xmlfile", "python-barcode", "pyinstaller","cryptography","cffi","pycparser","korean-lunar-calendar")
+DISTRIBUTIONS = ("PySide6", "PySide6-Essentials", "PySide6-Addons", "shiboken6", "openpyxl", "xlrd", "et-xmlfile", "python-barcode", "pyinstaller","cryptography","cffi","pycparser","korean-lunar-calendar")
 
 
 def licenses(destination):
@@ -127,7 +127,7 @@ def build(output, native=False):
         if not capture.is_file() or capture.stat().st_size<1000:
             raise RuntimeError(f"The frozen executable did not validate visible single-window content: {suffix}")
     if label == "Windows":
-        for suffix in ('-store-profile','-orders','-order-editor','-paper-a4','-commercial-preview','-arcade-lobby','-game-blocks','-game-gomoku','-game-shooter','-game-jumper','-game-bubbles','-game-raccoon','-approved-game-library','-crash-recovery'):
+        for suffix in ('-store-profile','-orders','-order-editor','-paper-a4','-commercial-preview','-arcade-lobby','-game-blocks','-game-gomoku','-game-shooter','-game-jumper','-game-bubbles','-game-raccoon','-approved-game-library','-catalog-tree-tax','-product-tax-details','-product-change-log','-product-member-prices','-catalog-excel-preview','-crash-recovery'):
             capture=screenshot.with_name(screenshot.stem+suffix+screenshot.suffix)
             if not capture.is_file() or capture.stat().st_size<1000:raise RuntimeError(f'The frozen executable did not validate its new document/game/recovery screen: {suffix}')
         (bundle / "체험 실행.bat").write_bytes(b'@echo off\r\ncd /d "%~dp0"\r\n"SY-POS.exe" --demo\r\n')

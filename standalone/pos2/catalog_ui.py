@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
     QDialogButtonBox, QFileDialog, QFormLayout, QFrame, QGridLayout,
     QGroupBox, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMessageBox,
     QPushButton, QScrollArea, QTabWidget, QTextEdit, QVBoxLayout, QWidget,
-    QMenu, QStyle, QTreeWidget, QTreeWidgetItem, QSpinBox, QTimeEdit,
+    QMenu, QStyle, QTreeWidget, QTreeWidgetItem, QSpinBox, QTimeEdit,QSplitter,
 )
 
 from .widgets import DataGrid, Page, ScanField, won, date_field
@@ -171,6 +171,7 @@ class CategoriesPage(Page):
         self.read_permissions = ("catalog",)
         for title, callback in (("대분류 추가", self.add_root), ("하위분류 추가", self.add_child), ("수정", self.edit), ("삭제", self.delete)):
             _button(title, callback, self.actions)
+        _button('기본 분류 구성',self.seed_defaults,self.actions)
         self.search = QLineEdit()
         self.search.setPlaceholderText("분류명 검색 · 대분류 / 중분류 / 소분류")
         self.search.textChanged.connect(self.filter_tree)
@@ -184,6 +185,12 @@ class CategoriesPage(Page):
         note.setWordWrap(True)
         self.body.addWidget(note)
         self.refresh()
+
+    def seed_defaults(self):
+        if not _confirm(self,'기본 분류 구성','야채·청과·정육·수산·가공식품·비식품 등의 대·중·소분류를 추가할까요? 기존 분류·상품은 변경하지 않습니다.'):return
+        try:
+            added=self.store.seed_catalog_categories();self.refresh();self.notify(f'분류 {added:,}개 추가')
+        except (ValueError,PermissionError) as exc:_error(self,exc)
 
     def selected(self):
         item = self.tree.currentItem()
@@ -467,10 +474,11 @@ class ProductDialog(QDialog):
         self.tabs = QTabWidget()
         root.addWidget(self.tabs, 1)
         self._product_tab()
-        for key, title in (("purchases", "매입이력"), ("sales", "판매이력")):
+        for key, title in (("purchases", "매입정보"), ("sales", "판매정보")):
             self._history_tab(key, title)
         self._stock_tab()
         self._audit_tab()
+        self._member_price_tab()
         self._units_tab()
         self.error_label = QLabel()
         self.error_label.setWordWrap(True)
@@ -530,6 +538,13 @@ class ProductDialog(QDialog):
         paired('상태',self.product_status)
         self.tax_mode = _combo([("면세", "exempt"), ("과세", "taxable")], self.record.get("tax_mode", "exempt"))
         paired('과면세',self.tax_mode)
+        from .tax_display import style_tax_label,tax_style
+        self.tax_badge=QLabel();self.tax_badge.setObjectName('productTaxBadge');choices.addWidget(self.tax_badge)
+        def tax_changed(*_):
+            style_tax_label(self.tax_badge,self.tax_mode.currentData())
+            _,_,fg,bg=tax_style(self.tax_mode.currentData())
+            self.tax_mode.setStyleSheet(f'QComboBox{{color:{fg};background:{bg};font-weight:700;}}')
+        self.tax_mode.currentIndexChanged.connect(tax_changed);tax_changed()
         self.category_displays={}
         for key, label in (("category", "대분류"), ("category_mid", "중분류"), ("category_small", "소분류")):
             field = CategoryChoice()
@@ -659,15 +674,52 @@ class ProductDialog(QDialog):
         body.addWidget(QLabel("기본단위 수량 · 이동평균 매입원가 기준 / 취소·반품·실사 이동을 모두 표시합니다."))
         self.stock_table = DataGrid(["일자", "구분", "수량증감", "원가증감", "이동 후 수량", "이동 후 원가", "사유"])
         body.addWidget(self.stock_table)
-        self.tabs.addTab(widget, "재고이력")
+        self.tabs.addTab(widget, "재고정보")
 
     def _audit_tab(self):
         widget = QWidget()
         body = QVBoxLayout(widget)
-        body.addWidget(QLabel("이 상품과 연결된 확장단위의 변경사항만 표시합니다."))
-        self.audit_table = DataGrid(["변경일시", "담당자", "업무", "변경 내용"])
+        body.addWidget(QLabel("이 상품의 실제 저장 이력입니다. 변경차=변경후−변경전, 비율=변경차÷|변경전|×100. 기준 0·문자 항목은 비율을 계산하지 않습니다."))
+        filters=QHBoxLayout();self.audit_period=QCheckBox('기간 지정');self.audit_start,self.audit_end=date_field(),date_field();self.audit_start.setEnabled(False);self.audit_end.setEnabled(False)
+        self.audit_field=_combo([('전체 변경항목','')]+[(label,label) for key,label in PRODUCT_LABELS.items()])
+        for control in (self.audit_period,self.audit_start,QLabel('~'),self.audit_end,self.audit_field):filters.addWidget(control)
+        self.audit_period.toggled.connect(self.audit_start.setEnabled);self.audit_period.toggled.connect(self.audit_end.setEnabled)
+        self.audit_period.toggled.connect(self.refresh_details);self.audit_start.dateChanged.connect(self.refresh_details);self.audit_end.dateChanged.connect(self.refresh_details);self.audit_field.currentIndexChanged.connect(self.refresh_details)
+        _button('조회',self.refresh_details,filters);body.addLayout(filters)
+        self.audit_table = DataGrid(["변경내용", "변경전", "변경후", "변경차", "비율(%)", "변경일시", "변경사용자", "업무"])
+        for column,width in enumerate((90,88,88,80,75,138,90,70)):self.audit_table.setColumnWidth(column,width)
         body.addWidget(self.audit_table)
-        self.tabs.addTab(widget, "변경기록")
+        tools=QHBoxLayout();_button('엑셀 저장',lambda:self.audit_table.export(self,'상품 변경로그'),tools);_button('인쇄',lambda:self.audit_table.print_pages(self,'상품 변경로그'),tools);tools.addStretch();body.addLayout(tools)
+        self.tabs.addTab(widget, "변경로그")
+
+    def _member_price_tab(self):
+        panel=QWidget();body=QVBoxLayout(panel);self.member_price_note=QLabel('상품 저장 후 회원별 지정 판매가를 조회합니다. 회원관리 권한이 필요합니다.');self.member_price_note.setWordWrap(True);body.addWidget(self.member_price_note)
+        self.member_price_grid=DataGrid(['회원코드','회원명','지정 판매가','회원 상태']);self.member_price_grid.read_permissions=('loyalty',);self.member_price_grid.menu_key='member_prices';body.addWidget(self.member_price_grid,1)
+        tools=QHBoxLayout();self.member_price_add=_button('지정가 등록·수정',self.edit_member_price,tools);self.member_price_delete=_button('지정가 삭제',self.remove_member_price,tools);_button('조회',self.refresh_member_prices,tools);body.addLayout(tools);self.tabs.addTab(panel,'회원지정가')
+
+    def refresh_member_prices(self):
+        identifier=self.record.get('id');allowed=bool(identifier) and can_action(self.store.actor,'members','edit')
+        self.member_price_add.setEnabled(allowed);self.member_price_delete.setEnabled(bool(identifier) and can_action(self.store.actor,'members','delete'))
+        if not identifier:self.member_price_grid.fill([]);return
+        try:
+            records=self.store.product_member_prices(identifier);self.member_price_grid.fill([[r['code'],r['name'],r['price'],'유효' if r['active'] else '무효'] for r in records],records);self.member_price_note.setText(f'{len(records):,}명 지정가 · 기본단위 {self.record["price_basis"]}{self.record["base_unit"]}당 · 회원 지정가는 특매보다 우선 적용됩니다.')
+        except PermissionError:
+            self.member_price_grid.fill([]);self.member_price_note.setText('회원지정가를 보려면 회원관리·회원지정가 메뉴 권한이 필요합니다.');self.member_price_add.setEnabled(False);self.member_price_delete.setEnabled(False)
+
+    def edit_member_price(self):
+        if not self.record.get('id'):return
+        try:members=[r for r in self.store.members() if r['active']]
+        except PermissionError as exc:self.error_label.setText(str(exc));return
+        selected=self.member_price_grid.selected() or {};dialog=EntryDialog('상품 회원지정가',self)
+        member=_combo([(f"{r['code']} · {r['name']}",r['id']) for r in members],selected.get('member_id'));dialog.form.addRow('회원',member);price=dialog.field('price','지정 판매가',selected.get('price',self.record['sale_price']))
+        dialog.finish(lambda:self.store.save_member_price(dict(member_id=member.currentData(),product_id=self.record['id'],price=price.text())))
+        if dialog.exec()==QDialog.DialogCode.Accepted:self.refresh_member_prices()
+
+    def remove_member_price(self):
+        record=self.member_price_grid.selected()
+        if record and _confirm(self,'회원지정가 삭제',f"{record['name']} 회원의 지정가를 삭제할까요?"):
+            try:self.store.delete_member_price(record['id']);self.refresh_member_prices()
+            except (ValueError,PermissionError) as exc:self.error_label.setText(str(exc))
 
     def _units_tab(self):
         widget = QWidget()
@@ -844,6 +896,7 @@ class ProductDialog(QDialog):
         self.meta.setText(f"등록 {timestamp('created_at', '저장 전')}  ·  수정 {timestamp('updated_at', '—')}")
         for button in self.unit_buttons:
             button.setEnabled(bool(record_id))
+        self.refresh_member_prices()
         if not record_id:
             for key in ("purchases", "sales"):
                 self.history_tables[key].fill([])
@@ -890,7 +943,12 @@ class ProductDialog(QDialog):
                                r.get("cost_delta", 0), Decimal(str(r["balance_qty"])), r["balance_cost"], r.get("reason", "")]
                               for r in stock], stock)
         audit = self.store.product_audit(record_id)
-        self.audit_table.fill([[r["at"], r.get("user_name", ""), r["action"], self._audit_text(r["detail"])] for r in audit], audit)
+        from .catalog_audit import audit_rows
+        changes=audit_rows(audit,PRODUCT_LABELS)
+        if self.audit_period.isChecked():
+            first,last=self.audit_start.date().toString('yyyy-MM-dd'),self.audit_end.date().toString('yyyy-MM-dd');changes=[r for r in changes if first<=r[5][:10]<=last]
+        if self.audit_field.currentData():changes=[r for r in changes if r[0]==self.audit_field.currentData()]
+        self.audit_table.fill(changes)
         self.refresh_units()
 
     def refresh_units(self):
@@ -956,6 +1014,7 @@ class ProductsPage(Page):
     def __init__(self, window):
         super().__init__(window, "상품장", "상품 · 기준단가 · 확장단위 · 입출고 이력을 한곳에서 관리합니다.")
         self.window = window
+        self.product_dialogs={}
         self.search = QLineEdit()
         self.search.setPlaceholderText("상품코드 · 바코드 · 상품명 · 규격")
         self.search.setMinimumWidth(230)
@@ -998,16 +1057,25 @@ class ProductsPage(Page):
         _button("조회", self.refresh, tools)
         self.body.addLayout(tools)
         self.grid = self.table(["상품코드", "상품명", "대분류", "중분류", "규격", "바코드", "공급사", "매입단가", "판매단가", "현재고", "단위", "재고 원가액", "상태","소분류","과면세","재고관리","단가 기준"])
+        self.grid.verticalHeader().setVisible(True);self.grid.verticalHeader().setFixedWidth(65);self.grid.verticalHeader().setToolTip('검색 결과의 순번 · 현재 정렬 순서대로 1부터 표시합니다.')
+        self.body.removeWidget(self.grid);self.catalog_splitter=QSplitter(Qt.Orientation.Horizontal);self.catalog_splitter.addWidget(self.grid)
+        panel=QWidget();right=QVBoxLayout(panel);right.setContentsMargins(8,0,0,0);right.addWidget(QLabel('상품 분류 · 대 / 중 / 소'))
+        self.category_path_label=QLabel('전체 분류');self.category_path_label.setWordWrap(True);right.addWidget(self.category_path_label)
+        self.category_tree=CategoryTree();self.category_tree.setMinimumWidth(230);self.category_tree.itemSelectionChanged.connect(self.tree_category_selected);right.addWidget(self.category_tree,1)
+        self.selected_product_summary=QLabel('상품을 선택하면 과면세와 분류를 표시합니다.');self.selected_product_summary.setWordWrap(True);right.addWidget(self.selected_product_summary);_button('선택 상품 등록정보',self.edit,right)
+        _button('전체 분류 보기',lambda:self.set_tree_path(()),right);self.catalog_splitter.addWidget(panel);self.catalog_splitter.setStretchFactor(0,4);self.catalog_splitter.setStretchFactor(1,1);self.catalog_splitter.setSizes([850,260]);self.body.addWidget(self.catalog_splitter,1)
         for column, width in enumerate((85, 185, 80, 80, 80, 130, 130, 100, 100, 95, 60, 115, 65)):
             self.grid.setColumnWidth(column, width)
         self.summary = QLabel()
         self.summary.setObjectName("summary")
         self.body.addWidget(self.summary)
         self.add_button = _button("새 상품 등록", self.add, self.actions, True)
+        _button('엑셀 상품 등록',self.import_excel,self.actions)
         self.grid.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.grid.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.grid.customContextMenuRequested.connect(self.context_menu)
         self.grid.itemDoubleClicked.connect(lambda *_: self.edit())
+        self.grid.itemSelectionChanged.connect(self.selection_changed)
         self.search.textChanged.connect(self.refresh)
         for control in (self.category, self.supplier):
             control.currentIndexChanged.connect(self.refresh)
@@ -1019,12 +1087,13 @@ class ProductsPage(Page):
 
     def refresh(self, *_):
         all_products = self.store.products()
+        self._catalog_all_products=all_products;self._category_records=self.store.categories()
         current_category, current_supplier = self.category.currentData(), self.supplier.currentData()
         self.category.blockSignals(True)
         self.supplier.blockSignals(True)
         self.category.clear()
         self.category.addItem("전체 분류", "")
-        for category in sorted({p["category"] for p in all_products if p["category"]}):
+        for category in sorted({p["category"] for p in all_products if p["category"]}|{r['name'] for r in self._category_records if r['level']==1}):
             self.category.addItem(category, category)
         self.category.setCurrentIndex(max(0, self.category.findData(current_category)))
         self.supplier.clear()
@@ -1040,7 +1109,13 @@ class ProductsPage(Page):
             old=field.currentData();field.blockSignals(True);field.clear();field.addItem('전체','')
             options=[p for p in all_products if (not self.category.currentData() or p['category']==self.category.currentData())]
             if key=='category_small' and self.middle_filter.currentData():options=[p for p in options if p['category_mid']==self.middle_filter.currentData()]
-            for value in sorted({p[key] for p in options if p[key]}):field.addItem(value,value)
+            values={p[key] for p in options if p[key]}
+            for record in self._category_records:
+                index=1 if key=='category_mid' else 2;path=record['path']
+                if len(path)<=index or self.category.currentData() and path[0]!=self.category.currentData():continue
+                if index==2 and self.middle_filter.currentData() and path[1]!=self.middle_filter.currentData():continue
+                values.add(path[index])
+            for value in sorted(values):field.addItem(value,value)
             field.setCurrentIndex(max(0,field.findData(old)));field.blockSignals(False)
         rows = self.store.products(search=self.search.text(), supplier_id=self.supplier.currentData(),
                                    category=self.category.currentData() or "", active_only=False)
@@ -1061,17 +1136,68 @@ class ProductsPage(Page):
         self.grid.fill([[r["code"], r["name"], r["category"], r["category_mid"], r["specification"], r["barcode"],
                          supplier_map.get(r["supplier_id"], "—"), r["purchase_price"], r["sale_price"],
                          Decimal(r["stock_qty"]), r["base_unit"], r["stock_cost"], product_status(r),r['category_small'],'과세' if r['tax_mode']=='taxable' else '면세','관리' if r['tracked'] else '제외',f"{r['price_basis']}{r['base_unit']}당"] for r in rows], rows)
+        from .tax_display import tax_icon,tax_style
+        icons={mode:tax_icon(mode) for mode in ('taxable','exempt')}
+        sorting=self.grid.isSortingEnabled();self.grid.setSortingEnabled(False)
+        for row_index in range(self.grid.rowCount()):
+            record=self.grid.item(row_index,0).data(Qt.ItemDataRole.UserRole);mode=record['tax_mode'];letter,caption,fg,bg=tax_style(mode)
+            self.grid.item(row_index,1).setIcon(icons[mode]);self.grid.item(row_index,1).setToolTip(f'{letter} · {caption} / '+record['name'])
+            tax_item=self.grid.item(row_index,14);tax_item.setText(letter+' · '+caption);tax_item.setForeground(QColor(fg));tax_item.setBackground(QColor(bg))
+        self.grid.setSortingEnabled(sorting)
+        self.refresh_category_tree()
         totals = {}
         for r in rows:
             if r["tracked"]:
                 totals[r["base_unit"]] = totals.get(r["base_unit"], Decimal(0)) + Decimal(r["stock_qty"])
         quantities = " / ".join(f"{value:,.3f} {unit}" for unit, value in sorted(totals.items())) or "—"
-        self.summary.setText(f"검색 {len(rows):,}품목  ·  재고 {quantities}  ·  원가 합계 {_won(sum(r['stock_cost'] for r in rows if r['tracked']))} 원")
+        self.summary.setText(f"검색 {len(rows):,} / 전체 {len(all_products):,}품목 · 왼쪽 순번 1~{len(rows):,} · 과=과세 / 면=면세 · 재고 {quantities} · 원가 합계 {_won(sum(r['stock_cost'] for r in rows if r['tracked']))} 원")
+
+    def refresh_category_tree(self):
+        selected=tuple(value for value in (self.category.currentData(),self.middle_filter.currentData(),self.small_filter.currentData()) if value)
+        self.category_tree.blockSignals(True);self.category_tree.clear();root=QTreeWidgetItem(self.category_tree,['전체분류']);root.setData(0,Qt.ItemDataRole.UserRole,());items={};current=root
+        for record in self._category_records:
+            parent=items.get(record['parent_id'],root);item=QTreeWidgetItem(parent,[f"{record['name']} ({record['product_count']:,})"]);item.setIcon(0,folder_icon(record['level'],record['active']));item.setData(0,Qt.ItemDataRole.UserRole,tuple(record['path']));item.setToolTip(0,' / '.join(record['path']));items[record['id']]=item
+            if tuple(record['path'])==selected:current=item
+        self.category_tree.expandToDepth(0);self.category_tree.setCurrentItem(current)
+        parent=current.parent()
+        while parent:parent.setExpanded(True);parent=parent.parent()
+        self.category_tree.blockSignals(False);self.category_path_label.setText(' / '.join(selected) or '전체 분류')
+
+    def tree_category_selected(self):
+        item=self.category_tree.currentItem()
+        if item:self.set_tree_path(item.data(0,Qt.ItemDataRole.UserRole) or ())
+
+    def set_tree_path(self,path):
+        # Populate dependent selectors before the one final table refresh.
+        for control in (self.category,self.middle_filter,self.small_filter):control.blockSignals(True)
+        self.category.setCurrentIndex(max(0,self.category.findData(path[0] if path else '')))
+        for control,key,index in ((self.middle_filter,'category_mid',1),(self.small_filter,'category_small',2)):
+            control.clear();control.addItem('전체','')
+            values={r[key] for r in self._catalog_all_products if all(r[k]==v for k,v in zip(('category','category_mid'),path[:index])) and r[key]}
+            values.update(r['path'][index] for r in self._category_records if len(r['path'])>index and tuple(r['path'][:index])==tuple(path[:index]))
+            for value in sorted(values):control.addItem(value,value)
+            control.setCurrentIndex(max(0,control.findData(path[index] if len(path)>index else '')))
+        for control in (self.category,self.middle_filter,self.small_filter):control.blockSignals(False)
+        self.refresh()
+
+    def import_excel(self):
+        from .catalog_import_ui import CatalogImportDialog
+        self.import_dialog=CatalogImportDialog(self.store,self);self.import_dialog.imported.connect(self.refresh);self.import_dialog.show()
 
     def add(self):
-        dialog = ProductDialog(self.store, parent=self)
-        dialog.saved.connect(self._product_saved)
-        dialog.exec()
+        self.show_product_dialog(None)
+
+    def selection_changed(self):
+        record=self.grid.selected()
+        if not record:self.selected_product_summary.setText('상품을 선택하면 과면세와 분류를 표시합니다.');self.selected_product_summary.setStyleSheet('');return
+        from .tax_display import tax_style
+        letter,caption,fg,bg=tax_style(record['tax_mode']);self.selected_product_summary.setText(f"{letter} · {caption}\n{record['name']}\n"+' / '.join(record[k] for k in ('category','category_mid','category_small') if record[k]));self.selected_product_summary.setStyleSheet(f'color:{fg};background:{bg};padding:8px;border-radius:5px;')
+
+    def show_product_dialog(self,record):
+        from shiboken6 import isValid
+        key=record['id'] if record else None;existing=self.product_dialogs.get(key)
+        if existing is not None and isValid(existing) and existing.isVisible():existing.raise_();existing.activateWindow();return existing
+        dialog=ProductDialog(self.store,record,self);dialog.saved.connect(self._product_saved);dialog.setWindowModality(Qt.WindowModality.NonModal);self.product_dialogs[key]=dialog;dialog.show();return dialog
 
     def _product_saved(self, identifier):
         self.refresh()
@@ -1080,9 +1206,7 @@ class ProductsPage(Page):
     def edit(self):
         record = self.grid.selected()
         if record:
-            dialog = ProductDialog(self.store, record, self)
-            dialog.saved.connect(self._product_saved)
-            dialog.exec()
+            return self.show_product_dialog(record)
 
     def context_menu(self, position):
         row = self.grid.rowAt(position.y())

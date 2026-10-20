@@ -66,7 +66,7 @@ class PopupPolicy(QObject):
             play_dialog_cue(watched,event)
         if isinstance(watched,QMenu) and event.type()==QEvent.Type.Show:
             app=QApplication.instance();requested=getattr(app,'_sy_context_requested_at',0);app._sy_context_requested_at=0
-            if 0<time.monotonic()-requested<2:
+            if requested>0 and 0<=time.monotonic()-requested<2:
                 from .ui_sounds import play_global_cue
                 play_global_cue('context')
             from .menu_icons import decorate_menu

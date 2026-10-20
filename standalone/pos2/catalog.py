@@ -303,6 +303,53 @@ class CatalogMixin:
             self.db.execute("DELETE FROM products WHERE id=?", (id,))
             self._audit("delete", "product", id, {"name": row["name"]})
 
+    def seed_catalog_categories(self):
+        from .catalog_defaults import DEFAULT_PATHS
+        with self._tx():
+            self._require('catalog');self._require_capability('categories','create')
+            before=self.db.execute('SELECT COUNT(*) FROM product_categories').fetchone()[0]
+            for path in DEFAULT_PATHS:self._ensure_category_path(*path,allow_inactive=True)
+            added=self.db.execute('SELECT COUNT(*) FROM product_categories').fetchone()[0]-before
+            self._audit('create_category_template','category',None,{'added':added})
+        return added
+
+    def import_catalog(self,rows):
+        """Create only. A bad row rolls back this whole batch; existing data stays."""
+        from secrets import token_hex
+        self._require('catalog');self._require_capability('products','create')
+        if not isinstance(rows,list) or not 1<=len(rows)<=50000:raise ValueError('한 번에 1~50,000개 상품을 등록하세요.')
+        if any(not isinstance(row,dict) or row.get('tax_mode') not in {'taxable','exempt'} for row in rows):raise ValueError('과세·면세를 확인한 상품만 등록할 수 있습니다.')
+        backup=''
+        if self.path:
+            target=self._backup_directory()/('상품가져오기전_'+token_hex(8)+'.db');self._backup_file(target);backup=str(target)
+        created=skipped=0
+        with self._tx():
+            old_flag=getattr(self,'_shared_outer_transaction',False);self._shared_outer_transaction=True
+            try:
+                suppliers={r['name']:r['id'] for r in self.db.execute("SELECT id,name FROM partners WHERE kind='supplier'")}
+                barcodes={r[0] for r in self.db.execute("SELECT barcode FROM products WHERE barcode<>'' UNION SELECT barcode FROM product_units WHERE barcode<>''")}
+                anonymous={(r['name'],r['specification'],r['supplier_id']) for r in self.db.execute("SELECT name,specification,supplier_id FROM products WHERE barcode=''")}
+                first=int(self._next_product_code()[1:])
+                if first+len(rows)>999_999_999_999:raise ValueError('상품 자동코드 번호 범위를 초과했습니다.')
+                for row in rows:
+                    try:
+                        barcode=text(row.get('barcode'),'바코드',maximum=100);name=text(row.get('name'),'상품명',True,300)
+                        if barcode and barcode in barcodes:skipped+=1;continue
+                        supplier_name=text(row.get('supplier_name'),'공급사',maximum=300)
+                        if supplier_name and supplier_name not in suppliers:suppliers[supplier_name]=self.save_partner(dict(kind='supplier',name=supplier_name))
+                        supplier=suppliers.get(supplier_name)
+                        key=(name,text(row.get('specification')),supplier)
+                        if not barcode and key in anonymous:skipped+=1;continue
+                        allowed=('name','barcode','specification','category','category_mid','category_small','base_unit','price_basis','purchase_price','sale_price','tax_mode','origin','shelf','memo')
+                        data={key:row[key] for key in allowed if key in row};data.update(code=f'P{first+created:05d}',supplier_id=supplier)
+                        self.save_product(data);created+=1
+                        if barcode:barcodes.add(barcode)
+                        else:anonymous.add(key)
+                    except (ValueError,PermissionError) as exc:raise type(exc)(f"엑셀 {row.get('source_row','?')}행: {exc}") from exc
+                self._audit('import_catalog','product',None,dict(created=created,skipped=skipped))
+            finally:self._shared_outer_transaction=old_flag
+        return dict(created=created,skipped=skipped,backup=backup)
+
     def units(self, product_id):
         self._require("catalog", "trade", "inventory", "reports", "loyalty")
         return [{**dict(row), "factor": qtext(row["factor"])} for row in self.db.execute("SELECT * FROM product_units WHERE product_id=? ORDER BY id", (product_id,))]

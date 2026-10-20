@@ -122,6 +122,8 @@ def test_mouse_cues_are_separate_toggleable_and_right_click_requires_menu(app,tm
     assert not ui_sounds.play_global_cue('click') and context.enabled
     events=[];monkeypatch.setattr(ui_sounds,'play_global_cue',lambda kind:events.append(kind))
     policy=PopupPolicy();widget=QWidget();menu=QMenu();app._sy_context_requested_at=0
+    # Windows can return the same monotonic timestamp for immediate events.
+    monkeypatch.setattr('pos2.popup_policy.time.monotonic',lambda:100.)
     policy.eventFilter(menu,QEvent(QEvent.Type.Show));assert not events
     policy.eventFilter(widget,QEvent(QEvent.Type.ContextMenu));assert not events
     policy.eventFilter(menu,QEvent(QEvent.Type.Show));assert events==['context']

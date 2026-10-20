@@ -33,7 +33,9 @@ PRIVATE=PRIVATE|{'work_log_detail','work_log_report','work_log_files','add_work_
 
 READS=READS|frozenset({'inventory_status'})
 READS=READS|{'store_profile'}
+READS=READS|{'product_member_prices'}
 WRITES=WRITES|{'set_order_status','post_order_sale'}
+WRITES=WRITES|{'seed_catalog_categories'}
 
 def encode(value):
     def default(item):
