@@ -289,7 +289,7 @@ wheels = [
 
 [[package]]
 name = "seoyoung-pos-standalone"
-version = "2.4.0rc15"
+version = "2.4.0rc16"
 source = { editable = "." }
 dependencies = [
     { name = "cryptography" },

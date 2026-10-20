@@ -996,6 +996,18 @@ def main(argv=None):
                             purchase.paid.setText("5000")
                             assert "미지급잔액" in purchase.balance_label.text()
                             capture("-purchase", purchase)
+                            from .purchase_output import purchase_record,purchase_document,purchase_workbook
+                            voucher=purchase_record(purchase)
+                            from PySide6.QtWidgets import QTextBrowser
+                            voucher_dialog=QDialog(window);voucher_dialog.setWindowTitle('매입전표 양식 미리보기');voucher_dialog.resize(850,800)
+                            voucher_body=QVBoxLayout(voucher_dialog);voucher_view=QTextBrowser();voucher_doc=purchase_document(voucher);voucher_doc.setParent(voucher_view);voucher_view.setDocument(voucher_doc);voucher_body.addWidget(voucher_view)
+                            capture('-purchase-paper',voucher_dialog);voucher_dialog.close()
+                            output_xlsx=args.screenshot.parent/'purchase-voucher-smoke.xlsx';purchase_workbook(voucher).save(output_xlsx)
+                            from openpyxl import load_workbook
+                            output_book=load_workbook(output_xlsx);assert output_book.active['A1'].value=='매 입 전 표';assert output_book.active['B5'].value==voucher['supplier']['name'];output_book.close()
+                            from .catalog_import_ui import CatalogImportDialog
+                            idle_import=CatalogImportDialog(store,window);idle_import.show();app.processEvents();idle_import.close();app.processEvents();assert not idle_import.isVisible(),'Idle Excel importer must close'
+                            idle_import.deleteLater()
                             picker = ProductPicker(purchase)
                             picker.set_apply_callback(purchase.apply_picked_products)
                             assert picker.supplier_only.isChecked()

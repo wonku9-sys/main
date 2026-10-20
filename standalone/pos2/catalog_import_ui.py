@@ -95,5 +95,9 @@ class CatalogImportDialog(QDialog):
         self.message.setText(f"새 상품 {result['created']:,}개 등록 · 중복 {result['skipped']:,}개 건너뜀\n보호 백업: {result['backup']}");self.imported.emit()
     def closeEvent(self,event):
         if self.worker and self.worker.isRunning():self.message.setText('분석·등록이 완료된 후 닫을 수 있습니다.');event.ignore();return
-        super().closeEvent(event)
+        # QDialog's default closeEvent calls virtual reject(). Our reject routes
+        # Escape through close() to protect running workers; calling the default
+        # closeEvent here re-enters close/reject and leaves an idle dialog stuck.
+        QDialog.reject(self)
+        event.accept()
     def reject(self):self.close()

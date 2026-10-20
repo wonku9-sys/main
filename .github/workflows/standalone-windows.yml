@@ -32,7 +32,7 @@ jobs:
       - name: Test new independent business engine and desktop
         # Keep native event timing and the new legacy Excel path visible early.
         # The full suite below still runs unchanged after this focused gate.
-        run: uv run --frozen --extra dev --project standalone python -m pytest -q standalone/tests/test_fixed_query_resize.py standalone/tests/test_lucky_audio.py standalone/tests/test_default_audio.py standalone/tests/test_catalog_excel_tax_audit.py
+        run: uv run --frozen --extra dev --project standalone python -m pytest -q standalone/tests/test_fixed_query_resize.py standalone/tests/test_lucky_audio.py standalone/tests/test_default_audio.py standalone/tests/test_catalog_excel_tax_audit.py standalone/tests/test_purchase_output.py standalone/tests/test_catalog_import_close.py
       - name: Test full independent business engine and desktop
         run: uv run --frozen --extra dev --project standalone python -m pytest -q standalone/tests
       - name: Build actual Windows EXE and run its isolated smoke test

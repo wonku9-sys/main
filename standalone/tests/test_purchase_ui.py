@@ -153,8 +153,10 @@ def test_purchase_excel_uses_numeric_values_and_saved_balances_not_catalog_price
     dialog = make_dialog(shop)
     dialog.scan_barcode("000098765")
     captured = []
-    monkeypatch.setattr("pos2.widgets.export_rows", lambda *args: captured.append(args))
+    from pos2.purchase_output import purchase_record
+    monkeypatch.setattr("pos2.purchase_output.output_purchase", lambda dialog,mode: captured.append((mode,purchase_record(dialog))))
     dialog.export_document()
-    assert captured[0][3][0][0] == "미확정 입력"
-    assert captured[0][3][0][-3:] == [Decimal("1"), 48000, 48000]
+    assert captured[0][0]=='xlsx' and captured[0][1]['number']=='미확정 입력'
+    line=captured[0][1]['lines'][0]
+    assert [line['qty'],line['unit_price'],line['total']]==[Decimal('1'),Decimal('48000'),Decimal('48000')]
     assert not shop[1].documents()

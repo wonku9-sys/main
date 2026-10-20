@@ -9,7 +9,7 @@ from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QGridLayout, QHBoxLayout,
     QHeaderView, QInputDialog, QLabel, QLineEdit, QMessageBox, QPushButton,
-    QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
+    QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget, QMenu,
 )
 
 from .widgets import DataGrid, Page, ScanField, action, amount, date_field, search_icon, won
@@ -485,6 +485,16 @@ class TradeDialog(QDialog):
         self.excel_button = action("엑셀 저장", self.export_document)
         footer.addWidget(self.print_button)
         footer.addWidget(self.excel_button)
+        if kind.startswith('purchase'):
+            self.print_button.setText('인쇄 ▾')
+            self.print_button.clicked.disconnect()
+            self.print_menu=QMenu(self.print_button)
+            self.print_menu.addAction('인쇄그리드 · 목록 미리보기',self.print_grid)
+            self.print_menu.addAction('프린터 · 매입전표 양식 미리보기',self.print_document)
+            self.print_button.setMenu(self.print_menu)
+            self.pdf_button=action('PDF 저장',lambda:self.purchase_output('pdf'))
+            footer.addWidget(self.pdf_button)
+            self.excel_button.setToolTip('열려 있는 매입전표 한 건을 공급자·공급받는 자와 품목표가 있는 A4 엑셀 양식으로 저장합니다.')
         if kind.startswith("purchase"):
             self.new_product_button = action("새 상품등록 (F9)", self.new_product)
             self.new_product_button.setEnabled(not self.readonly and not self.is_return and can_action(self.store.actor, "products", "create"))
@@ -965,6 +975,7 @@ class TradeDialog(QDialog):
             _warn(self, exc)
 
     def print_document(self):
+        if self.kind.startswith('purchase'):return self.purchase_output('preview')
         if not self.record:
             return
         record = self.store.document(self.record["id"])
@@ -975,6 +986,7 @@ class TradeDialog(QDialog):
         grid.deleteLater()
 
     def export_document(self):
+        if self.kind.startswith('purchase'):return self.purchase_output('xlsx')
         from .widgets import export_rows, authorize_output
         if not authorize_output(self):
             return
@@ -988,6 +1000,14 @@ class TradeDialog(QDialog):
             export_rows(self, KINDS[self.kind] + " 전표", ["전표번호", "거래일", "거래처", "상태", "상품명", "단위", "수량", "단가", "금액"], rows)
         except (ValueError, PermissionError, InvalidOperation) as exc:
             _warn(self, exc)
+
+    def print_grid(self):
+        return self.purchase_output('grid')
+
+    def purchase_output(self,mode):
+        from .purchase_output import output_purchase
+        try:return output_purchase(self,mode)
+        except (ValueError,PermissionError,InvalidOperation,OSError) as exc:_warn(self,exc)
 
     def refresh_payments(self):
         payments = (self.record or {}).get("payments", [])
