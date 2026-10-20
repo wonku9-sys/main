@@ -1,9 +1,8 @@
 """Offline entertainment only: six unique, uniformly random numbers 1..45."""
-import math
 from pathlib import Path
 import secrets
 from types import SimpleNamespace
-from PySide6.QtCore import Qt,QTimer,Signal,QRectF,QPointF
+from PySide6.QtCore import Qt,QTimer,Signal,QRectF,QPointF,QElapsedTimer
 from PySide6.QtGui import QColor,QPainter,QPen,QFont,QLinearGradient,QRadialGradient,QPainterPath,QImage
 from PySide6.QtWidgets import QApplication,QDialog,QFrame,QHBoxLayout,QLabel,QMessageBox,QVBoxLayout,QWidget
 from .widgets import Page,action
@@ -17,10 +16,29 @@ def ball_color(number):return COLORS[min((number-1)//10,4)]
 class LuckyMachine(QWidget):
     clicked=Signal()
     def __init__(self,parent=None):
-        super().__init__(parent);self.frame=0;self.running=False;self.number=None
+        super().__init__(parent);self.frame=0;self._running=False;self.number=None
         self.image=QImage(str(Path(__file__).resolve().parent/'assets'/'lucky-machine-realistic.png'))
+        from .lucky_physics import BallMotion
+        self.motion=BallMotion();self.elapsed=QElapsedTimer();self.idle_elapsed=0
+        self.motion_timer=QTimer(self);self.motion_timer.setInterval(16);self.motion_timer.timeout.connect(self.advance_motion)
         self.setMinimumSize(340,350);self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setAccessibleName('행운의 숫자 추첨기 · 클릭하면 한 개 추첨')
+    @property
+    def running(self):return self._running
+    @running.setter
+    def running(self,value):
+        self._running=bool(value);self.idle_elapsed=0
+        if self.isVisible() and not self.motion_timer.isActive():self.elapsed.start();self.motion_timer.start()
+    def showEvent(self,event):
+        self.idle_elapsed=0;self.elapsed.start();self.motion_timer.start();super().showEvent(event)
+    def hideEvent(self,event):
+        self.motion_timer.stop();super().hideEvent(event)
+    def advance_motion(self):
+        seconds=min(.05,self.elapsed.restart()/1000)
+        self.motion.advance(seconds,self.running);self.frame+=1;self.update()
+        if not self.running:
+            self.idle_elapsed+=seconds
+            if self.idle_elapsed>=5:self.motion_timer.stop()
     def mousePressEvent(self,event):
         if event.button()==Qt.MouseButton.LeftButton:self.clicked.emit()
     def paintEvent(self,event):
@@ -31,26 +49,18 @@ class LuckyMachine(QWidget):
             gradient=QLinearGradient(rect.topLeft(),rect.bottomRight())
             for position,color in colors:gradient.setColorAt(position,QColor(color))
             p.setPen(Qt.PenStyle.NoPen);p.setBrush(gradient);p.drawRoundedRect(rect,radius,radius)
-        def ball(x,y,radius,number):
+        def ball(x,y,radius,number,angle=0):
             color=QColor(ball_color(number));gradient=QRadialGradient(QPointF(x-radius*.35,y-radius*.45),radius*1.6)
             gradient.setColorAt(0,color.lighter(180));gradient.setColorAt(.4,color);gradient.setColorAt(1,color.darker(180))
             p.setPen(QPen(color.darker(130),.7));p.setBrush(gradient);p.drawEllipse(QRectF(x-radius,y-radius,radius*2,radius*2))
-            p.setPen(Qt.PenStyle.NoPen);p.setBrush(QColor('#FDFDF6'));p.drawEllipse(QRectF(x-radius*.6,y-radius*.55,radius*1.2,radius*1.2))
-            p.setPen(QColor('#24313A'));font.setPixelSize(round(radius*.95));p.setFont(font);p.drawText(QRectF(x-radius,y-radius*.9,radius*2,radius*2),Qt.AlignmentFlag.AlignCenter,str(number))
+            p.save();p.translate(x,y);p.rotate(angle)
+            p.setPen(Qt.PenStyle.NoPen);p.setBrush(QColor('#FDFDF6'));p.drawEllipse(QRectF(-radius*.6,-radius*.55,radius*1.2,radius*1.2))
+            p.setPen(QColor('#24313A'));font.setPixelSize(round(radius*.95));p.setFont(font);p.drawText(QRectF(-radius,-radius*.9,radius*2,radius*2),Qt.AlignmentFlag.AlignCenter,str(number));p.restore()
         if not self.image.isNull():
             # Original generated product-render asset; numbers remain live UI,
             # never baked into a decorative photograph or fetched online.
             p.drawImage(QRectF(50,0,320,400),self.image)
-            positions=[]
-            for i in range(23):
-                if self.running:
-                    angle=i*2.39996+self.frame*(.13+(i%4)*.025);radius=26+(i%6)*13
-                    x=207+math.cos(angle)*radius;y=142+math.sin(angle)*radius
-                else:
-                    dy=52+(i//8)*17;span=math.sqrt(104**2-dy**2)-10
-                    x=207+(i%8-3.5)*span/3.8;y=142+dy
-                positions.append((y,x,i*2%45+1))
-            for y,x,number in sorted(positions):ball(x,y,10.5,number)
+            for particle in sorted(self.motion.balls,key=lambda b:b.y):ball(207+particle.x,142+particle.y,self.motion.ball_radius,particle.number,particle.angle)
             p.setPen(QPen(QColor(255,255,255,100),4,Qt.PenStyle.SolidLine,Qt.PenCapStyle.RoundCap));p.setBrush(Qt.BrushStyle.NoBrush);p.drawArc(QRectF(100,38,211,211),58*16,66*16)
             rounded(QRectF(177,298,59,21),((0,'#091419'),(1,'#253B3B')),2)
             p.setPen(QColor('#D7F8DF'));font.setPixelSize(10);p.setFont(font);p.drawText(QRectF(177,298,59,21),Qt.AlignmentFlag.AlignCenter,'MIXING' if self.running else f'{self.number:02d}' if self.number else 'READY')
@@ -74,16 +84,7 @@ class LuckyMachine(QWidget):
             p.save();p.rotate(angle);rounded(QRectF(-6,-78,12,86),chrome,5);p.restore()
         p.restore()
         p.setBrush(QColor('#A3BAC2'));p.setPen(QPen(QColor('#E8F3F6'),2));p.drawEllipse(QRectF(197,128,26,26))
-        positions=[]
-        for i in range(23):
-            if self.running:
-                angle=i*2.39996+self.frame*(.13+(i%4)*.025);radius=30+(i%6)*14
-                x=210+math.cos(angle)*radius;y=141+math.sin(angle)*radius
-            else:
-                band=i//7;column=i%7;dy=56+band*19;span=math.sqrt(max(0,107**2-dy**2))
-                x=210+(column-3)*span/3.5;y=141+dy
-            positions.append((y,x,i*2%45+1))
-        for y,x,number in sorted(positions):ball(x,y,11.5,number)
+        for particle in sorted(self.motion.balls,key=lambda b:b.y):ball(210+particle.x,141+particle.y,self.motion.ball_radius,particle.number,particle.angle)
         # Reflection stays over the balls, as on the front of real glass.
         p.setPen(QPen(QColor(255,255,255,210),7,Qt.PenStyle.SolidLine,Qt.PenCapStyle.RoundCap));p.setBrush(Qt.BrushStyle.NoBrush);p.drawArc(QRectF(101,32,218,218),52*16,77*16)
         p.setPen(QPen(QColor(255,255,255,95),3));p.drawArc(QRectF(111,42,198,198),-55*16,52*16)
@@ -131,8 +132,8 @@ class LuckyNumbersPage(Page):
         if len(self.drawn)==6:self.remaining=list(range(1,46));self.drawn=[]
         self.batch_rows=batch_rows;self.ticks=0;self.machine.running=True;self.machine.number=None;self.timer.start();self.update_result()
     def animate(self):
-        self.machine.frame+=1;self.ticks+=1;self.machine.update()
-        if self.ticks>=24:self.finish_draw()
+        self.ticks+=1
+        if self.ticks>=60:self.finish_draw()
     def finish_draw(self):
         if not self.timer.isActive() or len(self.results)>=5:return
         self.timer.stop()

@@ -56,9 +56,10 @@ QToolButton:hover, QToolButton:checked { background:#EAF3EF; border-color:#C9DFD
 #homeCard { background:white; border:1px solid #DAE5E2; border-radius:8px; }
 QPushButton { background:white; border:1px solid #CCD9DF; border-radius:5px; padding:7px 12px; min-height:19px; }
 QPushButton:hover { background:#EDF4F1; border-color:#AFC9BD; }
-QPushButton:disabled { color:#A4B0B7; background:#F1F4F5; }
+QPushButton:disabled { color:#58645C; background:#E0E4DF; border-color:#BBC6BD; }
 #primary { background:#256E5B; color:white; border-color:#256E5B; font-weight:600; }
 #primary:hover { background:#1B5948; }
+#primary:disabled { color:#58645C; background:#E0E4DF; border-color:#BBC6BD; }
 #danger { color:#AD5149; background:#FFF5F2; border-color:#EACAC2; }
 QLineEdit, QComboBox, QDateEdit, QSpinBox, QDoubleSpinBox, QTextEdit { background:white; border:1px solid #CFDCE2; border-radius:4px; padding:5px 7px; min-height:22px; selection-background-color:#D8ECE2; selection-color:#163F36; }
 QLineEdit:focus, QComboBox:focus, QDateEdit:focus { border:1px solid #438B75; }
@@ -1065,6 +1066,9 @@ def main(argv=None):
                             lucky.page.draw_five();lucky.page.finish_draw()
                             assert len(lucky.page.results)==5 and all(len(set(values))==6 for values in lucky.page.results)
                             capture('-lucky-numbers',lucky);lucky.close()
+                            lucky.page.reset(False);lucky.show();lucky.page.draw_six()
+                            for _ in range(120):lucky.page.machine.motion.advance(1/60,True)
+                            capture('-lucky-mixing',lucky);lucky.close()
                     if args.smoke_test:
                         print(f"PASS standalone-v2: {len(window.items)} desktop pages, returns, expanded units, persistence, backup restore, no legacy imports", flush=True)
                         app.exit(0)

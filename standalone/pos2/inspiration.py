@@ -56,10 +56,23 @@ class InspirationMixin:
 
 class InspirationDialog(QDialog):
     def __init__(self,store,new=False,parent=None):
-        super().__init__(parent);self.setWindowTitle('오늘도 당신을 응원합니다');self.resize(620,360)
-        self.setStyleSheet('QDialog{background:#F6F4E9;} QLabel{color:#385D50;} QPushButton{padding:11px 20px;background:#E4EEE5;border:1px solid #B8CDBB;border-radius:9px;}')
+        super().__init__(parent);self.setWindowTitle('오늘도 당신을 응원합니다');self.resize(680,440)
+        self.setStyleSheet('''
+            QDialog{background:#F6F4E9;}
+            QLabel{color:#385D50;}
+            QPushButton{padding:11px 20px;min-height:24px;font-size:14px;font-weight:600;color:#24483C;background:#E4EEE5;border:2px solid #B8CDBB;border-radius:9px;}
+            QPushButton:hover{color:#24483C;background:#D4E4D6;}
+            QPushButton:pressed{color:#24483C;background:#C2D8C5;}
+            QPushButton#primary{color:#FFFFFF;background:#215D49;border-color:#215D49;font-size:15px;font-weight:700;}
+            QPushButton#primary:hover{color:#FFFFFF;background:#174B3A;border-color:#174B3A;}
+            QPushButton#primary:pressed{color:#FFFFFF;background:#103B2D;border-color:#103B2D;}
+            QPushButton:focus{border-color:#A47516;}
+            QPushButton:disabled,QPushButton#primary:disabled{color:#58645C;background:#E0E4DF;border-color:#BBC6BD;}
+        ''')
         body=QVBoxLayout(self);body.setContentsMargins(36,28,36,28)
         heading=QLabel('🌿  오늘도 당신을 응원합니다');heading.setStyleSheet('font-size:21px;font-weight:600;');body.addWidget(heading)
         phrase=QLabel(store.inspiration(new));phrase.setWordWrap(True);phrase.setTextFormat(Qt.TextFormat.PlainText);phrase.setAlignment(Qt.AlignmentFlag.AlignCenter);phrase.setStyleSheet('font-size:25px;padding:20px;');body.addWidget(phrase,1)
         note=QLabel('상단 ‘오늘의 글귀’에서 다시 볼 수 있습니다. · 자체 작성 응원 문구');note.setWordWrap(True);body.addWidget(note)
-        body.addWidget(action('닫고 시작하기',self.accept,primary=True))
+        self.start_button=action('닫고 시작하기',self.accept,primary=True)
+        self.start_button.setAccessibleName('응원 글귀를 닫고 프로그램 시작하기')
+        body.addWidget(self.start_button)
