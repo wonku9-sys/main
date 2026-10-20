@@ -8,7 +8,7 @@ from decimal import Decimal, InvalidOperation
 import json
 from types import SimpleNamespace
 
-from PySide6.QtCore import QDate, QTime, Qt, Signal
+from PySide6.QtCore import QDate, QTime, Qt, Signal, QTimer
 from PySide6.QtGui import QColor, QShortcut, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
     QMenu, QStyle, QTreeWidget, QTreeWidgetItem, QSpinBox, QTimeEdit,QSplitter,
 )
 
-from .widgets import DataGrid, Page, ScanField, won, date_field
+from .widgets import DataGrid, Page, ScanField, won, date_field, action
 from .permissions import can_action, restrict_button
 from .catalog import CATEGORY_FIELDS, DEFAULT_PRODUCT_CATEGORY
 from .category_tree import CategoryTree, folder_icon
@@ -1017,6 +1017,8 @@ class ProductsPage(Page):
         super().__init__(window, "상품장", "상품 · 기준단가 · 확장단위 · 입출고 이력을 한곳에서 관리합니다.")
         self.window = window
         self.product_dialogs={}
+        self._catalog_cache_key=None;self._catalog_filter_key=None;self._catalog_page=0;self._catalog_page_size=500;self._catalog_matches=[];self._catalog_rendering=False
+        self.search_timer=QTimer(self);self.search_timer.setSingleShot(True);self.search_timer.setInterval(250);self.search_timer.timeout.connect(self.run_delayed_search)
         self.search = QLineEdit()
         self.search.setPlaceholderText("상품코드 · 바코드 · 상품명 · 규격")
         self.search.setMinimumWidth(230)
@@ -1071,6 +1073,8 @@ class ProductsPage(Page):
         self.summary = QLabel()
         self.summary.setObjectName("summary")
         self.body.addWidget(self.summary)
+        paging=QHBoxLayout();self.previous_page=action('이전 500개',lambda:self.move_catalog_page(-1));self.next_page=action('다음 500개',lambda:self.move_catalog_page(1));paging.addWidget(self.previous_page);paging.addWidget(self.next_page)
+        self.page_label=QLabel('');paging.addWidget(self.page_label,1);self.body.addLayout(paging)
         self.add_button = _button("새 상품 등록", self.add, self.actions, True)
         _button('엑셀 상품 등록',self.import_excel,self.actions)
         self.grid.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
@@ -1078,7 +1082,10 @@ class ProductsPage(Page):
         self.grid.customContextMenuRequested.connect(self.context_menu)
         self.grid.itemDoubleClicked.connect(lambda *_: self.edit())
         self.grid.itemSelectionChanged.connect(self.selection_changed)
-        self.search.textChanged.connect(self.refresh)
+        self.grid.horizontalHeader().setSortIndicator(0,Qt.SortOrder.AscendingOrder)
+        self.grid.horizontalHeader().sortIndicatorChanged.connect(self.catalog_sort_changed)
+        self.search.textChanged.connect(lambda *_:self.search_timer.start())
+        self.search.returnPressed.connect(self.refresh)
         for control in (self.category, self.supplier):
             control.currentIndexChanged.connect(self.refresh)
         self.status_filter.currentIndexChanged.connect(self.refresh)
@@ -1088,8 +1095,15 @@ class ProductsPage(Page):
         self.refresh()
 
     def refresh(self, *_):
-        all_products = self.store.products()
-        self._catalog_all_products=all_products;self._category_records=self.store.categories()
+        self.search_timer.stop()
+        self.store.require_menu('products')
+        cache_key=(self.store.actor['id'],tuple(self.store.audit_revision()))
+        if cache_key!=self._catalog_cache_key:
+            products=self.store.products();categories=self.store.categories();suppliers=self.store.partners('supplier')
+            self._catalog_all_products=products;self._category_records=categories;self._catalog_suppliers=suppliers
+            self._catalog_search_index={p['id']:'\n'.join(str(p.get(key,'')) for key in ('name','code','barcode','specification','keywords','receipt_name')).casefold()+'\n'+'\n'.join(p.get('unit_barcodes',[])).casefold() for p in products}
+            self._catalog_cache_key=cache_key
+        all_products=self._catalog_all_products
         current_category, current_supplier = self.category.currentData(), self.supplier.currentData()
         self.category.blockSignals(True)
         self.supplier.blockSignals(True)
@@ -1100,7 +1114,7 @@ class ProductsPage(Page):
         self.category.setCurrentIndex(max(0, self.category.findData(current_category)))
         self.supplier.clear()
         self.supplier.addItem("전체 공급사", None)
-        suppliers = self.store.partners("supplier")
+        suppliers = self._catalog_suppliers
         supplier_map = {p["id"]: p["name"] for p in suppliers}
         for partner in suppliers:
             self.supplier.addItem(partner["name"], partner["id"])
@@ -1119,8 +1133,10 @@ class ProductsPage(Page):
                 values.add(path[index])
             for value in sorted(values):field.addItem(value,value)
             field.setCurrentIndex(max(0,field.findData(old)));field.blockSignals(False)
-        rows = self.store.products(search=self.search.text(), supplier_id=self.supplier.currentData(),
-                                   category=self.category.currentData() or "", active_only=False)
+        query_key=(cache_key,self.search.text(),self.category.currentData(),self.supplier.currentData(),self.middle_filter.currentData(),self.small_filter.currentData(),self.tax_filter.currentData(),self.tracked_filter.currentData(),self.period_filter.currentData(),self.period_start.date().toJulianDay(),self.period_end.date().toJulianDay(),self.status_filter.currentData(),self.low_only.isChecked())
+        if query_key==self._catalog_filter_key:return
+        term=self.search.text().strip().casefold();category=self.category.currentData();supplier=self.supplier.currentData()
+        rows=[p for p in all_products if (not term or term in self._catalog_search_index[p['id']]) and (not category or p['category']==category) and (supplier is None or p['supplier_id']==supplier)]
         for field,key in ((self.middle_filter,'category_mid'),(self.small_filter,'category_small'),(self.tax_filter,'tax_mode')):
             if field.currentData():rows=[r for r in rows if r[key]==field.currentData()]
         if self.tracked_filter.currentData() is not None:rows=[r for r in rows if bool(r['tracked'])==self.tracked_filter.currentData()]
@@ -1135,17 +1151,8 @@ class ProductsPage(Page):
             rows = [r for r in rows if product_status(r) == self.status_filter.currentData()]
         if self.low_only.isChecked():
             rows = [r for r in rows if r["tracked"] and Decimal(r["stock_qty"]) <= Decimal(r["min_qty"])]
-        self.grid.fill([[r["code"], r["name"], r["category"], r["category_mid"], r["specification"], r["barcode"],
-                         supplier_map.get(r["supplier_id"], "—"), r["purchase_price"], r["sale_price"],
-                         Decimal(r["stock_qty"]), r["base_unit"], r["stock_cost"], product_status(r),r['category_small'],'과세' if r['tax_mode']=='taxable' else '면세','관리' if r['tracked'] else '제외',f"{r['price_basis']}{r['base_unit']}당"] for r in rows], rows)
-        from .tax_display import tax_icon,tax_style
-        icons={mode:tax_icon(mode) for mode in ('taxable','exempt')}
-        sorting=self.grid.isSortingEnabled();self.grid.setSortingEnabled(False)
-        for row_index in range(self.grid.rowCount()):
-            record=self.grid.item(row_index,0).data(Qt.ItemDataRole.UserRole);mode=record['tax_mode'];letter,caption,fg,bg=tax_style(mode)
-            self.grid.item(row_index,1).setIcon(icons[mode]);self.grid.item(row_index,1).setToolTip(f'{letter} · {caption} / '+record['name'])
-            tax_item=self.grid.item(row_index,14);tax_item.setText(letter+' · '+caption);tax_item.setForeground(QColor(fg));tax_item.setBackground(QColor(bg))
-        self.grid.setSortingEnabled(sorting)
+        self._catalog_supplier_map=supplier_map;self._catalog_matches=rows;self._catalog_page=0
+        self.sort_catalog_matches();self.render_catalog_page();self._catalog_filter_key=query_key
         self.refresh_category_tree()
         totals = {}
         for r in rows:
@@ -1154,8 +1161,68 @@ class ProductsPage(Page):
         quantities = " / ".join(f"{value:,.3f} {unit}" for unit, value in sorted(totals.items())) or "—"
         self.summary.setText(f"검색 {len(rows):,} / 전체 {len(all_products):,}품목 · 왼쪽 순번 1~{len(rows):,} · 과=과세 / 면=면세 · 재고 {quantities} · 원가 합계 {_won(sum(r['stock_cost'] for r in rows if r['tracked']))} 원")
 
+    def run_delayed_search(self):
+        try:self.refresh()
+        except (ValueError,PermissionError,OSError) as exc:
+            self._catalog_cache_key=None;self._catalog_filter_key=None;self._catalog_matches=[];self.grid.fill([]);self.summary.clear();self.fail(exc)
+
+    def catalog_values(self,rows):
+        suppliers=self._catalog_supplier_map
+        return [[r['code'],r['name'],r['category'],r['category_mid'],r['specification'],r['barcode'],suppliers.get(r['supplier_id'],'—'),r['purchase_price'],r['sale_price'],Decimal(r['stock_qty']),r['base_unit'],r['stock_cost'],product_status(r),r['category_small'],'과세' if r['tax_mode']=='taxable' else '면세','관리' if r['tracked'] else '제외',f"{r['price_basis']}{r['base_unit']}당"] for r in rows]
+
+    def sort_catalog_matches(self):
+        header=self.grid.horizontalHeader();column=header.sortIndicatorSection();descending=header.sortIndicatorOrder()==Qt.SortOrder.DescendingOrder
+        if column<0:return
+        self._catalog_matches.sort(key=(lambda r:r['code']) if column==0 else lambda r:self.catalog_values([r])[0][column],reverse=descending)
+
+    def catalog_sort_changed(self,*_):
+        if self._catalog_rendering or not self._catalog_matches:return
+        self.sort_catalog_matches();self.render_catalog_page()
+
+    def move_catalog_page(self,direction):
+        self.store.require_menu('products');self._catalog_page+=direction;self.render_catalog_page()
+
+    def render_catalog_page(self):
+        from .tax_display import tax_icon,tax_style
+        count=len(self._catalog_matches);size=self._catalog_page_size
+        self._catalog_page=max(0,min(self._catalog_page,max(0,(count-1)//size)))
+        start=self._catalog_page*size;rows=self._catalog_matches[start:start+size]
+        icons={mode:tax_icon(mode) for mode in ('taxable','exempt')}
+        self._catalog_rendering=True;blocked=self.grid.blockSignals(True);self.grid.setUpdatesEnabled(False)
+        try:
+            self.grid.fill(self.catalog_values(rows),rows)
+            sorting=self.grid.isSortingEnabled();self.grid.setSortingEnabled(False)
+            for index in range(self.grid.rowCount()):
+                record=self.grid.item(index,0).data(Qt.ItemDataRole.UserRole);mode=record['tax_mode'];letter,caption,fg,bg=tax_style(mode)
+                self.grid.item(index,1).setIcon(icons[mode]);self.grid.item(index,1).setToolTip(f"{letter} · {caption} / {record['name']}")
+                item=self.grid.item(index,14);item.setText(letter+' · '+caption);item.setForeground(QColor(fg));item.setBackground(QColor(bg))
+            self.grid.setSortingEnabled(sorting)
+            self.grid.setVerticalHeaderLabels([str(start+i+1) for i in range(len(rows))])
+        finally:
+            self.grid.blockSignals(blocked);self.grid.setUpdatesEnabled(True);self._catalog_rendering=False
+        self.previous_page.setEnabled(self._catalog_page>0);self.next_page.setEnabled(start+len(rows)<count)
+        self.page_label.setText(f"표시 {start+1 if count else 0:,}~{start+len(rows):,} / 검색 {count:,}개 · {self._catalog_page+1}/{max(1,(count+size-1)//size)}쪽 · 정렬·엑셀은 검색 전체 기준")
+        self.selection_changed()
+
+    def export(self):
+        from .widgets import authorize_output,export_rows
+        if not authorize_output(self):return
+        self.refresh()
+        return export_rows(self,self.title,[self.grid.horizontalHeaderItem(i).text() for i in range(self.grid.columnCount())],self.catalog_values(self._catalog_matches))
+
+    def print(self):
+        from .widgets import authorize_output
+        if not authorize_output(self):return
+        self.refresh();grid=DataGrid([self.grid.horizontalHeaderItem(i).text() for i in range(self.grid.columnCount())])
+        grid.horizontalHeader().setSortIndicator(self.grid.horizontalHeader().sortIndicatorSection(),self.grid.horizontalHeader().sortIndicatorOrder())
+        try:grid.fill(self.catalog_values(self._catalog_matches));grid.print_pages(self,self.title,'검색 결과 전체')
+        finally:grid.deleteLater()
+
     def refresh_category_tree(self):
         selected=tuple(value for value in (self.category.currentData(),self.middle_filter.currentData(),self.small_filter.currentData()) if value)
+        tree_key=(self._catalog_cache_key,selected)
+        if tree_key==getattr(self,'_catalog_tree_key',None):return
+        self._catalog_tree_key=tree_key
         self.category_tree.blockSignals(True);self.category_tree.clear();root=QTreeWidgetItem(self.category_tree,['전체분류']);root.setData(0,Qt.ItemDataRole.UserRole,());items={};current=root
         for record in self._category_records:
             parent=items.get(record['parent_id'],root);item=QTreeWidgetItem(parent,[f"{record['name']} ({record['product_count']:,})"]);item.setIcon(0,folder_icon(record['level'],record['active']));item.setData(0,Qt.ItemDataRole.UserRole,tuple(record['path']));item.setToolTip(0,' / '.join(record['path']));items[record['id']]=item
@@ -1309,12 +1376,14 @@ class ProductsPage(Page):
                 self.scan_result.setText(f"미등록 바코드: {barcode}")
                 self.scan.selectAll()
                 return
-            self.category.setCurrentIndex(0)
-            self.supplier.setCurrentIndex(0)
-            self.low_only.setChecked(False)
-            for field in (self.middle_filter,self.small_filter,self.tracked_filter,self.tax_filter,self.period_filter):field.setCurrentIndex(0)
-            self.status_filter.setCurrentIndex(0)
-            self.search.setText(barcode)
+            controls=(self.category,self.supplier,self.low_only,self.middle_filter,self.small_filter,self.tracked_filter,self.tax_filter,self.period_filter,self.status_filter,self.search)
+            blocked=[(control,control.blockSignals(True)) for control in controls]
+            try:
+                self.category.setCurrentIndex(0);self.supplier.setCurrentIndex(0);self.low_only.setChecked(False)
+                for field in (self.middle_filter,self.small_filter,self.tracked_filter,self.tax_filter,self.period_filter):field.setCurrentIndex(0)
+                self.status_filter.setCurrentIndex(0);self.search.setText(barcode)
+            finally:
+                for control,previous in blocked:control.blockSignals(previous)
             self.refresh()
             identifier = result["product"]["id"]
             for row in range(self.grid.rowCount()):

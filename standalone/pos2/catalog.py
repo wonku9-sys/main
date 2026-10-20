@@ -44,13 +44,15 @@ class CatalogMixin:
 
     def categories(self):
         self._require("catalog")
-        result = []
+        counts={}
+        for group in self.db.execute('SELECT category,category_mid,category_small,COUNT(*) AS n FROM products GROUP BY category,category_mid,category_small'):
+            path=tuple(group[key] for key in CATEGORY_FIELDS)
+            for level in (1,2,3):counts[path[:level]]=counts.get(path[:level],0)+group['n']
+        result,paths = [],{}
         for row in self.db.execute("SELECT * FROM product_categories ORDER BY level,name,id"):
             item = dict(row)
-            item["path"] = self._category_path(row["id"])
-            columns = ("category", "category_mid", "category_small")[:row["level"]]
-            clause = " AND ".join(f"{key}=?" for key in columns)
-            item["product_count"] = self.db.execute("SELECT COUNT(*) FROM products WHERE " + clause, item["path"]).fetchone()[0]
+            item['path']=paths.get(row['parent_id'],[])+[row['name']];paths[row['id']]=item['path']
+            item['product_count']=counts.get(tuple(item['path']),0)
             result.append(item)
         return result
 
@@ -204,7 +206,10 @@ class CatalogMixin:
 
     def _public_product(self, row):
         result = dict(row)
-        result['_edit_token']=self._edit_snapshot('products',row['id'])
+        from .shared_protocol import fingerprint
+        # The SELECT already contains the original record. Do not run another
+        # primary-key SELECT for every product just to fingerprint the same row.
+        result['_edit_token']=fingerprint({'record':{key:value for key,value in result.items() if key!='supplier_name'}})
         result["stock_qty"], result["min_qty"] = qtext(row["stock_qty"]), qtext(row["min_qty"])
         return result
 
@@ -221,7 +226,12 @@ class CatalogMixin:
             params.append(category)
         if active_only:
             sql += " AND p.active=1"
-        return [self._public_product(row) for row in self.db.execute(sql + " ORDER BY p.code", params)]
+        rows=[self._public_product(row) for row in self.db.execute(sql + " ORDER BY p.code", params)]
+        unit_barcodes={}
+        for unit in self.db.execute("SELECT product_id,barcode FROM product_units WHERE barcode<>''"):
+            unit_barcodes.setdefault(unit['product_id'],[]).append(unit['barcode'])
+        for row in rows:row['unit_barcodes']=unit_barcodes.get(row['id'],[])
+        return rows
 
     def trade_products(self, search="", supplier_id=None):
         self._require("trade")
