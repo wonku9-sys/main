@@ -23,7 +23,7 @@ class OfflineReportPage(Page):
         title, self.period, self.group, _ = {**REPORT_VIEWS, **SALES_VIEWS}[key]
         super().__init__(window, title, "저장된 확정 전표를 즉시 집계합니다. 반품 차감 · 현재 상품 분류 · 부가세 포함가 참고 계산입니다.")
         row = QHBoxLayout()
-        self.start, self.end = date_field(date.today().replace(day=1)), date_field()
+        self.start, self.end = date_field(), date_field()
         if key == "sales_realtime":
             self.start.setDate(self.end.date())
         self.supplier, self.category, self.search = QComboBox(), QComboBox(), QLineEdit()
@@ -84,7 +84,7 @@ class SalesHistoryPage(Page):
     def __init__(self,window,status):
         self.menu_key='sales_held' if status=='draft' else 'sales_cancelled';self.status=status
         super().__init__(window,'보류내역' if status=='draft' else '취소내역','PDF 판매관리 이력 메뉴 · 보류는 재고·대금에 반영되지 않습니다. 취소된 전표는 삭제하지 않고 이력으로 보관합니다.')
-        row=QHBoxLayout();self.start,self.end=date_field(date.today().replace(day=1)),date_field();self.search=QLineEdit();self.search.setPlaceholderText('전표번호 · 거래처 · 메모')
+        row=QHBoxLayout();self.start,self.end=date_field(),date_field();self.search=QLineEdit();self.search.setPlaceholderText('전표번호 · 거래처 · 메모')
         for c in (self.start,QLabel('~'),self.end,self.search):row.addWidget(c)
         row.addWidget(action('조회',self.refresh));self.body.addLayout(row)
         self.grid=self.table(['날짜','전표번호','판매처','작성자','금액','메모']);self.grid.cellDoubleClicked.connect(lambda *_:self.detail())
@@ -225,7 +225,7 @@ class MemberViewPage(Page):
         self.menu_key = key
         super().__init__(window,MEMBER_VIEWS[key],"회원의 로컬 거래·포인트를 조회합니다. 취소·초안은 상태를 구분하고, 구매 순위는 확정 순구매액 기준입니다.")
         row = QHBoxLayout()
-        self.start,self.end = date_field(date.today().replace(day=1)),date_field()
+        self.start,self.end = date_field(),date_field()
         self.member,self.search = QComboBox(),QLineEdit()
         self.search.setPlaceholderText("회원명 · 회원코드")
         for control in (self.start,QLabel("~"),self.end,self.member,self.search): row.addWidget(control)
@@ -444,7 +444,7 @@ class SalesFormsPage(Page):
         self.actions.addWidget(action("등록정보",self.edit))
         self.actions.addWidget(action("삭제",self.delete,danger=True))
         row = QHBoxLayout()
-        self.start,self.end,self.search = date_field(date.today().replace(day=1)),date_field(),QLineEdit()
+        self.start,self.end,self.search = date_field(),date_field(),QLineEdit()
         self.search.setPlaceholderText("문서번호 · 판매처 · 메모")
         for control in (self.start,QLabel("~"),self.end,self.search): row.addWidget(control)
         row.addWidget(action("조회",self.refresh)); row.addWidget(action("문서 인쇄·PDF",self.print_paper)); row.addWidget(action("문서 엑셀",self.export_paper))

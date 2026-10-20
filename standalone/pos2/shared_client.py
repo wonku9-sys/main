@@ -166,5 +166,7 @@ class ClientStore:
                 raise
             else:
                 if name in WRITES:self._clear_pending()
+                callback=self.__dict__.get('_ui_sound_callback')
+                if name in WRITES and callback:callback('delete' if name.startswith(('delete','cancel','void')) else 'save')
                 return result
         return call

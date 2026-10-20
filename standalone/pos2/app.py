@@ -100,7 +100,7 @@ SECTIONS = [
     ("2. 매입/발주관리", [("purchases", "매입전표", "trade"), ("purchase_suppliers", "공급사별 매입현황", "trade"), ("purchase_categories", "분류별 매입현황", "trade"), ("purchase_products", "단품별 매입현황", "trade"), ("purchase_documents", "전표별 매입현황", "trade"), ("purchase_statement", "매입계산서", "trade"), ("payments", "결제관리", "trade"), ("ledger", "거래처 원장", "trade")]),
     ("3. 판매관리", [*[(key,value[0],"trade") for key,value in SALES_VIEWS.items()], ("sales","판매내역 · 고객반품","trade"), ("sales_cancelled","취소내역","trade"), ("sales_held","보류내역","trade"), ("quotations","견적서","trade"), ("statements","거래명세서","trade")]),
     ("5. 마케팅관리", [("promotions","특매관리","loyalty"),("prices","가격변경예약","loyalty")]),
-    ("6. 재고관리", [("inventory", "현재고 · 입출고", "inventory"), ("opening_stock", "기초재고 등록", "inventory"), ("stock_waste", "재고 폐기", "inventory"), ("inventory_assets", "재고자산 현황", "inventory"), ("counts", "재고실사 입력 · 적용", "inventory"), ("closings", "현금 · 월재고 마감", ("inventory", "trade"))]),
+    ("6. 재고관리", [("inventory", "현재고-단품별", "inventory"), ("opening_stock", "기초재고 등록", "inventory"), ("stock_waste", "재고 폐기", "inventory"), ("inventory_assets", "재고자산 현황", "inventory"), ("counts", "재고실사 입력 · 적용", "inventory"), ("closings", "현금 · 월재고 마감", ("inventory", "trade")), ("inventory_categories","현재고-분류별","inventory"), ("inventory_suppliers","현재고-공급사별","inventory"), ("inventory_monthly","월말재고","inventory")]),
     ("7. 레포트관리", [("overview","업무 현황","reports"), *[(key,value[0],"reports") for key,value in REPORT_VIEWS.items()], ("reports","기간별 종합집계","reports"), ("commission","공급사 판매수수료","reports")]),
     ("8. 회원관리", [("members","회원조회/등록","loyalty"), *[(key,title,"loyalty") for key,title in MEMBER_VIEWS.items()], ("gifts","사은품조회/등록 · 지급","loyalty"), ("member_tax","(세금)계산서 참고자료","loyalty")]),
     ("0. 관리자 모드", [("permissions", "권한 설정", "admin")]),
@@ -307,6 +307,8 @@ class MainWindow(QMainWindow):
     def __init__(self, store, demo=False,network_path=None,popup_menus=False):
         super().__init__()
         self.store, self.demo = store, demo
+        from .ui_sounds import SoundController
+        self.sounds=SoundController(self)
         self.popup_menus=popup_menus;self.popup_windows={};self.personal_windows={}
         self.network_path=network_path;self.shared_service=None;self.shared_refresh=None
         self.pages, self.items, self.nav_actions, self.scrollers = {}, {}, {}, {}
@@ -556,6 +558,7 @@ class MainWindow(QMainWindow):
         self.alert_timer.stop()
         self.popup_timer.stop()
         self.navigation.disable()
+        self.sounds.stop()
         if self.shared_refresh:self.shared_refresh.stop()
         if self.shared_service:self.shared_service.stop()
         self.store.lock_diary();self.store.lock_household()
@@ -619,6 +622,9 @@ class MainWindow(QMainWindow):
         factories['opening_stock']=lambda:StockAdjustmentPage(self,'opening')
         factories['stock_waste']=lambda:StockAdjustmentPage(self,'waste')
         factories['inventory_assets']=lambda:InventoryAssetsPage(self)
+        from .inventory_status_ui import InventoryStatusPage
+        for page_key,group in (('inventory','products'),('inventory_categories','categories'),('inventory_suppliers','suppliers'),('inventory_monthly','monthly')):
+            factories[page_key]=lambda group=group:InventoryStatusPage(self,group)
         factories["suppliers"] = lambda: SuppliersPage(self)
         from .diary_ui import DiaryPage,WorkLogPage
         factories["diary"]=lambda:DiaryPage(self)
@@ -668,6 +674,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "조회 실패", str(exc))
             return False
         self.current_key, self.current_page = key, page
+        self.sounds.play('menu')
         if self.popup_menus and key in {'diary','household'}:
             # Keep the settings/landing page cached, but do not open a second
             # shell window behind the actual private editor.
@@ -954,6 +961,10 @@ def main(argv=None):
                             capture('-product-category-search',category_search);category_search.close();new_product.close()
                             from .menu_shortcuts import ShortcutGuide
                             shortcut_guide=ShortcutGuide(window);capture('-shortcut-guide',shortcut_guide);shortcut_guide.close()
+                            for key,suffix in (('inventory_categories','-inventory-categories'),('inventory_suppliers','-inventory-suppliers'),('inventory_monthly','-inventory-monthly')):
+                                assert window.open_page(key)
+                                if key=='inventory_categories':window.current_page.children.setChecked(True)
+                                capture(suffix,window)
                             from .supplier_ui import SupplierGroupsDialog
                             window.open_page("suppliers")
                             capture("-suppliers",window)

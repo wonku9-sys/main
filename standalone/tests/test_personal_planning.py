@@ -199,4 +199,4 @@ def test_sales_comparison_history_and_refresh_choices(app,book):
     draft=s.save_draft(dict(kind='sale',date='2026-10-19',partner_id=customer,lines=[dict(product_id=product,qty='1',unit_price='2.25')]))
     assert s.sales_history('draft','2026-10-01','2026-10-31')[0]['id']==draft
     p=OfflineReportPage(SimpleNamespace(store=s),'sales_realtime');p.refresh();assert p.refresh_interval.count()==5 and p.comparison.rowCount()==4;p.timer.stop();p.deleteLater()
-    history=SalesHistoryPage(SimpleNamespace(store=s),'draft');history.refresh();assert history.grid.rowCount()==1;history.deleteLater();app.processEvents()
+    history=SalesHistoryPage(SimpleNamespace(store=s),'draft');history.start.setDate(QDate(2026,10,1));history.end.setDate(QDate(2026,10,31));history.refresh();assert history.grid.rowCount()==1;history.deleteLater();app.processEvents()

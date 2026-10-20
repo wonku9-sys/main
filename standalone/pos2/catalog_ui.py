@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
     QMenu, QStyle, QTreeWidget, QTreeWidgetItem, QSpinBox, QTimeEdit,
 )
 
-from .widgets import DataGrid, Page, ScanField, won
+from .widgets import DataGrid, Page, ScanField, won, date_field
 from .permissions import can_action, restrict_button
 from .catalog import CATEGORY_FIELDS, DEFAULT_PRODUCT_CATEGORY
 from .category_tree import CategoryTree, folder_icon
@@ -627,11 +627,12 @@ class ProductDialog(QDialog):
         body = QVBoxLayout(widget)
         filters = QHBoxLayout()
         enabled = QCheckBox("기간 지정")
-        start, end = QDateEdit(QDate.currentDate().addMonths(-1)), QDateEdit(QDate.currentDate())
+        enabled.setChecked(True)
+        start, end = QDateEdit(QDate.currentDate()), QDateEdit(QDate.currentDate())
         for field in (start, end):
             field.setCalendarPopup(True)
             field.setDisplayFormat("yyyy-MM-dd")
-            field.setEnabled(False)
+            field.setEnabled(True)
             field.dateChanged.connect(self.refresh_details)
         enabled.toggled.connect(start.setEnabled)
         enabled.toggled.connect(end.setEnabled)
@@ -963,6 +964,12 @@ class ProductsPage(Page):
         self.supplier = QComboBox()
         self.status_filter = _combo([("전체 상태", ""), ("유효", "유효"), ("무효", "무효"), ("퇴출대상", "퇴출대상")], "유효")
         self.low_only = QCheckBox("최소재고 이하")
+        self.middle_filter=QComboBox();self.small_filter=QComboBox()
+        self.tracked_filter=_combo([('재고관리 전체',None),('재고관리 상품',True),('재고관리 제외',False)])
+        self.tax_filter=_combo([('과면세 전체',''),('과세','taxable'),('면세','exempt')])
+        self.period_filter=_combo([('기간조건 없음',''),('신규 등록일','created_at'),('상품 수정일','updated_at')])
+        self.period_start,self.period_end=date_field(),date_field()
+        self.period_start.setEnabled(False);self.period_end.setEnabled(False)
         filters = QHBoxLayout()
         for label, widget in (("검색", self.search), ("분류", self.category), ("공급사", self.supplier)):
             filters.addWidget(QLabel(label))
@@ -970,6 +977,12 @@ class ProductsPage(Page):
         filters.addWidget(self.status_filter)
         filters.addWidget(self.low_only)
         self.body.addLayout(filters)
+        details=QHBoxLayout()
+        for label,widget in (('중분류',self.middle_filter),('소분류',self.small_filter),('재고관리',self.tracked_filter),('과면세',self.tax_filter)):
+            details.addWidget(QLabel(label));details.addWidget(widget,1)
+        self.body.addLayout(details)
+        dates=QHBoxLayout();dates.addWidget(self.period_filter);dates.addWidget(self.period_start);dates.addWidget(QLabel('~'));dates.addWidget(self.period_end);dates.addStretch()
+        dates.addWidget(QLabel('등록·수정일 조건으로 새 상품/변경 상품을 찾아 라벨 출력할 수 있습니다.'));self.body.addLayout(dates)
         tools = QHBoxLayout()
         tools.addWidget(QLabel("USB 바코드"))
         tools.addWidget(self.scan)
@@ -982,7 +995,7 @@ class ProductsPage(Page):
         _button("라벨 인쇄", self.print_labels, tools)
         _button("조회", self.refresh, tools)
         self.body.addLayout(tools)
-        self.grid = self.table(["상품코드", "상품명", "대분류", "중분류", "규격", "바코드", "공급사", "매입단가", "판매단가", "현재고", "단위", "재고 원가액", "상태"])
+        self.grid = self.table(["상품코드", "상품명", "대분류", "중분류", "규격", "바코드", "공급사", "매입단가", "판매단가", "현재고", "단위", "재고 원가액", "상태","소분류","과면세","재고관리","단가 기준"])
         for column, width in enumerate((85, 185, 80, 80, 80, 130, 130, 100, 100, 95, 60, 115, 65)):
             self.grid.setColumnWidth(column, width)
         self.summary = QLabel()
@@ -998,6 +1011,8 @@ class ProductsPage(Page):
             control.currentIndexChanged.connect(self.refresh)
         self.status_filter.currentIndexChanged.connect(self.refresh)
         self.low_only.toggled.connect(self.refresh)
+        for control in (self.middle_filter,self.small_filter,self.tracked_filter,self.tax_filter,self.period_filter):control.currentIndexChanged.connect(self.refresh)
+        for control in (self.period_start,self.period_end):control.dateChanged.connect(self.refresh)
         self.refresh()
 
     def refresh(self, *_):
@@ -1019,15 +1034,31 @@ class ProductsPage(Page):
         self.supplier.setCurrentIndex(max(0, self.supplier.findData(current_supplier)))
         self.category.blockSignals(False)
         self.supplier.blockSignals(False)
+        for field,key,parent_key in ((self.middle_filter,'category_mid','category'),(self.small_filter,'category_small','category_mid')):
+            old=field.currentData();field.blockSignals(True);field.clear();field.addItem('전체','')
+            options=[p for p in all_products if (not self.category.currentData() or p['category']==self.category.currentData())]
+            if key=='category_small' and self.middle_filter.currentData():options=[p for p in options if p['category_mid']==self.middle_filter.currentData()]
+            for value in sorted({p[key] for p in options if p[key]}):field.addItem(value,value)
+            field.setCurrentIndex(max(0,field.findData(old)));field.blockSignals(False)
         rows = self.store.products(search=self.search.text(), supplier_id=self.supplier.currentData(),
                                    category=self.category.currentData() or "", active_only=False)
+        for field,key in ((self.middle_filter,'category_mid'),(self.small_filter,'category_small'),(self.tax_filter,'tax_mode')):
+            if field.currentData():rows=[r for r in rows if r[key]==field.currentData()]
+        if self.tracked_filter.currentData() is not None:rows=[r for r in rows if bool(r['tracked'])==self.tracked_filter.currentData()]
+        period_key=self.period_filter.currentData();self.period_start.setEnabled(bool(period_key));self.period_end.setEnabled(bool(period_key))
+        if period_key:
+            first,last=self.period_start.date().toString('yyyy-MM-dd'),self.period_end.date().toString('yyyy-MM-dd')
+            def local_day(record):
+                try:return datetime.fromisoformat(record[period_key]).astimezone().date().isoformat()
+                except (ValueError,KeyError,TypeError):return ''
+            rows=[r for r in rows if first<=local_day(r)<=last]
         if self.status_filter.currentData():
             rows = [r for r in rows if product_status(r) == self.status_filter.currentData()]
         if self.low_only.isChecked():
             rows = [r for r in rows if r["tracked"] and Decimal(r["stock_qty"]) <= Decimal(r["min_qty"])]
         self.grid.fill([[r["code"], r["name"], r["category"], r["category_mid"], r["specification"], r["barcode"],
                          supplier_map.get(r["supplier_id"], "—"), r["purchase_price"], r["sale_price"],
-                         Decimal(r["stock_qty"]), r["base_unit"], r["stock_cost"], product_status(r)] for r in rows], rows)
+                         Decimal(r["stock_qty"]), r["base_unit"], r["stock_cost"], product_status(r),r['category_small'],'과세' if r['tax_mode']=='taxable' else '면세','관리' if r['tracked'] else '제외',f"{r['price_basis']}{r['base_unit']}당"] for r in rows], rows)
         totals = {}
         for r in rows:
             if r["tracked"]:
@@ -1153,6 +1184,7 @@ class ProductsPage(Page):
             self.category.setCurrentIndex(0)
             self.supplier.setCurrentIndex(0)
             self.low_only.setChecked(False)
+            for field in (self.middle_filter,self.small_filter,self.tracked_filter,self.tax_filter,self.period_filter):field.setCurrentIndex(0)
             self.status_filter.setCurrentIndex(0)
             self.search.setText(barcode)
             self.refresh()
@@ -1371,6 +1403,11 @@ class SettingsPage(Page):
             self.fields[key] = field
             form.addRow(label, field)
         self.body.addWidget(business)
+        sounds=QGroupBox('프로그램 효과음');sound_form=QFormLayout(sounds)
+        from .popup_sound import sound_checkbox
+        self.sound_enabled=sound_checkbox(self.store);sound_form.addRow(self.sound_enabled)
+        sound_note=QLabel('메뉴·팝업 열기/닫기·저장·수정·삭제에 짧은 효과음을 냅니다. 변경 즉시 현재 계정에 저장됩니다. 배경 음악은 별도 설정입니다.');sound_note.setWordWrap(True);sound_form.addRow(sound_note)
+        self.body.addWidget(sounds)
         calculation = QGroupBox("금액 계산 · 반올림")
         calculation_form = QFormLayout(calculation)
         self.rounding_mode = _combo([("소수점 2자리 보존 (기본)", "decimal"), ("원 단위 반올림", "won")])
@@ -1456,6 +1493,7 @@ class SettingsPage(Page):
         if guard and not guard.allow_leave(self):
             return
         settings = self.store.settings()
+        self.sound_enabled.blockSignals(True);self.sound_enabled.setChecked(self.store.popup_sound_enabled());self.sound_enabled.blockSignals(False)
         self.rounding_mode.setCurrentIndex(max(0, self.rounding_mode.findData(settings["rounding_mode"])))
         defaults = {"earn_bps": 100, "point_min": 1000, "point_step": 100}
         for key, field in self.fields.items():

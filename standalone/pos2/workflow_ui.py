@@ -39,7 +39,7 @@ def _warn(parent, error):
 
 
 def _dates(layout, callback):
-    start, end = date_field(date.today().replace(day=1)), date_field()
+    start, end = date_field(), date_field()
     layout.addWidget(QLabel("기간"))
     layout.addWidget(start)
     layout.addWidget(QLabel("~"))

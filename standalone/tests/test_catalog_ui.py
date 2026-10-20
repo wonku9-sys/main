@@ -113,6 +113,8 @@ def test_product_history_filters_posted_totals_and_refreshes_real_stock(app, sho
     store.post_document({"kind": "purchase", "date": "2026-10-10", "partner_id": supplier,
                          "lines": [{"product_id": product, "qty": "1.000", "unit_price": 12000}]})
     dialog = ProductDialog(store, get_product(store, product))
+    assert dialog.history_filters['purchases'][0].isChecked()
+    dialog.history_filters['purchases'][0].setChecked(False)
     assert dialog.history_tables["purchases"].rowCount() == 2
     assert "12,000" in dialog.history_summaries["purchases"].text()
     assert "1.000 kg" in dialog.stock_quantity.text()

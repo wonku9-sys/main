@@ -10,6 +10,7 @@ import secrets
 import sqlite3
 
 from .catalog import CatalogMixin
+from .inventory_reporting import InventoryReportingMixin
 from .backup_policy import BackupPolicyMixin
 from .commerce import CommerceMixin
 from .common import PERMISSIONS, ALLOWED_PERMISSIONS, now, text
@@ -69,7 +70,7 @@ def password_matches(password, encoded):
 
 
 @currency_boundary
-class Store(CatalogMixin, CommerceMixin, OperationsMixin, LoyaltyMixin, RecoveryMixin, BackupPolicyMixin, SettlementMixin, BackupScheduleMixin, SupplierMixin, PurchaseReportingMixin, OfflineFeaturesMixin, DiaryMixin,HouseholdMixin,EmailRecoveryMixin,HealthMixin,AttachmentMixin,InspirationMixin):
+class Store(InventoryReportingMixin, CatalogMixin, CommerceMixin, OperationsMixin, LoyaltyMixin, RecoveryMixin, BackupPolicyMixin, SettlementMixin, BackupScheduleMixin, SupplierMixin, PurchaseReportingMixin, OfflineFeaturesMixin, DiaryMixin,HouseholdMixin,EmailRecoveryMixin,HealthMixin,AttachmentMixin,InspirationMixin):
     def __init__(self, path):
         self.path = Path(path).expanduser().resolve() if str(path) != ":memory:" else None
         if self.path:
@@ -118,6 +119,7 @@ class Store(CatalogMixin, CommerceMixin, OperationsMixin, LoyaltyMixin, Recovery
             raise RuntimeError("중첩 업무 트랜잭션은 허용되지 않습니다.")
         try:
             self.db.execute("BEGIN IMMEDIATE")
+            self._pending_ui_sound=None
             yield self.db
             self.db.commit()
         except sqlite3.IntegrityError as exc:
@@ -129,6 +131,12 @@ class Store(CatalogMixin, CommerceMixin, OperationsMixin, LoyaltyMixin, Recovery
         except BaseException:
             self.db.rollback()
             raise
+        else:
+            kind=getattr(self,'_pending_ui_sound',None)
+            callback=getattr(self,'_ui_sound_callback',None)
+            if kind and callback:
+                try:callback(kind)
+                except (RuntimeError,OSError,ValueError):pass
 
     def _public_user(self, row):
         result = {key: row[key] for key in ("id", "code", "name", "role", "active")}
@@ -199,6 +207,10 @@ class Store(CatalogMixin, CommerceMixin, OperationsMixin, LoyaltyMixin, Recovery
             now(), self.actor["id"] if self.actor else None, action, entity, entity_id,
             json.dumps(convert_result(detail or {}), ensure_ascii=False, sort_keys=True, default=str),
         ))
+        if self.db.in_transaction:
+            if 'delete' in action or 'cancel' in action:self._pending_ui_sound='delete'
+            elif 'update' in action or 'edit' in action or 'change' in action:self._pending_ui_sound='edit'
+            elif action not in {'login','logout','read'}:self._pending_ui_sound='save'
 
     def users_count(self):
         return self.db.execute("SELECT COUNT(*) FROM users").fetchone()[0]

@@ -78,7 +78,7 @@ def test_existing_custom_admin_is_never_overwritten_by_default_login(context):
 @pytest.mark.parametrize("permission,keys", [
     ("catalog", {"products", "categories", "suppliers", "customers", "labels"}),
     ("trade", {"purchases", "payments", "sales", "ledger", "closings"}),
-    ("inventory", {"inventory", "opening_stock", "stock_waste", "inventory_assets", "counts", "closings"}),
+    ("inventory", {"inventory", "opening_stock", "stock_waste", "inventory_assets", "counts", "closings", "inventory_categories", "inventory_suppliers", "inventory_monthly"}),
     ("reports", {"overview", "reports", "commission"}),
     ("loyalty", {"members", "promotions", "prices", "gifts"}),
 ])

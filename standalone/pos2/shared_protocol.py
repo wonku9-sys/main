@@ -31,6 +31,8 @@ PRIVATE=PRIVATE|{'split_household_entry','household_custom_report'}
 PRIVATE=PRIVATE|{'work_log_detail','work_log_report','work_log_files','add_work_log_file','work_log_file_data','delete_work_log_file'}
 
 
+READS=READS|frozenset({'inventory_status'})
+
 def encode(value):
     def default(item):
         if isinstance(item,Decimal):return {'$decimal':str(item)}
