@@ -1,7 +1,7 @@
 """Resizable dialogs, maximize/fullscreen controls and accessible overflow."""
 from PySide6.QtCore import QEvent,QObject,Qt
 from PySide6.QtGui import QAction,QKeySequence
-from PySide6.QtWidgets import QApplication,QDialog,QScrollArea,QVBoxLayout,QWidget,QMenu
+from PySide6.QtWidgets import QApplication,QDialog,QScrollArea,QVBoxLayout,QWidget,QMenu,QPushButton,QHBoxLayout
 
 EXCLUDED={'QMessageBox','QInputDialog','QFileDialog','QPrintDialog','QPrintPreviewDialog'}
 
@@ -27,6 +27,19 @@ def accessible_content(dialog):
         outer=QVBoxLayout(dialog);outer.setContentsMargins(0,0,0,0)
         scroll=QScrollArea(dialog);scroll.setObjectName('popupScroll');scroll.setWidgetResizable(True)
         scroll.setWidget(surface);outer.addWidget(scroll)
+    # Keep a separate close control reachable even when the form is scrolled.
+    close=next((button for button in dialog.findChildren(QPushButton) if button.text()=='이 창 닫기'),None)
+    if close is None:
+        close=QPushButton('이 창 닫기',dialog);close.setAutoDefault(False)
+        close.clicked.connect(dialog.close)
+        footer=QHBoxLayout();footer.addStretch();footer.addWidget(close)
+        dialog.layout().addLayout(footer)
+    close.setToolTip('현재 팝업만 닫습니다. 저장하지 않은 작업은 먼저 확인합니다.\n단축키: Ctrl+W')
+    dialog._popup_close_button=close
+    close_action=QAction('이 창 닫기',dialog);close_action.setShortcut(QKeySequence('Ctrl+W'))
+    close_action.setShortcutContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+    close_action.setAutoRepeat(False);close_action.triggered.connect(dialog.close);dialog.addAction(close_action)
+    dialog._popup_close_action=close_action
     dialog.setMinimumSize(380,260)
     screen=dialog.screen()
     if screen and QApplication.platformName()!='offscreen':

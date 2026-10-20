@@ -3,7 +3,7 @@ from PySide6.QtWidgets import QProxyStyle, QStyle
 
 
 MENU_HELP = {
-    "lucky_numbers":"재미용으로 1~45 중 중복 없는 6개를 한 번에 한 개씩 뽑습니다. 로그인 없이도 사용할 수 있습니다.",
+    "lucky_numbers":"1~45 중 6개를 한 개씩·자동·5줄로 뽑는 재미용 추첨입니다. 로그인 없이도 사용할 수 있습니다.",
     "home": "업무 첫화면으로 이동합니다. 저장하지 않은 입력이 있으면 먼저 확인합니다.",
     "diary":"일기장 암호를 한 번 입력하면 같은 로그인 동안 다시 열 수 있습니다. 달력·태그·검색·소중한 일기로 기록을 찾으며 자리 비움 시 잠그고 닫기를 사용하세요.",
     "worklog":"업무·인수인계·물동량·인력·보관율·관리 손익을 기록하고 일·주·요일 통계를 봅니다. 업무 자료와 첨부는 별도 암호화하지 않습니다.",
@@ -68,11 +68,17 @@ ACTION_HELP = {
     "관리자 설정": MENU_HELP["settings"],
     "비밀번호 변경": "현재 비밀번호를 확인한 뒤 내 로그인 비밀번호를 변경합니다.",
     "로그아웃": "작업 저장과 종료 백업을 확인한 뒤 프로그램을 종료합니다.",
+    "단축키 안내": "사용할 수 있는 메뉴의 단축키와 기능 설명을 검색합니다.",
+    "새로고침": "현재 창의 목록을 다시 불러옵니다. 저장하지 않은 입력은 먼저 확인합니다.",
 }
 
 
 def attach_help(widget, text):
     if text:
+        from .menu_shortcuts import ACTION_KEYS, help_text
+        caption = widget.text() if hasattr(widget, 'text') else ''
+        if '단축키:' not in text:
+            text = help_text(text, ACTION_KEYS.get(caption, ()))
         widget.setToolTip(text)
         widget.setStatusTip(text)
         if hasattr(widget, "setToolTipDuration"):

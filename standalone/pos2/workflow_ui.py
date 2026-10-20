@@ -86,29 +86,36 @@ class PartnerPicker(QDialog):
 
 
 class ProductPicker(QDialog):
-    def __init__(self, parent):
+    def __init__(self, parent, product_loader=None, read_permissions=("trade",)):
         super().__init__(parent)
         self.store, self.record, self.unit_id = parent.store, None, None
         self.supplier_id = parent.partner.currentData() if getattr(parent, "kind", "").startswith("purchase") else None
         self.supplier_name = parent.partner.currentText() if self.supplier_id else ""
         self.selections, self.checked = [], {}
-        self.read_permissions = ("trade",)
+        self.read_permissions = read_permissions
+        self.product_loader = product_loader
+        self.on_apply = None; self.applied_batches = 0
         self.setWindowTitle("상품 검색")
         self.resize(1080, 600)
         body = QVBoxLayout(self)
         filters = QHBoxLayout()
         self.search = QLineEdit()
         self.search.setPlaceholderText("상품코드 · 기본/확장 바코드 · 상품명 · 규격으로 검색")
+        self.search.setToolTip('상품코드·바코드·상품명·규격을 입력하면 검색합니다.\n단축키: F4 검색칸 이동 · F5 다시 조회')
         filters.addWidget(self.search, 1)
-        self.supplier_only = QCheckBox("선택 공급사만")
+        self.search_button=action('검색 (F5)',self.refresh);filters.addWidget(self.search_button)
+        self.supplier_only = QCheckBox("선택 공급사만 (F7)")
         self.supplier_only.setChecked(bool(self.supplier_id))
         self.supplier_only.setEnabled(bool(self.supplier_id))
-        self.supplier_only.setToolTip("체크를 해제하면 전체 공급사의 등록 상품을 조회합니다.")
+        self.supplier_only.setToolTip("체크를 해제하면 전체 공급사의 등록 상품을 조회합니다.\n단축키: F7")
         filters.addWidget(self.supplier_only)
         body.addLayout(filters)
         self.supplier_label = QLabel(parent.partner.currentText() if self.supplier_id else "전체 공급사 상품")
         body.addWidget(self.supplier_label)
-        body.addWidget(QLabel("행을 더블클릭하면 한 품목을 적용합니다. 여러 품목은 체크 후 ‘체크 상품 적용’을 누르세요."))
+        body.addWidget(QLabel("Space·더블클릭: 한 품목 적용 · Enter: 체크 품목 일괄 적용 · F4: 검색칸 이동"))
+        self.keep_open = QCheckBox('적용 후 검색창 유지 · 연속 검색/추가')
+        self.keep_open.setChecked(True); self.keep_open.hide(); body.addWidget(self.keep_open)
+        self.result_label = QLabel(); body.addWidget(self.result_label)
         self.grid = DataGrid(["선택", "상품코드", "상품명", "규격", "바코드", "단위", "공급사", "매입가", "판매가", "현재고"])
         body.addWidget(self.grid, 1)
         self.search.textChanged.connect(self.refresh)
@@ -116,9 +123,17 @@ class ProductPicker(QDialog):
         self.grid.itemChanged.connect(self.check_changed)
         self.grid.cellDoubleClicked.connect(lambda *_: self.choose())
         controls = QHBoxLayout()
-        controls.addWidget(action("조회 품목 모두 체크", lambda: self.check_all(True)))
-        controls.addWidget(action("체크 모두 해제", lambda: self.check_all(False)))
-        self.apply_checked_button = action("체크 상품 적용", self.apply_checked, True)
+        self.check_row_button=action('선택행 체크 (F8)',lambda:self.check_current(True))
+        self.uncheck_row_button=action('선택행 체크해제 (F9)',lambda:self.check_current(False))
+        self.check_all_button=action('모두 체크',lambda:self.check_all(True))
+        self.uncheck_all_button=action('모두 체크해제',lambda:self.check_all(False))
+        for button,hint in ((self.check_row_button,'선택한 행을 체크합니다.\n단축키: F8'),
+                            (self.uncheck_row_button,'선택한 행의 체크를 해제합니다.\n단축키: F9'),
+                            (self.check_all_button,'현재 검색 결과에 표시된 상품을 모두 체크합니다.'),
+                            (self.uncheck_all_button,'다른 검색어에서 체크한 품목까지 모두 해제합니다.')):
+            button.setToolTip(hint);controls.addWidget(button)
+        self.apply_checked_button = action("체크된 상품 적용", self.apply_checked, True)
+        self.apply_checked_button.setToolTip('체크한 상품을 입력 목록에 한 번에 추가합니다. 전표는 최종 저장 전까지 재고·대금에 반영되지 않습니다.\n단축키: Enter')
         controls.addStretch()
         controls.addWidget(self.apply_checked_button)
         body.addLayout(controls)
@@ -131,15 +146,39 @@ class ProductPicker(QDialog):
         self.search.returnPressed.connect(lambda: self.apply_checked() if self.checked else self.choose())
         for button in self.findChildren(QPushButton):
             button.setAutoDefault(False)
+        self.shortcuts = []
+        for sequence, callback in (('F4', self.focus_search), ('F5', self.refresh),
+                                   ('F7', lambda:self.supplier_only.toggle() if self.supplier_only.isEnabled() else None),
+                                   ('F8', lambda:self.check_current(True)), ('F9', lambda:self.check_current(False))):
+            shortcut=QShortcut(QKeySequence(sequence),self);shortcut.activated.connect(callback);self.shortcuts.append(shortcut)
+        single=QShortcut(QKeySequence('Space'),self.grid);single.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut);single.activated.connect(self.choose);self.shortcuts.append(single)
+        enter=QShortcut(QKeySequence('Return'),self.grid);enter.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut);enter.activated.connect(lambda:self.apply_checked() if self.checked else self.choose());self.shortcuts.append(enter)
         self.refresh()
 
+    def set_apply_callback(self, callback):
+        self.on_apply = callback; self.keep_open.show()
+
+    def focus_search(self):
+        self.search.setFocus(); self.search.selectAll()
+
+    def check_current(self, checked):
+        row=self.grid.currentRow()
+        if row>=0:self.grid.item(row,0).setCheckState(Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked)
+
+    def records(self, search='', supplier_id=None):
+        if self.product_loader is None:return self.store.trade_products(search,supplier_id)
+        query=search.casefold()
+        return [r for r in self.product_loader() if r.get('active',True)
+                and (not supplier_id or r.get('supplier_id')==supplier_id)
+                and query in ' '.join(str(r.get(key,'')) for key in ('code','barcode','name','specification')).casefold()]
+
     def refresh(self, *_):
-        records = self.store.trade_products(self.search.text().strip(), self.supplier_id if self.supplier_only.isChecked() else None)
+        records = self.records(self.search.text().strip(), self.supplier_id if self.supplier_only.isChecked() else None)
         # A scope change must not silently apply checked products hidden outside it.
         if self.supplier_only.isChecked():
             self.checked = {key: row for key, row in self.checked.items() if row.get("supplier_id") == self.supplier_id}
         self.grid.blockSignals(True)
-        self.grid.fill([["", r["code"], r["name"], r["specification"], r["barcode"], r["base_unit"], r.get("supplier_name") or "미지정", r["purchase_price"], r["sale_price"], Decimal(r["stock_qty"])] for r in records], records)
+        self.grid.fill([["", r["code"], r["name"], r.get("specification",''), r.get("barcode",''), r["base_unit"], r.get("supplier_name") or "미지정", r["purchase_price"], r["sale_price"], Decimal(r["stock_qty"]) if 'stock_qty' in r else '—'] for r in records], records)
         for index in range(self.grid.rowCount()):
             cell = self.grid.item(index, 0)
             record = cell.data(Qt.ItemDataRole.UserRole)
@@ -152,7 +191,7 @@ class ProductPicker(QDialog):
             self.grid.selectRow(0)
 
     def update_checked_count(self):
-        self.apply_checked_button.setText(f"체크 상품 적용 ({len(self.checked):,})")
+        self.apply_checked_button.setText(f"체크된 상품 적용 ({len(self.checked):,})")
 
     def check_changed(self, item):
         if item.column() != 0:
@@ -177,21 +216,41 @@ class ProductPicker(QDialog):
             return _warn(self, "적용할 상품을 체크하세요.")
         self.selections = [(record, None) for record in self.checked.values()]
         self.record, self.unit_id = self.selections[0]
-        self.accept()
+        self.deliver()
+
+    def deliver(self):
+        if self.on_apply is None:
+            self.accept();return
+        try:
+            fresh={r['id']:r for r in self.records()}
+            selections=[]
+            for record,unit_id in self.selections:
+                if record['id'] not in fresh:raise ValueError('사용할 수 없는 상품이 있습니다. 다시 검색해 선택하세요.')
+                if unit_id and not any(u['id']==unit_id and u.get('active',True) for u in self.store.units(record['id'])):
+                    raise ValueError('사용 중지된 확장단위입니다. 다시 선택하세요.')
+                selections.append((fresh[record['id']],unit_id))
+            self.on_apply(selections)
+        except (ValueError,PermissionError) as exc:
+            _warn(self,exc);return
+        self.applied_batches+=1;self.checked.clear()
+        self.result_label.setText(f'{len(selections):,}개 품목을 입력 목록에 추가했습니다. 전표는 최종 저장 전입니다.')
+        if not self.keep_open.isChecked():self.accept();return
+        self.selections=[];self.search.clear();self.refresh();self.focus_search()
 
     def choose(self):
         record = self.grid.selected()
         if not record:
             return
         self.record = record
-        found = self.store.lookup_barcode(self.search.text().strip()) if self.search.text().strip() else None
+        self.unit_id = None
+        found = self.store.lookup_barcode(self.search.text().strip()) if self.search.text().strip() and self.product_loader is None else None
         if found and found["product"]["id"] == record["id"] and found.get("unit"):
             if not found["unit"].get("active", True):
                 _warn(self, "사용 중지된 확장단위입니다. 상품명으로 검색해 유효한 단위를 선택하세요.")
                 return
             self.unit_id = found["unit"]["id"]
         self.selections = [(self.record, self.unit_id)]
-        self.accept()
+        self.deliver()
 
 
 class PurchaseSourcePicker(QDialog):
@@ -565,9 +624,8 @@ class TradeDialog(QDialog):
             from .catalog_ui import ProductDialog
             dialog = ProductDialog(self.store, parent=self)
             dialog.supplier.setCurrentIndex(max(0, dialog.supplier.findData(self.partner.currentData())))
-            if dialog.exec() == QDialog.DialogCode.Accepted and dialog.saved_id:
-                product = next(row for row in self.store.products() if row["id"] == dialog.saved_id)
-                self.apply_master_product(product["id"])
+            dialog.saved.connect(self.apply_master_product)
+            dialog.exec()
         except (ValueError, PermissionError) as exc:
             _warn(self, exc)
 
@@ -691,9 +749,13 @@ class TradeDialog(QDialog):
         if self.readonly or self.is_return:
             return
         dialog = ProductPicker(self)
-        if dialog.exec() != QDialog.DialogCode.Accepted:
-            return
-        for record, unit_id in dialog.selections or [(dialog.record, dialog.unit_id)]:
+        dialog.set_apply_callback(self.apply_picked_products)
+        if dialog.exec() == QDialog.DialogCode.Accepted and not dialog.applied_batches:
+            self.apply_picked_products(dialog.selections or [(dialog.record, dialog.unit_id)])
+
+    def apply_picked_products(self, selections):
+        if self.readonly or self.is_return:return
+        for record, unit_id in selections:
             if not record:
                 continue
             self.product_map[record["id"]] = record

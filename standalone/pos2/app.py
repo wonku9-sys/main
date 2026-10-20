@@ -22,6 +22,7 @@ from .store import Store
 from .permissions import has_menu
 from .navigation import NavigationGuard
 from .menu_help import MENU_HELP, ACTION_HELP, MenuHelpStyle, attach_help
+from .menu_shortcuts import menu_keys, help_text, bind_action, COMMON_KEYS
 from .widgets import DataGrid, FormDialog, Page, ScanField, action, date_field, won
 from .offline_menus import REPORT_VIEWS, SALES_VIEWS, BASIC_VIEWS, MEMBER_VIEWS, FORM_VIEWS
 
@@ -309,6 +310,7 @@ class MainWindow(QMainWindow):
         self.popup_menus=popup_menus;self.popup_windows={};self.personal_windows={}
         self.network_path=network_path;self.shared_service=None;self.shared_refresh=None
         self.pages, self.items, self.nav_actions, self.scrollers = {}, {}, {}, {}
+        self.menu_keys = menu_keys(SECTIONS)
         self.purchase_navigation_item = None
         self.current_page, self.current_key = None, None
         self._backup_runtime_enabled, self._exit_backup_done = False, False
@@ -401,23 +403,29 @@ class MainWindow(QMainWindow):
             for key, caption, _permission in allowed:
                 item = parent if key == "home" else QTreeWidgetItem(parent, [caption])
                 item.setData(0, Qt.ItemDataRole.UserRole, key)
-                item.setToolTip(0, MENU_HELP[key])
+                hint = help_text(MENU_HELP[key], self.menu_keys[key])
+                item.setToolTip(0, hint)
+                item.setStatusTip(0, hint)
                 if title!='나의 기록':item.setIcon(0,self.style().standardIcon(QStyle.StandardPixmap.SP_DirHomeIcon if key=='home' else QStyle.StandardPixmap.SP_FileIcon))
                 self.items[key] = item
                 from .menu_icons import menu_icon
                 item.setIcon(0,menu_icon(key))
                 nav = QAction(caption, self)
                 nav.setIcon(menu_icon(key));nav.setIconVisibleInMenu(True)
-                attach_help(nav, MENU_HELP[key])
+                attach_help(nav, hint)
                 nav.setCheckable(True)
-                nav.triggered.connect(lambda checked=False, page=key: self.open_page(page))
+                nav.setShortcuts([QKeySequence(sequence) for sequence in self.menu_keys[key]])
+                nav.setShortcutContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+                nav.setAutoRepeat(False)
+                nav.triggered.connect(lambda checked=False, page=key: self.go_home() if page=='home' else self.open_page(page))
                 menu.addAction(nav)
+                self.addAction(nav)
                 self.nav_actions[key] = nav
                 if title=="나의 기록":
                     from .personal_icons import personal_icon
                     button=action({"diary":"일기장  ·  별도 암호","household":"가계부  ·  나의 수입·지출","worklog":"업무일지  ·  오늘의 업무","lucky_numbers":"행운의 숫자  ·  재미있는 추첨"}[key],lambda checked=False,target=key:self.open_page(target))
                     button.setIcon(personal_icon(key));button.setIconSize(QSize(24,24))
-                    attach_help(button,MENU_HELP[key]);self.personal_layout.addWidget(button)
+                    attach_help(button,hint);self.personal_layout.addWidget(button)
         self.personal_panel.setVisible(bool(self.personal_navigation_root.childCount()))
         for title, callback, standard in (("첫화면", self.go_home, QStyle.StandardPixmap.SP_DirHomeIcon), ("상품장", lambda: self.open_page("products"), QStyle.StandardPixmap.SP_FileDialogContentsView), ("매입전표", lambda: self.open_page("purchases"), QStyle.StandardPixmap.SP_ArrowDown), ("판매 등록", lambda: self.new_trade("sale"), QStyle.StandardPixmap.SP_ArrowUp), ("F8 스캔", self.focus_scan, QStyle.StandardPixmap.SP_FileDialogDetailedView), ("조회", self.refresh, QStyle.StandardPixmap.SP_BrowserReload), ("엑셀 저장", self.export, QStyle.StandardPixmap.SP_DialogSaveButton), ("인쇄", self.print, QStyle.StandardPixmap.SP_FileIcon)):
             if title == "상품장" and not self.allowed("catalog") or title in ("매입전표", "판매 등록") and not self.allowed("trade"):
@@ -426,11 +434,16 @@ class MainWindow(QMainWindow):
             attach_help(tool, ACTION_HELP[title])
             tool.triggered.connect(callback)
             self.toolbar.addAction(tool)
-        for sequence, callback in (("Ctrl+Home", self.go_home), ("F8", self.focus_scan), ("F5", self.refresh), ("Ctrl+E", self.export), ("Ctrl+P", self.print), ("Ctrl+N", self.new_current)):
-            shortcut = QAction(self)
-            shortcut.setShortcut(QKeySequence(sequence))
-            shortcut.triggered.connect(callback)
-            self.addAction(shortcut)
+        self.common_shortcut_actions = {
+            title: bind_action(self, title, COMMON_KEYS[title], callback)
+            for title, callback in (("F8 스캔", self.focus_scan), ("조회", self.refresh),
+                                    ("엑셀 저장", self.export), ("인쇄", self.print),
+                                    ("새 항목", self.new_current), ("단축키 안내", self.show_shortcut_guide))
+        }
+        guide = self.common_shortcut_actions['단축키 안내']
+        attach_help(guide, ACTION_HELP['단축키 안내'])
+        self.menuBar().addAction(guide)
+        self.toolbar.addAction(guide)
         self.notify(f"새 독립판 DB: {store.path} · F8 바코드  F5 조회  Ctrl+E 엑셀  Ctrl+P 인쇄")
         independent=QAction('메뉴 독립 창',self);independent.setCheckable(True);independent.setChecked(self.popup_menus)
         independent.setToolTip('켜면 업무 메뉴를 독립 창으로 열어 상품장·매입전표 등 여러 화면에서 동시 작업합니다.')
@@ -550,6 +563,13 @@ class MainWindow(QMainWindow):
 
     def go_home(self):
         return self.navigation.request_home()
+
+    def show_shortcut_guide(self, parent=None):
+        from .menu_shortcuts import ShortcutGuide
+        guide = getattr(self, '_shortcut_guide', None)
+        if guide is None:
+            guide = self._shortcut_guide = ShortcutGuide(self, parent if isinstance(parent, QWidget) else self)
+        guide.showNormal(); guide.raise_(); guide.activateWindow()
 
     def recovery_email(self):
         from .email_ui import RecoveryEmailDialog
@@ -909,9 +929,13 @@ def main(argv=None):
                             assert "미지급잔액" in purchase.balance_label.text()
                             capture("-purchase", purchase)
                             picker = ProductPicker(purchase)
+                            picker.set_apply_callback(purchase.apply_picked_products)
                             assert picker.supplier_only.isChecked()
                             assert 0 < picker.grid.rowCount() < len(store.products())
+                            picker.check_all(True)
                             capture("-product-search", picker)
+                            picker.apply_checked();assert picker.isVisible() and not picker.checked and picker.applied_batches==1
+                            capture('-product-search-continuous',picker)
                             picker.close()
                             purchase.close()
                             source = next((store.document(row["id"]) for row in store.documents(kind="purchase", status="posted") if any(float(line["remaining_qty"]) > 0 for line in store.document(row["id"])["lines"])), None)
@@ -928,6 +952,8 @@ def main(argv=None):
                             category_search=CategorySearchDialog(store,new_product);category_search.filters[2].setText('신상품')
                             assert category_search.grid.rowCount()>0
                             capture('-product-category-search',category_search);category_search.close();new_product.close()
+                            from .menu_shortcuts import ShortcutGuide
+                            shortcut_guide=ShortcutGuide(window);capture('-shortcut-guide',shortcut_guide);shortcut_guide.close()
                             from .supplier_ui import SupplierGroupsDialog
                             window.open_page("suppliers")
                             capture("-suppliers",window)

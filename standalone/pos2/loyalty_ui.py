@@ -238,6 +238,7 @@ class PromotionDialog(FormDialog):
         self.lines.setColumnWidth(2, 200)
         self.body.addWidget(self.lines, 1)
         self.body.addWidget(action("상품 추가", self.add_line))
+        self.body.addWidget(action('상품 검색 · 체크해서 일괄 추가',self.pick_products))
         for row in self.record.get("items", []):
             self.add_line(row)
         if not self.lines.rowCount():
@@ -264,6 +265,18 @@ class PromotionDialog(FormDialog):
             if self.lines.cellWidget(row, 0) is product:
                 self.lines.removeRow(row)
                 return
+
+    def pick_products(self):
+        from .workflow_ui import ProductPicker
+        picker=ProductPicker(self,product_loader=self.store.loyalty_products,read_permissions=('loyalty',))
+        picker.set_apply_callback(self.apply_picked_products);picker.exec()
+
+    def apply_picked_products(self,selections):
+        existing={self.lines.cellWidget(row,0).currentData() for row in range(self.lines.rowCount())}
+        self.products=self.store.loyalty_products()
+        for product,_unit_id in selections:
+            if product['id'] not in existing:
+                self.add_line({'product_id':product['id']});existing.add(product['id'])
 
     def save(self):
         items = [{"product_id": self.lines.cellWidget(r, 0).currentData(), "purchase_price": self.lines.cellWidget(r, 1).text().strip() or None, "sale_price": self.lines.cellWidget(r, 2).text().strip() or None} for r in range(self.lines.rowCount())]

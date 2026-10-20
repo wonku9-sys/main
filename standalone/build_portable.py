@@ -122,7 +122,7 @@ def build(output, native=False):
         capture = screenshot.with_name(screenshot.stem + suffix + screenshot.suffix)
         if not capture.is_file() or capture.stat().st_size < 1000:
             raise RuntimeError(f"The frozen executable did not validate its new workflow screen: {suffix}")
-    for suffix in ('-worklog-independent','-diary-independent','-lucky-mixing','-new-product-categories','-product-category-search'):
+    for suffix in ('-worklog-independent','-diary-independent','-lucky-mixing','-new-product-categories','-product-category-search','-product-search-continuous','-shortcut-guide'):
         capture=screenshot.with_name(screenshot.stem+suffix+screenshot.suffix)
         if not capture.is_file() or capture.stat().st_size<1000:
             raise RuntimeError(f"The frozen executable did not validate visible single-window content: {suffix}")

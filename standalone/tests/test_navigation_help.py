@@ -8,6 +8,7 @@ from PySide6.QtWidgets import QApplication, QDialog, QMessageBox, QStyle, QPushB
 from pos2.app import MainWindow
 from pos2.catalog_ui import ProductDialog
 from pos2.menu_help import MENU_HELP, MenuHelpStyle
+from pos2.menu_shortcuts import help_text
 from pos2.store import Store
 from pos2.workflow_ui import TradeDialog, PurchaseSourcePicker
 
@@ -119,8 +120,8 @@ def test_all_menu_surfaces_have_specific_hover_help(shop):
     _, _, window, *_ = shop
     assert set(window.items) == set(MENU_HELP)
     for key, item in window.items.items():
-        assert item.toolTip(0) == MENU_HELP[key]
-        assert window.nav_actions[key].toolTip() == MENU_HELP[key]
+        assert item.toolTip(0) == help_text(MENU_HELP[key], window.menu_keys[key])
+        assert window.nav_actions[key].toolTip() == item.toolTip(0)
         assert window.nav_actions[key].associatedObjects()
     assert all(action.toolTip() for action in window.toolbar.actions())
     buttons = window.pages["home"].links.findChildren(QPushButton)

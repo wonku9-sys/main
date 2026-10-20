@@ -160,7 +160,7 @@ class LoyaltyMixin:
     def loyalty_products(self):
         self._loyalty_require_any("loyalty", "catalog", "trade")
         return [dict(row) for row in self.db.execute(
-            "SELECT id,code,name,base_unit,price_basis,purchase_price,sale_price,active FROM products ORDER BY name,id")]
+            "SELECT id,code,name,barcode,specification,supplier_id,base_unit,price_basis,purchase_price,sale_price,active FROM products ORDER BY name,id")]
 
     def save_member(self, data, id=None):
         with self._tx():

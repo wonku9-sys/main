@@ -319,6 +319,10 @@ class SalesFormDialog(FormDialog):
             self.scan = ScanField(); self.scan.setPlaceholderText("바코드 스캔 후 Enter")
             self.scan.scanned.connect(self.scan_product)
             tools.addWidget(self.scan,1); tools.addWidget(action("품목 추가",self.add_line))
+            self.product_search_button=action('상품검색 (F5)',self.pick_products)
+            self.product_search_button.setEnabled(not self.readonly);tools.addWidget(self.product_search_button)
+            from PySide6.QtGui import QShortcut,QKeySequence
+            self.product_search_shortcut=QShortcut(QKeySequence('F5'),self);self.product_search_shortcut.activated.connect(self.pick_products)
             self.body.addLayout(tools)
             if record:
                 self.partner.setCurrentIndex(max(0,self.partner.findData(record["partner_id"])))
@@ -361,6 +365,18 @@ class SalesFormDialog(FormDialog):
         if saved:
             row["unit"].setCurrentIndex(max(0,row["unit"].findData(saved.get("unit_id"))))
             row["qty"].setText(saved["qty"]); row["price"].setText(str(saved["unit_price"]))
+
+    def pick_products(self):
+        if self.readonly or not self.manual:return
+        from .workflow_ui import ProductPicker
+        picker=ProductPicker(self);picker.set_apply_callback(self.apply_picked_products);picker.exec()
+
+    def apply_picked_products(self,selections):
+        if self.readonly or not self.manual:return
+        for product,unit_id in selections:
+            self.products[product['id']]=product
+            self.add_line(product['id'])
+            row=self.rows[-1];row['unit'].setCurrentIndex(max(0,row['unit'].findData(unit_id)))
 
     def product_changed(self,row):
         row["unit"].blockSignals(True); row["unit"].clear()

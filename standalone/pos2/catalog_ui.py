@@ -438,6 +438,7 @@ class CategorySearchDialog(QDialog):
 
 class ProductDialog(QDialog):
     """Real product editor with read-only transaction history and unit CRUD."""
+    saved = Signal(int)
 
     def reject(self):
         from .navigation import confirm_dialog_exit
@@ -457,7 +458,7 @@ class ProductDialog(QDialog):
         root = QVBoxLayout(self)
         root.setContentsMargins(22, 18, 22, 18)
         head = QHBoxLayout()
-        heading = QLabel("상품 등록정보" if record else "새 상품 등록")
+        heading = self.heading = QLabel("상품 등록정보" if record else "새 상품 등록")
         heading.setObjectName("dialogHeading")
         head.addWidget(heading)
         head.addStretch()
@@ -482,6 +483,10 @@ class ProductDialog(QDialog):
         footer.addWidget(self.meta)
         footer.addStretch()
         self.apply_button = _button("적용", self.apply_changes, footer)
+        self.apply_button.setToolTip('입력 내용을 즉시 저장하고 창을 유지합니다. 같은 상품을 계속 수정할 수 있습니다.')
+        self.next_button = _button('저장 후 다음 상품', self.next_record, footer)
+        self.next_button.setEnabled(can_action(self.store.actor, 'products', 'create'))
+        self.next_button.setToolTip('현재 상품을 저장한 뒤 새 상품 입력칸을 엽니다. 분류·공급사는 이어서 사용합니다.')
         self.cancel_button = _button("닫기", self.reject, footer)
         self.save_button = _button("저장", self.save, footer, True)
         root.addLayout(footer)
@@ -767,6 +772,7 @@ class ProductDialog(QDialog):
             mark_saved(self)
             self.error_label.clear()
             self.refresh_details()
+            self.saved.emit(self.saved_id)
         except (ValueError, PermissionError) as exc:
             self.error_label.setText(str(exc))
             return False
@@ -775,7 +781,26 @@ class ProductDialog(QDialog):
         return True
 
     def apply_changes(self):
-        self.save(False)
+        if self.save(False):
+            self.error_label.setText('저장되었습니다. 계속 수정하거나 ‘저장 후 다음 상품’으로 새 상품을 입력하세요.')
+
+    def next_record(self):
+        if not can_action(self.store.actor, 'products', 'create'):
+            self.error_label.setText('새 상품을 등록할 권한이 없습니다.');return
+        if not self.save(False):return
+        path = [self.fields[key].text() for key in CATEGORY_FIELDS]
+        self.record = {}; self.saved_id = None
+        for key, field in self.fields.items():
+            if key not in CATEGORY_FIELDS:field.setText('0' if key in {'purchase_price','sale_price','min_qty'} else '')
+        self.memo.clear(); self.product_status.setCurrentIndex(0); self.tracked.setChecked(True)
+        self.reload_categories(); self.set_category_path(path)
+        self.stock_table.fill([]); self.audit_table.fill([]); self.unit_table.fill([])
+        self.setWindowTitle('새 상품 등록'); self.heading.setText('새 상품 등록')
+        self.refresh_details(); self.tabs.setCurrentIndex(0)
+        from .navigation import mark_saved
+        mark_saved(self)
+        self.error_label.setText('이전 상품을 저장했습니다. 다음 상품을 입력하세요.')
+        self.fields['name'].setFocus()
 
     @staticmethod
     def _audit_text(detail):
@@ -1012,19 +1037,19 @@ class ProductsPage(Page):
 
     def add(self):
         dialog = ProductDialog(self.store, parent=self)
+        dialog.saved.connect(self._product_saved)
         dialog.exec()
-        if dialog.saved_id:
-            self.refresh()
-            self.product_saved.emit(dialog.saved_id)
+
+    def _product_saved(self, identifier):
+        self.refresh()
+        self.product_saved.emit(identifier)
 
     def edit(self):
         record = self.grid.selected()
         if record:
             dialog = ProductDialog(self.store, record, self)
+            dialog.saved.connect(self._product_saved)
             dialog.exec()
-            if dialog.saved_id:
-                self.refresh()
-                self.product_saved.emit(dialog.saved_id)
 
     def context_menu(self, position):
         row = self.grid.rowAt(position.y())

@@ -18,6 +18,8 @@ class PageWindow(QDialog):
         # scroll area into a dialog does not clear its hidden flag by itself.
         scroll.show()
         self.setWindowModality(Qt.WindowModality.NonModal)
+        from .menu_shortcuts import install_window_shortcuts
+        install_window_shortcuts(self, desktop)
 
     def refresh(self):
         owner=self._desktop_owner

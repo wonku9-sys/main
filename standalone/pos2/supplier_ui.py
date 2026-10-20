@@ -1,7 +1,7 @@
 """Supplier management layouts based on manual pp.72–76 and supplied screens."""
 from decimal import Decimal
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal, QDate
 from PySide6.QtWidgets import QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox, QFormLayout, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QScrollArea, QSpinBox, QTabWidget, QTextEdit, QVBoxLayout, QWidget
 
 from .catalog_ui import EntryDialog, ProductDialog
@@ -15,6 +15,7 @@ def confirm(parent, title, message):
 
 
 class SupplierDialog(QDialog):
+    saved = Signal(int)
     def __init__(self, window, record=None):
         super().__init__(window)
         self.store, self.record, self.saved_id = window.store, record or {}, None
@@ -114,6 +115,12 @@ class SupplierDialog(QDialog):
         self.buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
         self.buttons.button(QDialogButtonBox.StandardButton.Save).setText("저장")
         self.buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("닫기")
+        self.apply_button = self.buttons.addButton('적용', QDialogButtonBox.ButtonRole.ApplyRole)
+        self.apply_button.clicked.connect(self.apply_changes)
+        self.apply_button.setToolTip('입력 내용을 즉시 저장하고 창을 유지합니다. 같은 공급사를 계속 수정할 수 있습니다.')
+        self.next_button = self.buttons.addButton('저장 후 다음 공급사', QDialogButtonBox.ButtonRole.ActionRole)
+        self.next_button.clicked.connect(self.next_record)
+        self.next_button.setEnabled(not self.readonly and can_action(self.store.actor, 'suppliers', 'create'))
         self.buttons.accepted.connect(self.save)
         self.buttons.rejected.connect(self.reject)
         body.addWidget(self.buttons)
@@ -121,21 +128,45 @@ class SupplierDialog(QDialog):
             for control in (self.active, self.mode, self.commission, self.method, self.settlement_group, self.settlement_day, self.opening_date, self.memo):
                 control.setEnabled(False)
             self.buttons.button(QDialogButtonBox.StandardButton.Save).setEnabled(False)
+            self.apply_button.setEnabled(False)
 
-    def save(self):
+    def save(self, close=True):
         try:
             values = {key: field.text() for key, field in self.fields.items()}
             values.update(kind="supplier", active=self.active.isChecked(), supplier_mode=self.mode.currentData(), commission_bps=int(Decimal(str(self.commission.value())) * 100),
                           settlement_method=self.method.currentData(), settlement_group_id=self.settlement_group.currentData(), settlement_day=self.settlement_day.value(),
                           opening_date=self.opening_date.date().toString("yyyy-MM-dd"), memo=self.memo.toPlainText())
             self.saved_id = self.store.save_partner(values, self.record.get("id"))
+            self.record = next(row for row in self.store.partners('supplier') if row['id']==self.saved_id)
+            self.fields['code'].setText(self.record['code'])
             from .navigation import mark_saved
             mark_saved(self)
-            self.accept()
+            self.error_label.clear()
+            self.saved.emit(self.saved_id)
+            if close:self.accept()
             return True
         except (ValueError, PermissionError) as exc:
             self.error_label.setText(str(exc))
             return False
+
+    def apply_changes(self):
+        if self.save(False):
+            self.error_label.setText('저장되었습니다. 계속 수정하거나 ‘저장 후 다음 공급사’를 누르세요.')
+
+    def next_record(self):
+        if not can_action(self.store.actor, 'suppliers', 'create'):
+            self.error_label.setText('새 공급사를 등록할 권한이 없습니다.');return
+        if not self.save(False):return
+        self.record = {}; self.saved_id = None
+        for key, field in self.fields.items():field.setText('0' if key=='opening_balance' else '')
+        self.active.setChecked(True); self.mode.setCurrentIndex(0); self.commission.setValue(0)
+        self.method.setCurrentIndex(0); self.settlement_group.setCurrentIndex(0); self.settlement_day.setValue(0)
+        self.opening_date.setDate(QDate.currentDate()); self.memo.clear(); self.products_grid.fill([])
+        self.setWindowTitle('새 공급사 등록'); self.tabs.setCurrentIndex(0)
+        from .navigation import mark_saved
+        mark_saved(self)
+        self.error_label.setText('이전 공급사를 저장했습니다. 다음 공급사를 입력하세요.')
+        self.fields['name'].setFocus()
 
     def reject(self):
         from .navigation import confirm_dialog_exit
@@ -374,13 +405,16 @@ class SuppliersPage(Page):
             self.fail(exc)
 
     def add(self):
-        if SupplierDialog(self.window).exec() == QDialog.DialogCode.Accepted:
-            self.refresh()
+        dialog = SupplierDialog(self.window)
+        dialog.saved.connect(lambda *_: self.refresh())
+        dialog.exec()
 
     def edit(self, *_):
         row = self.grid.selected()
         if row:
-            SupplierDialog(self.window, row).exec()
+            dialog = SupplierDialog(self.window, row)
+            dialog.saved.connect(lambda *_: self.refresh())
+            dialog.exec()
             self.refresh()
 
     def set_active(self):
