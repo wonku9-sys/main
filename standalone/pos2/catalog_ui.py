@@ -9,7 +9,7 @@ import json
 from types import SimpleNamespace
 
 from PySide6.QtCore import QDate, QTime, Qt, Signal
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QShortcut, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
     QAbstractItemView, QCheckBox, QComboBox, QDateEdit, QDialog,
@@ -377,6 +377,65 @@ class PartnerPicker(QDialog):
             self.accept()
 
 
+def selectable_category_records(records):
+    by_id={r['id']:r for r in records};result=[]
+    for record in records:
+        current=record
+        for _ in range(4):
+            if not current or not current['active']:break
+            if not current['parent_id']:result.append(record);break
+            current=by_id.get(current['parent_id'])
+    return result
+
+
+class CategorySearchDialog(QDialog):
+    """Read-only three-level lookup; never creates categories from typed text."""
+    def __init__(self,store,parent=None,query=''):
+        super().__init__(parent);self.store=store;self.record=None;self.read_permissions=('catalog',)
+        self.setWindowTitle('상품분류 검색');self.resize(830,620);body=QVBoxLayout(self)
+        self.query=QLineEdit(query);self.query.setPlaceholderText('전체 경로 검색 · 분류명 일부로 검색');self.query.setClearButtonEnabled(True);body.addWidget(self.query)
+        row=QHBoxLayout();row.setSpacing(12);self.filters=[];self.shortcuts=[];self.focus_buttons=[]
+        for index,label in enumerate(('대분류','중분류','소분류')):
+            group=QWidget();line=QHBoxLayout(group);line.setContentsMargins(0,0,0,0);line.setSpacing(5)
+            field=QLineEdit();field.setClearButtonEnabled(True);field.setPlaceholderText(label+' 이름')
+            tag=QPushButton(f'{label} (F{index+5})');tag.setAutoDefault(False)
+            tag.setIcon(folder_icon(index+1,True))
+            def focus(checked=False,field=field):field.setFocus();field.selectAll()
+            tag.clicked.connect(focus);self.focus_buttons.append(tag)
+            line.addWidget(tag);line.addWidget(field,1);row.addWidget(group,1);self.filters.append(field)
+            shortcut=QShortcut(QKeySequence(f'F{index+5}'),self);shortcut.setContext(Qt.ShortcutContext.WindowShortcut);shortcut.activated.connect(focus);self.shortcuts.append(shortcut)
+        body.addLayout(row);self.grid=DataGrid(['대분류','중분류','소분류']);body.addWidget(self.grid,1)
+        self.grid.cellDoubleClicked.connect(lambda *_:self.choose())
+        self.summary=QLabel();self.summary.setWordWrap(True);body.addWidget(self.summary)
+        buttons=QDialogButtonBox(QDialogButtonBox.StandardButton.Ok|QDialogButtonBox.StandardButton.Cancel)
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText('선택 적용');buttons.button(QDialogButtonBox.StandardButton.Cancel).setText('취소')
+        buttons.accepted.connect(self.choose);buttons.rejected.connect(self.reject);body.addWidget(buttons)
+        self.query.textChanged.connect(self.refresh)
+        for field in self.filters:field.textChanged.connect(self.refresh)
+        self.refresh()
+
+    def refresh(self,*_):
+        query=self.query.text().strip().casefold();terms=[field.text().strip().casefold() for field in self.filters]
+        rows=[]
+        for record in selectable_category_records(self.store.categories()):
+            path=record['path']+['']*(3-len(record['path']))
+            if query and query not in ' / '.join(record['path']).casefold():continue
+            if any(term and term not in path[i].casefold() for i,term in enumerate(terms)):continue
+            rows.append(record)
+        self.grid.fill([r['path']+['']*(3-len(r['path'])) for r in rows],rows)
+        for i,record in enumerate(rows):
+            for column in range(len(record['path'])):self.grid.item(i,column).setIcon(folder_icon(column+1,True))
+        if rows:self.grid.selectRow(0)
+        self.summary.setText(f'{len(rows)}개 분류 · 등록된 유효 분류만 표시합니다. 행을 더블클릭하거나 선택 적용을 누르세요.')
+
+    def choose(self):
+        selected=self.grid.selected()
+        if not selected:return
+        self.record=next((r for r in selectable_category_records(self.store.categories()) if r['id']==selected['id']),None)
+        if self.record is not None:self.accept()
+        else:self.refresh();self.summary.setText('분류가 변경되었거나 무효 상태입니다. 다시 검색해 주세요.')
+
+
 class ProductDialog(QDialog):
     """Real product editor with read-only transaction history and unit CRUD."""
 
@@ -453,37 +512,43 @@ class ProductDialog(QDialog):
         layout = QVBoxLayout(content)
         layout.setContentsMargins(14, 15, 14, 15)
         classification = QFrame()
-        top = QGridLayout(classification)
+        top = QVBoxLayout(classification)
         top.setContentsMargins(4, 4, 4, 4)
-        top.setHorizontalSpacing(7)
-        top.setVerticalSpacing(6)
+        top.setSpacing(8)
+        choices=QHBoxLayout();choices.setSpacing(12);top.addLayout(choices)
+        def paired(label,field,stretch=0):
+            group=QWidget();line=QHBoxLayout(group);line.setContentsMargins(0,0,0,0);line.setSpacing(5)
+            text=QLabel(label);text.setBuddy(field);line.addWidget(text);line.addWidget(field,1);choices.addWidget(group,stretch)
+            return text
         self.product_status = _combo([("유효", "유효"), ("무효", "무효"), ("퇴출대상", "퇴출대상")], product_status(self.record))
         self.product_status.setToolTip("무효: 신규 거래 제외 / 퇴출대상: 재고 정리용 판매 가능")
-        top.addWidget(self.product_status, 0, 0)
+        paired('상태',self.product_status)
         self.tax_mode = _combo([("면세", "exempt"), ("과세", "taxable")], self.record.get("tax_mode", "exempt"))
-        top.addWidget(QLabel("과세"), 0, 1)
-        top.addWidget(self.tax_mode, 0, 2)
-        for col, (key, label) in enumerate((("category", "대분류"), ("category_mid", "중분류"), ("category_small", "소분류"))):
-            top.addWidget(QLabel(label), 0, col * 2 + 3)
+        paired('과면세',self.tax_mode)
+        self.category_displays={}
+        for key, label in (("category", "대분류"), ("category_mid", "중분류"), ("category_small", "소분류")):
             field = CategoryChoice()
             field.addItem("선택 안 함", "")
             field.setPlaceholderText(label)
             self.fields[key] = field
-            top.addWidget(field, 0, col * 2 + 4)
+            field.setParent(classification);field.hide()
+            display=QLineEdit();display.setReadOnly(True);display.setMinimumWidth(66)
+            display.setStyleSheet('QLineEdit{color:#214A40;background:#F6FAF7;font-weight:600;}')
+            display.setToolTip('오른쪽 분류 검색에서 대·중·소분류를 함께 선택합니다.')
+            self.category_displays[key]=display;paired(label,display,1)
+        self.classification_button=QPushButton('분류 검색');self.classification_button.clicked.connect(lambda:self.choose_category())
+        choices.addWidget(self.classification_button)
         self.fields["category"].currentIndexChanged.connect(self.reload_middle)
         self.fields["category_mid"].currentIndexChanged.connect(self.reload_small)
         self.reload_categories()
         suppliers = self.store.partners("supplier")
         options = [("공급사 미지정", None)] + [(f"{p['name']} · {p['code']}", p["id"]) for p in suppliers]
         self.supplier = _combo(options, self.record.get("supplier_id"))
-        top.addWidget(QLabel("공급사"), 1, 0)
-        top.addWidget(self.supplier, 1, 1, 1, 6)
+        supplier_row=QHBoxLayout();supplier_row.setSpacing(5);supplier_label=QLabel('공급사');supplier_label.setBuddy(self.supplier);supplier_row.addWidget(supplier_label)
+        supplier_row.addWidget(self.supplier,1)
         supplier_search = QPushButton("공급사 검색")
         supplier_search.clicked.connect(self.pick_supplier)
-        top.addWidget(supplier_search, 1, 7, 1, 2)
-        classification_button = QPushButton("분류 선택 / 검색")
-        classification_button.clicked.connect(self.choose_category)
-        top.addWidget(classification_button, 2, 0, 1, 3)
+        supplier_row.addWidget(supplier_search);top.addLayout(supplier_row)
         layout.addWidget(classification)
         columns = QHBoxLayout()
         left, right = QVBoxLayout(), QVBoxLayout()
@@ -641,6 +706,12 @@ class ProductDialog(QDialog):
         self._fill_category("category", [r for r in self.category_records if r["level"] == 1])
         self.set_category_path(path)
 
+    def apply_category_id(self,identifier):
+        fresh=self.store.categories();record=next((r for r in selectable_category_records(fresh) if r['id']==identifier),None)
+        if record is None:
+            self.error_label.setText('분류가 변경되었거나 무효 상태입니다. 다시 검색해 선택해 주세요.');return False
+        self.reload_categories();self.set_category_path(record['path']);self.error_label.clear();return True
+
     def set_category_path(self, path):
         path = list(path) + [""] * (3 - len(path))
         self.fields["category"].setText(path[0])
@@ -648,6 +719,7 @@ class ProductDialog(QDialog):
         self.fields["category_mid"].setText(path[1])
         self.reload_small()
         self.fields["category_small"].setText(path[2])
+        for key,display in self.category_displays.items():display.setText(self.fields[key].text() or '선택 없음')
 
     def reload_middle(self, *_):
         path = [self.fields["category"].text()]
@@ -658,11 +730,11 @@ class ProductDialog(QDialog):
         path = [self.fields["category"].text(), self.fields["category_mid"].text()]
         self._fill_category("category_small", [r for r in self.category_records if r["level"] == 3 and r["path"][:-1] == path])
 
-    def choose_category(self):
-        dialog = CategoryDialog(self.store, self, select=True)
+    def choose_category(self,query=''):
+        dialog = CategorySearchDialog(self.store, self, query=query)
+        dialog.query.setFocus()
         if dialog.exec() == QDialog.DialogCode.Accepted:
-            self.reload_categories()
-            self.set_category_path(dialog.record["path"])
+            self.apply_category_id(dialog.record['id'])
 
     def update_margin(self):
         try:

@@ -923,6 +923,11 @@ def main(argv=None):
                             returned.close()
                             window.open_page("categories")
                             capture("-categories", window)
+                            from .catalog_ui import ProductDialog,CategorySearchDialog
+                            new_product=ProductDialog(store,parent=window);capture('-new-product-categories',new_product)
+                            category_search=CategorySearchDialog(store,new_product);category_search.filters[2].setText('신상품')
+                            assert category_search.grid.rowCount()>0
+                            capture('-product-category-search',category_search);category_search.close();new_product.close()
                             from .supplier_ui import SupplierGroupsDialog
                             window.open_page("suppliers")
                             capture("-suppliers",window)
