@@ -66,6 +66,21 @@ def test_own_formatted_xlsx_roundtrip_parties_decimal_and_grams(shop):
     result=s.import_purchase_drafts(files);draft=s.document(result['created'][0])
     assert draft['total']==s.document(identifier)['total']
     assert [(l['input_qty'],l['price_basis'],l['unit_name']) for l in draft['lines']]==[('125.000',100,'g'),('2.000',1,'박스')]
+    reopened=TradeDialog(window,'purchase',draft)
+    assert reopened.line_rows[0]['unit'].currentData()=='grams'
+    assert reopened.payload()['lines'][0]['gram_input'] is True
+    assert Decimal(reopened.line_rows[0]['total'].text().replace(',',''))==Decimal('1500')
+    assert s.post_document(reopened.payload(),draft['id'])==draft['id']
+    posted=s.document(draft['id']);assert posted['total']==draft['total']
+    assert s.products()[0]['stock_qty']=='20.250'
+    readonly=TradeDialog(window,'purchase',posted)
+    assert readonly.line_rows[0]['unit'].currentData()=='grams'
+    returned=TradeDialog(window,'purchase_return',source=posted)
+    assert returned.line_rows[0]['unit'].currentData()=='grams'
+    returned.line_rows[0]['qty'].setText('25')
+    assert Decimal(returned.line_rows[0]['total'].text().replace(',',''))==Decimal('300')
+    return_id=s.post_document(returned.payload());assert s.document(return_id)['total']==Decimal('300')
+    assert s.products()[0]['stock_qty']=='20.225'
 
 
 @pytest.mark.parametrize('values',[

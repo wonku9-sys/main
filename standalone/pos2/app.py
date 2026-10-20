@@ -1090,6 +1090,14 @@ def main(argv=None):
                             assert store.import_purchase_drafts(imported_plan)['existing']==import_result['created']
                             store.delete_draft(import_result['created'][0])
                             print('PASS purchase Excel: actual workbook to draft, validated backup and duplicate identity',flush=True)
+                            gram_draft=store.save_draft(dict(kind='purchase',partner_id=first['supplier_id'],date=purchase.date.date().toString('yyyy-MM-dd'),lines=[dict(product_id=first['id'],qty='125',unit_price='1000',gram_input=True)]))
+                            gram_editor=TradeDialog(window,'purchase',store.document(gram_draft))
+                            assert gram_editor.line_rows[0]['unit'].currentData()=='grams'
+                            assert gram_editor.line_rows[0]['total'].text()=='1,250.00'
+                            store.save_draft(gram_editor.payload(),gram_draft)
+                            assert store.document(gram_draft)['total']==1250
+                            gram_editor.close();store.delete_draft(gram_draft)
+                            print('PASS gram draft: reopening and saving retain g/100g, not kg quantities',flush=True)
                             preview_import.close();app.processEvents();assert not preview_import.isVisible()
                             from .catalog_import_ui import CatalogImportDialog
                             idle_import=CatalogImportDialog(store,window);idle_import.show();app.processEvents();idle_import.close();app.processEvents();assert not idle_import.isVisible(),'Idle Excel importer must close'

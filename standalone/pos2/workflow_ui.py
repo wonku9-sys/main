@@ -633,7 +633,11 @@ class TradeDialog(QDialog):
             source_line = line if self.source else None
             if self.is_return and self.record and line.get("source_line_id"):
                 source_line = source_map.get(line["source_line_id"], {**line, "id": line["source_line_id"]})
-            row = self.add_line(line["product_id"], line.get("unit_id"), "0" if self.source else line["input_qty"], line["unit_price"], source_line)
+            unit_id = line.get('unit_id')
+            product = self.product_map.get(line['product_id'], {})
+            if not unit_id and line.get('unit_name') == 'g' and product.get('base_unit') == 'kg':
+                unit_id = 'grams'
+            row = self.add_line(line["product_id"], unit_id, "0" if self.source else line["input_qty"], line["unit_price"], source_line)
             if self.record:
                 row["saved_line"] = line
         if not lines and not self.readonly:
@@ -897,6 +901,8 @@ class TradeDialog(QDialog):
         row["barcode"].setText(unit.get("barcode") or product["barcode"])
         row["factor"].setText(amount((row.get("source") or {}).get("factor", "0.001" if gram_input else unit.get("factor", "1"))))
         row["reference_sale"] = unit.get("sale_price", product["sale_price"])
+        if gram_input:
+            row['reference_sale'] = rounded(row['reference_sale'] / 10)
         row["sale_price"].setText(won(row["reference_sale"]))
         if not row.get("source") and not self.readonly:
             quote = self.store.quote(identifier, _date(self.date), None if gram_input else row["unit"].currentData(), self.member.currentData())
