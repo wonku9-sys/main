@@ -1,4 +1,5 @@
 from copy import deepcopy
+from contextlib import closing
 from datetime import date
 from decimal import Decimal
 import time
@@ -11,6 +12,7 @@ from pos2.purchase_import import plan_files
 from pos2.purchase_import_ui import PurchaseImportDialog
 from pos2.purchase_output import purchase_record,purchase_workbook
 from pos2.workflow_ui import TradeDialog
+import sqlite3
 
 
 @pytest.fixture
@@ -144,3 +146,27 @@ def test_barcode_quantity_requires_explicit_price_consent_and_summary_rejected(s
     assert '현재' in file['price_source']
     path=excel(shop,'summary.xlsx',[['No','공급사','입고일시','매입합계'],[1,'시험 공급사','2020-01-01',12000]])
     assert '상품 상세 없음' in plans(shop,[path])[0]['error']
+
+
+def test_imported_drafts_backup_restore_preserves_duplicate_identity(shop):
+    _,s,_,_,_,_,_=shop
+    files=plans(shop,[excel(shop)])
+    first=s.import_purchase_drafts(files)['created'][0]
+    backup=s.create_backup();assert s.inspect_backup(backup)['schema_version']==213
+    s.delete_draft(first);assert not s.documents()
+    s.restore_backup(backup,'Owner-Password-2026!');s.login('owner','Owner-Password-2026!')
+    assert s.document(first)['status']=='draft'
+    assert s.import_purchase_drafts(files)==dict(created=[],existing=[first])
+
+
+def test_legacy_backup_without_import_table_supported_new_schema_tampering_rejected(shop):
+    _,s,_,_,_,_,_=shop
+    backup=s.create_backup()
+    with closing(sqlite3.connect(backup, isolation_level=None)) as db:
+        db.execute('PRAGMA journal_mode=DELETE');db.execute('DROP TABLE purchase_imports')
+    with pytest.raises(ValueError,match='구조'):s.inspect_backup(backup)
+    with closing(sqlite3.connect(backup, isolation_level=None)) as db:db.execute('PRAGMA user_version=212')
+    assert s.inspect_backup(backup)['schema_version']==212
+    s.restore_backup(backup,'Owner-Password-2026!');s.login('owner','Owner-Password-2026!')
+    assert s.db.execute('PRAGMA user_version').fetchone()[0]==213
+    assert s.db.execute('SELECT COUNT(*) FROM purchase_imports').fetchone()[0]==0

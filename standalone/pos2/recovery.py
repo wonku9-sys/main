@@ -25,10 +25,10 @@ CREATE TABLE IF NOT EXISTS restore_state (
  id INTEGER PRIMARY KEY CHECK(id=1), token TEXT NOT NULL
 );
 INSERT OR IGNORE INTO restore_state(id,token) VALUES(1,'');
-PRAGMA user_version=212;
+PRAGMA user_version=213;
 """
-SUPPORTED_VERSIONS = {200, 201, 202, 203, 204, 205, 206, 207, 208,209,210,211,212}
-SCHEMA_VERSION = 212
+SUPPORTED_VERSIONS = {200, 201, 202, 203, 204, 205, 206, 207, 208,209,210,211,212,213}
+SCHEMA_VERSION = 213
 APPLICATION_ID = 1398362162
 
 
@@ -57,6 +57,8 @@ def _validate_database(db):
         raise ValueError("지원하지 않는 백업 버전입니다. 같은 독립판 버전의 백업을 선택하세요.")
     expected = dict(_expected_objects())
     actual = _objects(db)
+    if version < 213 and ('table', 'purchase_imports') not in actual:
+        expected.pop(('table', 'purchase_imports'), None)
     if version<212:
         if ('table','sales_order_details') not in actual:expected.pop(('table','sales_order_details'),None)
         changes={
@@ -119,6 +121,8 @@ def _validate_database(db):
         raise ValueError("백업 파일이 손상되어 복원할 수 없습니다.")
     if db.execute("PRAGMA foreign_key_check").fetchone():
         raise ValueError("백업의 거래·상품 연결 이력이 손상되어 복원할 수 없습니다.")
+    if ('table', 'purchase_imports') in actual and db.execute("SELECT 1 FROM purchase_imports i JOIN documents d ON d.id=i.document_id WHERE d.kind<>'purchase' LIMIT 1").fetchone():
+        raise ValueError('백업의 매입 Excel 가져오기 연결 이력이 올바르지 않습니다.')
     if ("table", "supplier_profiles") in actual:
         if db.execute("SELECT 1 FROM supplier_profiles p JOIN partners s ON s.id=p.partner_id WHERE s.kind<>'supplier' LIMIT 1").fetchone() or db.execute("SELECT 1 FROM supplier_group_members m JOIN partners s ON s.id=m.partner_id WHERE s.kind<>'supplier' LIMIT 1").fetchone():
             raise ValueError("백업의 공급사 정보에 판매처가 연결되어 있습니다.")

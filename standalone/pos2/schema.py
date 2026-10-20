@@ -129,6 +129,10 @@ CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY,value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS code_sequences (
  name TEXT PRIMARY KEY, last_value INTEGER NOT NULL CHECK(last_value>=0)
 );
+CREATE TABLE IF NOT EXISTS purchase_imports (
+ source_hash TEXT PRIMARY KEY CHECK(length(source_hash)=64 AND source_hash NOT GLOB '*[^0-9a-f]*'),
+ document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE
+);
 CREATE TABLE IF NOT EXISTS product_categories (
  id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES product_categories(id) ON DELETE RESTRICT,
  name TEXT NOT NULL, level INTEGER NOT NULL CHECK(level BETWEEN 1 AND 3),

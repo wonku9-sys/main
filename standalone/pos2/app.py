@@ -1084,6 +1084,12 @@ def main(argv=None):
                             preview_import=PurchaseImportDialog(store,window);preview_import.loaded(imported_plan);preview_import.busy(False)
                             capture('-purchase-excel-import',preview_import)
                             assert len(imported_plan[0]['lines'])==len(voucher['lines'])
+                            import_result=store.import_purchase_drafts(imported_plan)
+                            assert len(import_result['created'])==1
+                            import_backup=store.create_backup();assert store.inspect_backup(import_backup)['schema_version']==213
+                            assert store.import_purchase_drafts(imported_plan)['existing']==import_result['created']
+                            store.delete_draft(import_result['created'][0])
+                            print('PASS purchase Excel: actual workbook to draft, validated backup and duplicate identity',flush=True)
                             preview_import.close();app.processEvents();assert not preview_import.isVisible()
                             from .catalog_import_ui import CatalogImportDialog
                             idle_import=CatalogImportDialog(store,window);idle_import.show();app.processEvents();idle_import.close();app.processEvents();assert not idle_import.isVisible(),'Idle Excel importer must close'

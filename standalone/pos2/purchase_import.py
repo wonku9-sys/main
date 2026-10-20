@@ -193,7 +193,6 @@ class PurchaseImportMixin:
             raise ValueError('한 번에 1~50개의 매입 파일을 선택하세요.')
         with self._tx():
             self._require_capability('purchases', 'create')
-            self.db.execute('CREATE TABLE IF NOT EXISTS purchase_imports (source_hash TEXT PRIMARY KEY, document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE)')
             created, existing = [], []
             for file in files:
                 digest = file.get('source_hash', '')

@@ -35,7 +35,8 @@ def test_actual_v211_constraints_upgrade_is_backed_up_and_preserves_all_links(tm
     before=path.read_bytes();upgraded=Store(path)
     try:
         upgraded.login('owner','Owner-Password-2026!')
-        assert upgraded.migration_backup_path and upgraded.db.execute('PRAGMA user_version').fetchone()[0]==212
+        from pos2.recovery import SCHEMA_VERSION
+        assert upgraded.migration_backup_path and upgraded.db.execute('PRAGMA user_version').fetchone()[0]==SCHEMA_VERSION
         assert upgraded.document(doc)['total']==Decimal('300.36')
         assert upgraded.sales_form(paper)['customer']['name']=='원고객'
         assert upgraded.db.execute('PRAGMA foreign_key_check').fetchone() is None
@@ -44,7 +45,7 @@ def test_actual_v211_constraints_upgrade_is_backed_up_and_preserves_all_links(tm
         upgraded.post_document(dict(kind='sale',date=date.today().isoformat(),partner_id=customer,lines=[dict(product_id=product,qty='5',unit_price='200.34')]))
         assert upgraded.products()[0]['stock_qty']=='-2.000'
         current_backup=upgraded.create_backup()
-        assert upgraded.inspect_backup(current_backup)['schema_version']==212
+        assert upgraded.inspect_backup(current_backup)['schema_version']==SCHEMA_VERSION
         backup=sqlite3.connect(upgraded.migration_backup_path)
         try:
             assert backup.execute('PRAGMA user_version').fetchone()[0]==211
