@@ -961,6 +961,10 @@ def main(argv=None):
                             def capture(suffix, widget):
                                 widget.show()
                                 app.processEvents()
+                                bar=getattr(widget,'query_bar',None)
+                                if bar is not None:
+                                    center=bar.query_button.mapTo(bar,bar.query_button.rect().center()).x()
+                                    assert abs(center-bar.rect().center().x())<=1,'Query button must stay centered'
                                 target = args.screenshot.with_name(args.screenshot.stem + suffix + args.screenshot.suffix)
                                 assert widget.grab().save(str(target))
                             window.open_page("home")

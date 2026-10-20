@@ -1,6 +1,6 @@
 """Fixed query controls and native resizable desktop/dialog frames."""
 import pytest
-from PySide6.QtCore import Qt,QCoreApplication,QEvent,QSize
+from PySide6.QtCore import Qt,QCoreApplication,QEvent,QSize,QRect,QPoint
 from PySide6.QtGui import QKeySequence
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication,QDialog,QMessageBox,QSizeGrip
@@ -28,6 +28,7 @@ def test_query_stays_at_top_across_menus_and_scrolls(desktop):
     for key in ('products','purchases','inventory_categories','settings'):
         assert window.open_page(key);app.processEvents()
         bar=window.query_bar;point=bar.query_button.mapTo(window,bar.query_button.rect().topRight())
+        assert abs(bar.query_button.mapTo(bar,bar.query_button.rect().center()).x()-bar.rect().center().x())<=1
         if origin is None:origin=point
         assert point==origin and bar.context.text()==window.current_page.title
         scroller=window.scrollers[key];scroller.verticalScrollBar().setValue(scroller.verticalScrollBar().maximum())
@@ -63,6 +64,7 @@ def test_popup_fixed_query_native_frame_resize_and_fullscreen_restore(desktop):
         pos=bar.pos();scroll=window.scrollers['worklog']
         scroll.verticalScrollBar().setValue(scroll.verticalScrollBar().maximum());app.processEvents()
         assert bar.pos()==pos and bar.query_button.isVisible() and popup._popup_close_button.isVisible()
+        assert abs(bar.query_button.mapTo(bar,bar.query_button.rect().center()).x()-bar.rect().center().x())<=1
     popup.showFullScreen();app.processEvents();assert popup.isFullScreen()
     popup.showNormal();app.processEvents();assert not popup.isFullScreen()
 
@@ -81,3 +83,24 @@ def test_main_and_product_dialog_resize_keep_overflow_accessible(desktop):
     assert scroll is not None and scroll.verticalScrollBar().maximum()>0
     assert dialog._popup_close_button.isVisible()
     dialog.close()
+
+
+@pytest.mark.parametrize('width',(380,700,1000))
+@pytest.mark.parametrize('popup',(False,True))
+def test_query_is_truly_centered_with_asymmetric_controls_and_long_titles(desktop,width,popup):
+    from pos2.query_bar import QueryBar
+    app,_,_=desktop;called=[]
+    bar=QueryBar('상품장',lambda:called.append('query'),home=(lambda:None) if popup else None,close=(lambda:None) if popup else None)
+    bar.resize(width,60);bar.show();app.processEvents()
+    for title in ('상품장','현재고 · 공급사별 / 대분류 / 중분류 / 소분류 · '+'긴 메뉴 설명 '*20):
+        bar.context.setText(title);app.processEvents()
+        assert bar.context.text()==title and bar.context.toolTip()==title
+        button=bar.query_button;rect=QRect(button.mapTo(bar,QPoint()),button.size())
+        assert abs(rect.center().x()-bar.rect().center().x())<=1
+        assert bar.rect().contains(rect) and button.isVisible()
+        for side in (bar.home_button,bar.close_button):
+            if side:
+                side_rect=QRect(side.mapTo(bar,QPoint()),side.size())
+                assert not rect.intersects(side_rect)
+                assert bar.rect().contains(side_rect)
+    bar.query_button.click();assert called==['query'];bar.close()
