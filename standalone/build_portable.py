@@ -62,10 +62,13 @@ def licenses(destination):
 
 
 def check_entry(path):
+    from pos2.audio_defaults import SOUNDS
     relative = path.as_posix().lower()
-    if path.suffix.lower() in {".db", ".sqlite", ".sqlite3", ".env", ".key", ".pem", ".nes", ".smc", ".sfc", ".rom", ".gba", ".gb", ".gbc", ".mp3"} or relative.endswith(("-wal", "-shm")):
+    if path.suffix.lower()=='.mp3' and (path.parts[-4:-1]!=('pos2','assets','sounds') or path.name not in {row[0] for row in SOUNDS.values()}):
+        raise RuntimeError(f'Only the six approved default sounds may be packaged: {path}')
+    if path.suffix.lower() in {".db", ".sqlite", ".sqlite3", ".env", ".key", ".pem", ".nes", ".smc", ".sfc", ".rom", ".gba", ".gb", ".gbc"} or relative.endswith(("-wal", "-shm")):
         raise RuntimeError(f"Business data or private file must never be packaged: {path}")
-    if "seoyoung_pos" in relative or {"data-v2","approved-games","unsaved-work","mini-arcade","lucky-audio"}&set(path.parts) or path.name.lower() in {'bublbobl.zip','bublbob2.zip','freesound_community-winning-82808.mp3','u_xmiiqyhi46-gamestart-272829.mp3'}:
+    if "seoyoung_pos" in relative or {"data-v2","approved-games","unsaved-work","mini-arcade","lucky-audio"}&set(path.parts) or path.name.lower() in {'bublbobl.zip','bublbob2.zip'}:
         raise RuntimeError(f"Legacy application or business data path detected: {path}")
 
 
@@ -84,6 +87,9 @@ def build(output, native=False):
         raise RuntimeError("The independent application's README.md is required before packaging.")
     output.mkdir(parents=True, exist_ok=True)
     assets = ROOT / "pos2" / "assets"
+    from pos2.audio_defaults import SOUNDS,default_source,approved_sound_file
+    if not all(default_source(kind) is not None for kind in SOUNDS):
+        raise RuntimeError('The six approved default audio files must match their original SHA256 values.')
     font = assets / "NotoSansKR-Regular.ttf"
     if not font.is_file() or sha256(font.read_bytes()).hexdigest() != "194018e6b2b293a7964f037b25c0249ce1418bc9ab3c971060a03aa57861e252":
         raise RuntimeError("The verified offline Korean font asset is missing or changed.")
@@ -127,7 +133,7 @@ def build(output, native=False):
         if not capture.is_file() or capture.stat().st_size<1000:
             raise RuntimeError(f"The frozen executable did not validate visible single-window content: {suffix}")
     if label == "Windows":
-        for suffix in ('-store-profile','-orders','-order-editor','-paper-a4','-commercial-preview','-arcade-lobby','-game-blocks','-game-gomoku','-game-shooter','-game-jumper','-game-bubbles','-game-raccoon','-approved-game-library','-catalog-tree-tax','-product-tax-details','-product-change-log','-product-member-prices','-catalog-excel-preview','-crash-recovery'):
+        for suffix in ('-store-profile','-orders','-order-editor','-paper-a4','-commercial-preview','-arcade-lobby','-game-blocks','-game-gomoku','-game-shooter','-game-jumper','-game-bubbles','-game-raccoon','-approved-game-library','-catalog-tree-tax','-product-tax-details','-product-change-log','-product-member-prices','-catalog-excel-preview','-audio-settings','-audio-settings-more','-crash-recovery'):
             capture=screenshot.with_name(screenshot.stem+suffix+screenshot.suffix)
             if not capture.is_file() or capture.stat().st_size<1000:raise RuntimeError(f'The frozen executable did not validate its new document/game/recovery screen: {suffix}')
         (bundle / "체험 실행.bat").write_bytes(b'@echo off\r\ncd /d "%~dp0"\r\n"SY-POS.exe" --demo\r\n')
@@ -163,6 +169,8 @@ def build(output, native=False):
     files = sorted(path for path in bundle.rglob("*") if path.is_file())
     for path in files:
         check_entry(path.relative_to(bundle))
+        if path.suffix.lower()=='.mp3' and not approved_sound_file(path):
+            raise RuntimeError(f'Unapproved or changed audio file: {path}')
     with ZipFile(archive, "w", compression=ZIP_DEFLATED, compresslevel=9) as stream:
         for path in files:
             stream.write(path, path.relative_to(output))

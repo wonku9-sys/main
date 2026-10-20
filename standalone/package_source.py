@@ -19,6 +19,11 @@ def source_files():
     files += list((ROOT / 'pos2' / 'assets').glob('step-*.svg'))
     files += [ROOT/'pos2'/'assets'/name for name in ('lottery-machine.jpg','LOTTERY_IMAGE.md')]
     files += [ROOT/'pos2'/'assets'/name for name in ('lucky-machine-realistic.png','LUCKY_MACHINE.md')]
+    from pos2.audio_defaults import SOUNDS,default_source
+    if not all(default_source(kind) is not None for kind in SOUNDS):
+        raise ValueError('Approved audio is missing or changed; do not publish an incomplete source package.')
+    files += [ROOT/'pos2'/'assets'/'sounds'/row[0] for row in SOUNDS.values()]
+    files += [ROOT/'pos2'/'assets'/'sounds'/'SOUNDS.md']
     files += [ROOT.parent / ".github" / "workflows" / "standalone-windows.yml"]
     for source in sorted(set(files)):
         if source.is_file() and "__pycache__" not in source.parts:

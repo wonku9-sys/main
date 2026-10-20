@@ -22,7 +22,7 @@ def test_audio_private_copy_preserves_original_and_preferences(app,tmp_path):
     sound.set_enabled(False);sound.set_volume(36)
     again=controller(tmp_path);assert not again.enabled and again.volume==36 and again.source==target
     assert again.settings.value('display_name')==source.name
-    opening=controller(tmp_path,'open');assert opening.enabled and opening.source is None
+    opening=controller(tmp_path,'open');assert opening.enabled and opening.custom_source is None and opening.source is not None
     assert not sound.play() # Disabled, independent of audio output availability.
     source.write_bytes(b'not mp3 content!'+bytes(20))
     with pytest.raises(ValueError):sound.register(source)
@@ -47,7 +47,7 @@ def test_lucky_draw_once_per_visible_result_open_on_show_close_stops(app,tmp_pat
     monkeypatch.setattr(QFileDialog,'getOpenFileName',lambda *_:(str(source),'MP3'))
     button=next(b for b in page.findChildren(QPushButton) if b.text()=='사운드 파일 선택')
     QTest.mouseClick(button,Qt.MouseButton.LeftButton)
-    assert page.draw_sound.source is not None and page.open_sound.source is None
+    assert page.draw_sound.custom_source is not None and page.open_sound.custom_source is None
     page.choose_sound('open');assert page.open_sound.source is not None
     dialog.close();assert 'stop-draw' in events and 'stop-open' in events
     dialog.deleteLater();app.processEvents()
@@ -105,7 +105,7 @@ def test_login_warning_settings_build_and_keep_their_sources_separate(app,tmp_pa
     def inspect(dialog):
         buttons={button.text():button for button in dialog.findChildren(QPushButton)}
         assert {'로그인 사운드 파일 선택','경고 사운드 파일 선택'}<=buttons.keys()
-        buttons['경고 사운드 파일 선택'].click();assert warning.source is not None and login.source is None
+        buttons['경고 사운드 파일 선택'].click();assert warning.custom_source is not None and login.custom_source is None
         buttons['로그인 사운드 파일 선택'].click();assert login.source is not None and login.source!=warning.source
         return QDialog.DialogCode.Accepted
     monkeypatch.setattr(QDialog,'exec',inspect);lucky_audio.login_sound_settings()

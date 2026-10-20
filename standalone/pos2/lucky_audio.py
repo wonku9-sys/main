@@ -1,4 +1,4 @@
-"""Per-PC draw sound. User recordings never enter the source/release package."""
+"""Approved default sounds with optional private, per-PC user overrides."""
 from hashlib import sha256
 from pathlib import Path
 import sqlite3
@@ -14,13 +14,31 @@ class DrawSound(QObject):
         if kind not in {'draw','open','login','warning','click','context'}:raise ValueError('알 수 없는 프로그램 효과음입니다.')
         self.kind=kind;self.settings=settings if settings is not None else QSettings('SY-POS',{'draw':'LuckyDrawSound','open':'LuckyOpenSound','login':'LoginSound','warning':'WarningSound','click':'MouseClickSound','context':'ContextMenuSound'}[kind])
         self.root=Path(root) if root else Path(QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppLocalDataLocation))/'lucky-audio'/kind
-        self.player=None;self.output=None
+        self.player=None;self.output=None;self.last_problem=''
+        self.problem.connect(self._remember_problem)
+    def _remember_problem(self,message):self.last_problem=message
     @property
     def enabled(self):return self.settings.value('enabled',True,type=bool)
     @property
     def volume(self):return max(0,min(100,self.settings.value('volume',20,type=int)))
     @property
-    def source(self):return Path(self.settings.value('source','',type=str)) if self.settings.value('source','',type=str) else None
+    def custom_source(self):return Path(self.settings.value('source','',type=str)) if self.settings.value('source','',type=str) else None
+    @property
+    def source(self):
+        custom=self.custom_source
+        if custom is not None and custom.is_file() and not custom.is_symlink():return custom
+        from .audio_defaults import default_source
+        return default_source(self.kind)
+    def description(self):
+        from .audio_defaults import SOUNDS
+        custom=self.custom_source;source=self.source
+        if custom is not None and source==custom:return '사용자 파일 · '+self.settings.value('display_name',custom.name,type=str)+' · 이 PC에만 저장'
+        if source is not None:
+            prefix='선택한 파일이 없어 기본음 사용 · ' if custom is not None else '기본음 자동 적용 · '
+            return prefix+SOUNDS[self.kind][2]+' · '+source.name
+        return '기본 사운드가 없습니다. ZIP 전체를 다시 풀거나 MP3/WAV를 선택하세요.'
+    def use_default(self):
+        self.stop();self.settings.remove('source');self.settings.remove('display_name');self.settings.sync();self.last_problem=''
     def set_enabled(self,value):
         self.settings.setValue('enabled',bool(value));self.settings.sync()
         if not value:self.stop()
@@ -62,7 +80,7 @@ class DrawSound(QObject):
         app=QApplication.instance()
         if app.platformName() in {'offscreen','minimal'}:return False
         source=self.source
-        if source is None:return False
+        if source is None:self.problem.emit('기본 사운드가 없습니다. ZIP 전체를 다시 풀거나 MP3/WAV를 선택하세요.');return False
         if not source.is_file() or source.is_symlink():self.problem.emit('선택한 사운드가 없습니다. 파일을 다시 선택하세요.');return False
         try:
             from PySide6.QtMultimedia import QMediaPlayer,QAudioOutput,QMediaDevices
@@ -71,8 +89,8 @@ class DrawSound(QObject):
                 self.player=QMediaPlayer(self);self.output=QAudioOutput(self);self.player.setAudioOutput(self.output)
                 self.player.errorOccurred.connect(lambda *_:self.problem.emit('사운드 재생을 확인하세요: '+self.player.errorString()))
             # One player: replace the previous clip rather than overlap it.
-            self.player.stop();self.player.setSource(QUrl.fromLocalFile(str(source)));self.output.setVolume(self.volume/100);self.player.play();return True
-        except (RuntimeError,OSError) as exc:self.problem.emit(str(exc));return False
+            self.last_problem='';self.player.stop();self.player.setSource(QUrl.fromLocalFile(str(source)));self.output.setVolume(self.volume/100);self.player.play();return True
+        except (RuntimeError,OSError,ImportError) as exc:self.problem.emit(str(exc));return False
     def stop(self):
         if self.player:self.player.stop()
 
@@ -97,26 +115,37 @@ def mouse_sound(kind):
 
 
 def login_sound_settings(parent=None):
-    from PySide6.QtWidgets import QDialog,QVBoxLayout,QHBoxLayout,QCheckBox,QLabel,QSlider,QFileDialog,QGroupBox
+    from PySide6.QtWidgets import QDialog,QVBoxLayout,QHBoxLayout,QCheckBox,QLabel,QSlider,QFileDialog,QGroupBox,QScrollArea,QWidget
     from .widgets import action
     from .ui_sounds import public_sound_settings
     dialog=QDialog(parent);dialog.setWindowTitle('프로그램 사운드 설정');dialog.resize(720,680);layout=QVBoxLayout(dialog)
-    sounds=[(login_sound(),'로그인','로그인 성공 사운드'),(warning_sound(),'경고','메시지 경고·알림 사운드'),(mouse_sound('click'),'왼쪽 클릭','왼쪽 클릭 소리'),(mouse_sound('context'),'오른쪽 메뉴','오른쪽 메뉴 소리')]
+    app=QApplication.instance()
+    def lucky_sound(kind):
+        attribute='_sy_settings_'+kind+'_sound';sound=getattr(app,attribute,None)
+        if sound is None:sound=DrawSound(app,kind=kind);setattr(app,attribute,sound)
+        return sound
+    sounds=[(login_sound(),'로그인','로그인 성공 사운드'),(warning_sound(),'경고','메시지 경고·알림 사운드'),(mouse_sound('click'),'왼쪽 클릭','왼쪽 클릭 소리'),(mouse_sound('context'),'오른쪽 메뉴','오른쪽 메뉴 소리'),(lucky_sound('open'),'메뉴 열기','행운의 숫자 메뉴 열기'),(lucky_sound('draw'),'공 추첨','행운의 숫자 공 추첨')]
+    scroll=QScrollArea();scroll.setWidgetResizable(True);content=QWidget();groups=QVBoxLayout(content);scroll.setWidget(content);layout.addWidget(scroll,1)
     for sound,caption,title in sounds:
         group=QGroupBox(title);section=QVBoxLayout(group);enabled=QCheckBox('사용');enabled.setChecked(sound.enabled);enabled.toggled.connect(sound.set_enabled)
-        label=QLabel(sound.settings.value('display_name','파일 미선택: 로그인은 무음, 나머지는 짧은 기본 효과음',type=str));label.setWordWrap(True)
+        label=QLabel(sound.last_problem or sound.description());label.setWordWrap(True);sound.problem.connect(label.setText)
         def choose(checked=False,sound=sound,label=label,caption=caption):
             name,_=QFileDialog.getOpenFileName(dialog,caption+' 사운드 선택','','오디오 파일 (*.mp3 *.wav)')
             if not name:return
-            try:sound.register(name);label.setText(sound.settings.value('display_name','',type=str))
+            try:sound.register(name);label.setText(sound.description())
             except (ValueError,OSError) as exc:label.setText(str(exc))
-        row=QHBoxLayout();row.addWidget(enabled);row.addWidget(action(caption+' 사운드 파일 선택',choose));row.addWidget(action('미리 듣기',sound.play));row.addWidget(QLabel('음량'))
-        volume=QSlider(Qt.Orientation.Horizontal);volume.setRange(0,100);volume.setValue(sound.volume);volume.valueChanged.connect(sound.set_volume);row.addWidget(volume);section.addLayout(row);section.addWidget(label);layout.addWidget(group)
+        def restore(checked=False,sound=sound,label=label):sound.use_default();label.setText(sound.description())
+        def preview(checked=False,sound=sound,label=label):
+            if not sound.allowed():label.setText('사용·음량·환경설정의 전체 효과음 설정을 확인하세요.');return
+            if sound.play():label.setText('미리 듣기 재생 요청 · '+sound.description())
+            elif QApplication.instance().platformName() in {'offscreen','minimal'}:label.setText('화면 검사 환경에서는 오디오를 재생하지 않습니다.')
+        row=QHBoxLayout();row.addWidget(enabled);row.addWidget(action(caption+' 사운드 파일 선택',choose));row.addWidget(action('미리 듣기',preview));row.addWidget(action('기본음으로 복원',restore));row.addWidget(QLabel('음량'))
+        volume=QSlider(Qt.Orientation.Horizontal);volume.setRange(0,100);volume.setValue(sound.volume);volume.valueChanged.connect(sound.set_volume);row.addWidget(volume);section.addLayout(row);section.addWidget(label);groups.addWidget(group)
     public=QCheckBox('로그인 전 팝업·경고·마우스 효과음');public.setChecked(public_sound_settings().value('enabled',True,type=bool))
     def public_toggle(value):
         settings=public_sound_settings();settings.setValue('enabled',value);settings.sync()
         player=getattr(QApplication.instance(),'_sy_public_cue',None)
         if not value and player:player.stop()
     public.toggled.connect(public_toggle);layout.addWidget(public)
-    note=QLabel('선택한 MP3/WAV는 이 PC에만 보관됩니다. 로그인 후 팝업·경고음은 환경설정의 전체 효과음 설정을 따릅니다.');note.setWordWrap(True);layout.addWidget(note)
+    note=QLabel('제공된 MP3 6개가 기본음으로 자동 적용됩니다. 직접 선택한 MP3/WAV만 이 PC에 별도로 보관합니다. 로그인 후 효과음은 환경설정의 전체 효과음 설정을 따릅니다.');note.setWordWrap(True);layout.addWidget(note)
     layout.addWidget(action('이 창 닫기',dialog.accept));dialog.finished.connect(lambda *_:[sound.stop() for sound,_,_ in sounds]);dialog.exec()

@@ -135,8 +135,8 @@ class LuckyNumbersPage(Page):
         self.actions.addWidget(action('🕹 미니 오락실 · 게임',open_arcade))
     def refresh(self):self.update_result()
     def sound_description(self,kind='draw'):
-        sound=self.draw_sound if kind=='draw' else self.open_sound;name=sound.settings.value('display_name','',type=str)
-        return ('추첨 소리: ' if kind=='draw' else '열기 소리: ')+name+' · 이 PC에만 저장' if name else ('추첨 MP3는 ‘사운드 파일 선택’에서 지정하세요.' if kind=='draw' else '메뉴 열기 MP3는 ‘열기 사운드 선택’에서 지정하세요.')
+        sound=self.draw_sound if kind=='draw' else self.open_sound
+        return ('추첨 소리: ' if kind=='draw' else '열기 소리: ')+sound.description()
     def choose_sound(self,kind='draw'):
         name,_=QFileDialog.getOpenFileName(self,'내 PC에서만 사용할 추첨 사운드 선택','','오디오 파일 (*.mp3 *.wav)')
         if not name:return

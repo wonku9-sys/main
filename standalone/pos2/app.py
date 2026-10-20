@@ -925,6 +925,10 @@ def main(argv=None):
                 try:
                     if args.smoke_test:
                         verify_glyphs()
+                        from .audio_smoke import verify_default_audio
+                        decoded=verify_default_audio()
+                        assert len(decoded)==6 and all(frames>0 for frames in decoded.values())
+                        print('PASS default MP3: six original files decoded to PCM; no speaker playback claimed',flush=True)
                         if sys.platform=='win32':
                             from .shared_smoke import run as shared_smoke
                             assert shared_smoke(directory/'isolated-network-proof')
@@ -1108,6 +1112,22 @@ def main(argv=None):
                                 assert fresh_login_store.actor["code"] == "admin"
                                 assert not fresh_login_store.default_login_available()
                                 first_login.close()
+                                from .lucky_audio import login_sound_settings
+                                from PySide6.QtWidgets import QGroupBox,QScrollArea
+                                audio_capture_errors=[]
+                                def capture_audio_settings():
+                                    modal=app.activeModalWidget()
+                                    try:
+                                        assert modal is not None and len(modal.findChildren(QGroupBox))==6
+                                        capture('-audio-settings',modal)
+                                        modal.findChild(QScrollArea).verticalScrollBar().setValue(modal.findChild(QScrollArea).verticalScrollBar().maximum())
+                                        capture('-audio-settings-more',modal)
+                                    except BaseException as exc:audio_capture_errors.append(exc)
+                                    finally:
+                                        if modal is not None:modal.accept()
+                                QTimer.singleShot(50,capture_audio_settings)
+                                login_sound_settings(window)
+                                assert not audio_capture_errors,audio_capture_errors
                             finally:
                                 fresh_login_store.close()
                             from uuid import uuid4
