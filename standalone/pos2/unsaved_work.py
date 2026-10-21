@@ -68,6 +68,8 @@ def apply_values(owner,payload):
         owner.memo_date=payload['household'][0];owner.calendar.blockSignals(True);owner.calendar.setSelectedDate(QDate.fromString(owner.memo_date,'yyyy-MM-dd'));owner.calendar.blockSignals(False)
     if 'trade' in payload:
         data=payload['trade']
+        owner.payment_plan=data.get('payment_plan')
+        owner.paid.setReadOnly(bool(owner.payment_plan))
         while owner.line_rows:owner.remove_line(owner.line_rows[-1])
         for line in data['lines']:
             source=next((r for r in (owner.source or owner.record or {}).get('lines',[]) if r.get('id')==line.get('source_line_id')),None)

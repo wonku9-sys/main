@@ -100,7 +100,7 @@ class Store(PaymentFinanceMixin, MemberRegistrationMixin, FactoryResetMixin, Pur
                 raise ValueError("더 최신 버전의 장부입니다. 같은 버전 이상의 프로그램으로 실행하세요.")
             self.db.execute("PRAGMA journal_mode=WAL")
             self.db.execute("PRAGMA synchronous=FULL")
-            if tables and self._opening_version<216:
+            if tables and self._opening_version<217:
                 from datetime import datetime
                 target=self._backup_directory()/f'업데이트전-자동백업_{datetime.now():%Y%m%d_%H%M%S}_{secrets.token_hex(4)}.db'
                 self._backup_file(target);self.migration_backup_path=str(target)

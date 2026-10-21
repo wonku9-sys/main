@@ -165,7 +165,8 @@ def test_purchase_input_and_delete_symbol_are_readable(desktop):
     combo=selected['product']
     assert combo.toolTip()==combo.currentText()
     index=combo.model().index(combo.currentIndex())
-    assert index.data(Qt.ItemDataRole.ToolTipRole)==combo.currentText()
+    assert combo.currentText() in index.data(Qt.ItemDataRole.ToolTipRole)
+    assert selected['product'].currentData()==identifier
     unit=selected['unit'];unit.setCurrentIndex(unit.findData('grams'));app.processEvents()
     assert '100g' in unit.toolTip() and unit.toolTip()==unit.currentText()
     assert unit.width()>=unit.minimumSizeHint().width()

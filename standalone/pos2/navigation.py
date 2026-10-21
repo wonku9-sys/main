@@ -29,10 +29,10 @@ def state(owner):
     name = type(owner).__name__
     if name=='MemberDialog':return owner.values()
     if name=='PurchasePaymentDialog':
-        return _value(owner.date), tuple((key, field.text()) for key, field in {**owner.components,**owner.discounts}.items()), owner.memo.text(),owner.bill_number.text(),_value(owner.bill_due),owner.bill_bank.text(),owner.dc_rate.text()
+        return _value(owner.date), tuple((key, field.text()) for key, field in {**owner.components,**owner.discounts}.items()), owner.memo.text(),owner.bill_number.text(),_value(owner.bill_due),owner.bill_bank.text(),owner.dc_rate.text(),owner.target_amount.text(),owner.payment_rate.text(),_value(owner.hour),_value(owner.minute),_value(owner.account)
     if name in {"DiaryDialog","HouseholdDialog"}:return owner.snapshot()
     if name == "TradeDialog":
-        return owner.kind, (owner.source or {}).get("id"), tuple(_value(getattr(owner, key)) for key in ("date", "entry_staff", "partner", "member", "paid", "method", "points", "memo")), tuple(tuple(_value(row[key]) for key in ("product", "unit", "qty", "price",'total','sale_price','factor','line_memo')) for row in owner.line_rows)
+        return owner.kind, (owner.source or {}).get("id"), tuple(_value(getattr(owner, key)) for key in ("date", "entry_staff", "partner", "member", "paid", "method", "points", "memo")), tuple(tuple(_value(row[key]) for key in ("product", "unit", "qty", "price",'total','sale_price','factor','line_memo')) for row in owner.line_rows),repr(owner.payment_plan)
     if name == "CountEditor":
         return owner.title.text(), _value(owner.date), tuple((key, field.text()) for key, field in sorted(owner.inputs.items()))
     if name == "PermissionsPage":

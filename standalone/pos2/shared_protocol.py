@@ -55,6 +55,8 @@ WRITES=WRITES|{'import_purchase_drafts'}
 WRITES=WRITES|{'replace_supplier_payment'}
 READS=READS|{'payment_context','payment_summary','payable_bills','business_entries','finance_profit','finance_member_ledger'}
 WRITES=WRITES|{'register_supplier_payment','pay_bill','add_business_entry','void_business_entry'}
+READS=READS|{'purchase_payment_batch'}
+WRITES=WRITES|{'replace_purchase_payment_batch','void_purchase_payment_batch'}
 
 def encode(value):
     def default(item):

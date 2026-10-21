@@ -1595,6 +1595,31 @@ def main(argv=None):
                             from .navigation import mark_saved
                             mark_saved(direct_payment);direct_payment.reject()
                             print('PASS direct purchase payment: real document manager, cash/transfer/manual-card split, ledger update and preserved history',flush=True)
+                            # Exercise the newly packaged draft-plan and batch
+                            # correction code, not just the legacy payment API.
+                            from .purchase_payment_plan import normalize_plan
+                            plan=normalize_plan(dict(partner_id=payment_supplier,target='10.25',
+                                components=dict(cash=1,transfer=1,card=3,bill=1,dc=1,rebate=1,coupon='0.50',other_discount='1.75'),
+                                datetime=date.today().isoformat()+' 16:12:00',account='ISOLATED-SMOKE-ACCOUNT',memo='격리 상세결제 검사',
+                                bill=dict(number='ISOLATED-PLAN-BILL',due_date=date.today().isoformat(),bank='가상 은행')))
+                            product=store.catalog_product(store.document(selected_purchase['id'])['lines'][0]['product_id'])
+                            payload=dict(kind='purchase',date=date.today().isoformat(),partner_id=payment_supplier,paid=0,
+                                lines=[dict(product_id=product['id'],qty=1,unit_price=str(Decimal('10.25')*product.get('price_basis',1)))],payment_plan=plan)
+                            draft=store.save_draft(payload)
+                            assert not store.document(draft)['payments']
+                            store.post_document(payload,draft)
+                            planned=store.document(draft);assert planned['balance']==0 and len(planned['payments'])==8
+                            batch=store.purchase_payment_batch(planned['payments'][0]['id'])
+                            assert batch['plan']==plan and batch['editable']
+                            detailed=PurchasePaymentDialog(window,draft,editing=batch)
+                            capture('-purchase-detailed-payment',detailed);mark_saved(detailed);detailed.reject()
+                            correction=normalize_plan(dict(plan,target='6.00',components=dict(cash=5,dc=1),bill=None))
+                            result=store.replace_purchase_payment_batch(batch['payment_ids'][0],correction,batch['state'],'격리 수정 검사')
+                            assert store.document(draft)['balance']==Decimal('4.25')
+                            latest=store.purchase_payment_batch(result['records'][0]['id'])
+                            store.void_purchase_payment_batch(latest['payment_ids'][0],latest['state'],'격리 취소 검사')
+                            assert store.document(draft)['balance']==Decimal('10.25')
+                            print('PASS detailed purchase payment plan: draft without ledger writes, atomic eight-method posting, datetime/account, batch correction and cancellation',flush=True)
                             # The frozen executable exercises every finance
                             # view, plus a real non-cash batch and bill payout.
                             window.open_page('payments');finance_page=window.current_page

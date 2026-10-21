@@ -185,7 +185,7 @@ def test_real_214_schema_upgrade_retains_data_and_protection_backup(shop,tmp_pat
         backup=migrated.migration_backup_path
         migrated.restore_backup(backup,PASSWORD);migrated.login('owner',PASSWORD)
         assert migrated.document(doc)['cash_paid']==Decimal('1.25')
-        assert migrated.db.execute('PRAGMA user_version').fetchone()[0]==216
+        assert migrated.db.execute('PRAGMA user_version').fetchone()[0]==217
     finally:migrated.close()
 
 

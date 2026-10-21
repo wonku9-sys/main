@@ -17,7 +17,7 @@ class TradeProductModel(QAbstractListModel):
             return None
         record = self.records[index.row()]
         if role == Qt.ItemDataRole.DisplayRole:
-            return f"{record['code']} · {record['name']}" if record else '상품 선택'
+            return record['name'] if record else '상품 선택'
         if role == Qt.ItemDataRole.ToolTipRole:
             return f"{record['code']} · {record['name']}" if record else '상품 선택'
         if role == Qt.ItemDataRole.UserRole:

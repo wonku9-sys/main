@@ -349,6 +349,16 @@ class CommerceMixin:
             result['entry']['lines'].append({'sale_price':str(currency_amount(money(raw.get('sale_price',currency_amount(product['sale_price']))))),
                 'memo':text(raw.get('line_memo',''),'품목 메모',maximum=500)})
         result["lines"], result["total"] = lines, sum(item["total"] for item in lines)
+        if data.get('payment_plan') is not None:
+            from .purchase_payment_plan import normalize_plan
+            plan=normalize_plan(data['payment_plan'])
+            if kind!='purchase' or result['paid'] or plan['partner_id']!=partner_id:
+                raise ValueError('상세 결제는 같은 공급사의 일반 매입전표에만 적용할 수 있습니다. 단순 결제액과 중복 입력하지 마세요.')
+            if money(plan['target'])>result['total']:
+                raise ValueError('상세 결제대상액이 매입금액을 초과합니다. 결제창에서 다시 확인하세요.')
+            if plan['datetime'][:10]<result['date']:
+                raise ValueError('결제일은 매입일보다 빠를 수 없습니다.')
+            result['entry']['payment_plan']=plan
         if result["total"] > LIMIT:
             raise ValueError("전표 합계 허용 범위를 초과했습니다.")
         if result["points_used"] > result["total"] or result["paid"] > result["total"] - result["points_used"]:
@@ -454,6 +464,11 @@ class CommerceMixin:
         for item in prepared['lines']:
             if item['tracked']:self._move(item['product_id'],direction*item['base_qty'],direction*item['cost'],prepared['kind'],prepared['memo'],identifier,prepared['date'])
         if prepared['paid']:self._insert_trade_payment(identifier,prepared['paid'],prepared['date'],prepared['method'],'등록 시 정산')
+        plan=prepared['entry'].get('payment_plan')
+        if plan:
+            when=plan['datetime'][:10]
+            snapshot=self.payment_context(prepared['partner_id'],when,identifier)
+            self._register_supplier_payment_in_tx(prepared['partner_id'],plan['components'],when,plan['memo'],snapshot['state'],identifier,plan['bill'],plan)
         for change in catalog_updates:
             table='product_units' if change['unit_id'] else 'products'
             key=change['unit_id'] or change['product_id']

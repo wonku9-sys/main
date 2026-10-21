@@ -10,7 +10,7 @@ _originals={}
 _handlers=set()
 
 
-@lru_cache(maxsize=32)
+@lru_cache(maxsize=64)
 def normal_menu_icon(kind):
     from .menu_icons import _family_icon
     return register_hover_icon(_family_icon(kind))

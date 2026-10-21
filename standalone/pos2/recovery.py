@@ -25,10 +25,10 @@ CREATE TABLE IF NOT EXISTS restore_state (
  id INTEGER PRIMARY KEY CHECK(id=1), token TEXT NOT NULL
 );
 INSERT OR IGNORE INTO restore_state(id,token) VALUES(1,'');
-PRAGMA user_version=216;
+PRAGMA user_version=217;
 """
-SUPPORTED_VERSIONS = {200, 201, 202, 203, 204, 205, 206, 207, 208,209,210,211,212,213,214,215,216}
-SCHEMA_VERSION = 216
+SUPPORTED_VERSIONS = {200, 201, 202, 203, 204, 205, 206, 207, 208,209,210,211,212,213,214,215,216,217}
+SCHEMA_VERSION = 217
 APPLICATION_ID = 1398362162
 
 
@@ -140,10 +140,15 @@ def _validate_database(db):
     if ('table','document_entry') in actual:
         from .common import day,money,text
         from datetime import datetime
-        for entry in db.execute('SELECT e.payload,d.date,(SELECT COUNT(*) FROM document_lines l WHERE l.document_id=d.id) count FROM document_entry e JOIN documents d ON d.id=e.document_id'):
+        for entry in db.execute('SELECT e.payload,d.date,(SELECT COUNT(*) FROM document_lines l WHERE l.document_id=d.id) count,d.kind,d.partner_id,d.total FROM document_entry e JOIN documents d ON d.id=e.document_id'):
             try:
                 payload=json.loads(entry[0])
-                if set(payload)!={'datetime','staff','lines'}:raise ValueError()
+                if set(payload)-{'datetime','staff','lines','payment_plan'} or not {'datetime','staff','lines'}<=set(payload):raise ValueError()
+                if 'payment_plan' in payload:
+                    from .purchase_payment_plan import normalize_plan
+                    if version<217:raise ValueError()
+                    plan=normalize_plan(payload['payment_plan'])
+                    if entry[3]!='purchase' or plan['partner_id']!=entry[4] or money(plan['target'])>entry[5] or plan['datetime'][:10]<entry[1]:raise ValueError()
                 stamp=datetime.strptime(payload['datetime'],'%Y-%m-%d %H:%M:%S')
                 if stamp.date().isoformat()!=day(entry[1]):raise ValueError()
                 text(payload['staff'],'담당자',True,100)

@@ -9,6 +9,16 @@ ATLAS=Path(__file__).resolve().parent/'assets'/'menu-icons-3d.png'
 ATLAS_SHA256='91096d5d54212a57301f6645f0b85d79152e5bd87397e55552b21356525933e8'
 PAYMENT_ATLAS=ATLAS.with_name('payment-icons-real3d.png')
 PAYMENT_KEYS=('back','forward','payables','supplier','purchase_payment','bill','receivables','member','sales_payment','ledger','profit','connection','update','remote','printer','excel')
+PURCHASE_ACTION_ATLAS=ATLAS.with_name('purchase-actions-real3d.png')
+PURCHASE_ACTION_KEYS=('move_up','move_down','batch_input')
+PURCHASE_ACTION_SHA256='3004231aaabcb665b9eae3a7fbd5260ed62ea7ba188df129ed2d0b08ef863ced'
+
+
+@lru_cache(maxsize=1)
+def _purchase_action_image():
+    image=QImage(str(PURCHASE_ACTION_ATLAS))
+    if image.isNull() or not image.hasAlphaChannel() or image.width()!=image.height()*3:return None
+    return image.convertToFormat(QImage.Format.Format_ARGB32_Premultiplied)
 
 
 @lru_cache(maxsize=1)
@@ -82,6 +92,13 @@ def _fitted_icon(image,source):
 
 
 def family(key):
+    if key=='move_up' or key.startswith('위로'):return 'move_up'
+    if key=='move_down' or key.startswith('아래로'):return 'move_down'
+    if key=='batch_input' or key.startswith('일괄입력'):return 'batch_input'
+    if key=='기능' or key.startswith('기능 '):return 'settings'
+    if key.startswith('부가정보'):return 'info'
+    if key.startswith('저장') or key.startswith('전표 적용'):return 'backup'
+    if key=='취소':return 'back'
     if key in {'back','이전'}:return 'back'
     if key in {'forward','다음'}:return 'forward'
     if '카드' in key:return 'card'
@@ -121,8 +138,13 @@ def menu_icon(key):
     return normal_menu_icon(family(key))
 
 
-@lru_cache(maxsize=32)
+@lru_cache(maxsize=64)
 def _family_icon(kind):
+    if kind in PURCHASE_ACTION_KEYS:
+        image=_purchase_action_image()
+        if image is not None:
+            edge=image.height();index=PURCHASE_ACTION_KEYS.index(kind)
+            return _fitted_icon(image,QRectF(index*edge,0,edge,edge))
     if kind in PERSONAL_ASSETS:
         image=_personal_image(kind)
         if image is not None:return _fitted_icon(image,QRectF(image.rect()))

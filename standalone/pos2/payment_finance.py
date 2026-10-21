@@ -5,6 +5,7 @@ Paying that bill must never reduce supplier debt for a second time. Discounts
 are non-cash settlements, not payments or changes to inventory cost/VAT.
 """
 from datetime import date
+import json
 from calendar import monthrange
 from .common import day,money,text,now
 from .currency import amount as public_amount
@@ -29,6 +30,53 @@ def validate_instruments(db):
 
 
 class PaymentFinanceMixin:
+    def purchase_payment_batch(self,payment_id):
+        """Immutable batch membership comes from the original posting audit."""
+        self._require('trade');self.require_menu('payments');self.require_menu('purchases')
+        row=self.db.execute("SELECT p.* FROM payments p JOIN documents d ON d.id=p.document_id WHERE p.id=? AND d.kind='purchase' AND d.status='posted'",(payment_id,)).fetchone()
+        if not row or row['voided'] or row['supplier_settlement_id']:
+            raise ValueError('유효한 개별 매입 결제 이력을 선택하세요. 공급사 묶음결제는 결제관리에서 처리하세요.')
+        audit=self.db.execute("SELECT a.detail FROM audit a,json_each(a.detail,'$.records') r WHERE a.action='financial_payment_batch' AND a.entity='partner' AND a.entity_id=? AND json_extract(r.value,'$.type')='payment' AND json_extract(r.value,'$.id')=? ORDER BY a.id DESC LIMIT 1",(row['partner_id'],payment_id)).fetchone()
+        detail=json.loads(audit[0]) if audit else {}
+        ids=[r['id'] for r in detail.get('records',[]) if r['type']=='payment'] or [payment_id]
+        rows=[dict(self.db.execute('SELECT * FROM payments WHERE id=?',(identifier,)).fetchone()) for identifier in ids]
+        if any(r['voided'] or r['document_id']!=row['document_id'] or r['supplier_settlement_id'] or r['date']!=row['date'] for r in rows):
+            raise ValueError('일부 결제가 취소·변경된 묶음입니다. 최신 결제 이력을 확인하세요.')
+        values={k:sum(r['amount'] for r in rows if r['method']==k) for k in METHODS}
+        bill=self.db.execute('SELECT number,due_date,bank,paid_date FROM payable_bills WHERE payment_id IN ('+','.join('?' for _ in ids)+')',ids).fetchone()
+        plan=detail.get('details') or dict(partner_id=row['partner_id'],target=str(public_amount(sum(values.values()))),components={k:str(public_amount(v)) for k,v in values.items()},datetime=row['date']+' 00:00:00',account='',memo=row['memo'],bill=dict(bill) if bill else None)
+        if plan['bill']:plan['bill']={k:plan['bill'][k] for k in ('number','due_date','bank')}
+        snapshot=self.payment_context(row['partner_id'],row['date'],row['document_id'])
+        state=fingerprint(dict(rows=rows,supplier=snapshot['state'],bill=dict(bill) if bill else None))
+        return dict(plan=plan,payment_ids=ids,document_id=row['document_id'],cap=snapshot['cap']+sum(values.values()),state=state,
+                    editable=row['date']==date.today().isoformat() and not (bill and bill['paid_date']))
+
+    def replace_purchase_payment_batch(self,payment_id,plan,expected_state,reason):
+        with self._tx():
+            self._require_capability('payments','create')
+            current=self._void_purchase_payment_batch_in_tx(payment_id,expected_state,reason)
+            from .purchase_payment_plan import normalize_plan
+            plan=normalize_plan(plan)
+            if plan['partner_id']!=current['plan']['partner_id'] or plan['datetime'][:10]!=date.today().isoformat():
+                raise ValueError('당일 같은 공급사의 결제만 수정할 수 있습니다.')
+            snapshot=self.payment_context(plan['partner_id'],plan['datetime'][:10],current['document_id'])
+            result=self._register_supplier_payment_in_tx(plan['partner_id'],plan['components'],plan['datetime'][:10],plan['memo'],snapshot['state'],current['document_id'],plan['bill'],plan)
+            self._audit('replace_purchase_payment_batch','payment',payment_id,dict(reason=reason,replacements=result['records']))
+            return result
+
+    def void_purchase_payment_batch(self,payment_id,expected_state,reason):
+        with self._tx():
+            self._void_purchase_payment_batch_in_tx(payment_id,expected_state,reason)
+
+    def _void_purchase_payment_batch_in_tx(self,payment_id,expected_state,reason):
+        self._require_capability('payments','delete')
+        current=self.purchase_payment_batch(payment_id)
+        if current['state']!=expected_state:raise ValueError('결제·잔액이 바뀌었습니다. 최신 이력을 다시 조회하세요.')
+        if not current['editable']:raise ValueError('취소되지 않은 당일 결제만 수정·취소할 수 있습니다. 지급 완료 어음은 변경할 수 없습니다.')
+        reason=text(reason,'결제 정정 사유',True,500)
+        for identifier in current['payment_ids']:self._void_trade_payment(identifier,reason)
+        return current
+
     def payment_context(self,partner_id,payment_date=None,document_id=None):
         self._require('trade');self.require_menu('payments')
         when=day(payment_date or date.today())
@@ -44,38 +92,46 @@ class PaymentFinanceMixin:
                     balance=outstanding['balance'],as_of=outstanding['as_of'],date=when,user_name=self.actor['name'],state=state,
                     opening=outstanding['opening'],documents=outstanding['documents'])
 
-    def register_supplier_payment(self,partner_id,components,payment_date,memo='',expected_state=None,document_id=None,bill=None):
+    def register_supplier_payment(self,partner_id,components,payment_date,memo='',expected_state=None,document_id=None,bill=None,details=None):
         with self._tx():
-            self._require('trade');self._require_capability('payments','create')
-            if not isinstance(components,dict) or set(components)-set(METHODS):raise ValueError('결제 항목을 확인하세요.')
-            values={key:money(components.get(key,0)) for key in METHODS}
-            total=sum(values.values())
-            if not total:raise ValueError('결제금액을 입력해주시기 바랍니다.')
-            memo=text(memo,'결제 메모',maximum=300)
-            snapshot=self.payment_context(partner_id,payment_date,document_id)
-            if not expected_state or expected_state!=snapshot['state']:raise ValueError('잔액이 바뀌었습니다. 다시 조회한 뒤 결제하세요.')
-            if total>snapshot['cap']:raise ValueError('현재 또는 선택일의 결제 가능 잔액을 초과합니다.')
-            if values['bill']:
-                if not isinstance(bill,dict) or set(bill)!={'number','due_date','bank'}:raise ValueError('어음번호·만기일·은행을 확인하세요.')
-                bill=dict(number=text(bill['number'],'어음번호',True,80),due_date=day(bill['due_date']),bank=text(bill['bank'],'은행',maximum=100))
-                if bill['due_date']<snapshot['date']:raise ValueError('어음 만기일은 발행일보다 빠를 수 없습니다.')
-                if self.db.execute('SELECT 1 FROM payable_bills WHERE number=?',(bill['number'],)).fetchone():raise ValueError('이미 등록된 어음번호입니다. 취소 이력도 같은 번호를 재사용하지 않습니다.')
-            elif bill:raise ValueError('어음금액이 없는 발행 정보입니다.')
-            ids=[]
-            self._finance_batch_active=True
-            try:
-                for method,value in values.items():
-                    if not value:continue
-                    if document_id is None:
-                        identifier=self._settle_supplier_in_tx(partner_id,public_amount(value),snapshot['date'],method,memo)
-                    else:identifier=self._insert_trade_payment(document_id,value,snapshot['date'],method,memo)
-                    ids.append(dict(id=identifier,type='settlement' if document_id is None else 'payment',method=method))
-                    if method=='bill':
-                        key='settlement_id' if document_id is None else 'payment_id'
-                        self.db.execute(f'INSERT INTO payable_bills({key},number,due_date,bank) VALUES(?,?,?,?)',(identifier,bill['number'],bill['due_date'],bill['bank']))
-            finally:self._finance_batch_active=False
-            self._audit('financial_payment_batch','partner',partner_id,dict(records=ids,document_id=document_id,amount=total))
-            return dict(records=ids,amount=total,paid_total=sum(v for k,v in values.items() if k not in DISCOUNTS),discount_total=sum(values[k] for k in DISCOUNTS))
+            return self._register_supplier_payment_in_tx(partner_id,components,payment_date,memo,expected_state,document_id,bill,details)
+
+    def _register_supplier_payment_in_tx(self,partner_id,components,payment_date,memo='',expected_state=None,document_id=None,bill=None,details=None):
+        self._require('trade');self._require_capability('payments','create')
+        if not isinstance(components,dict) or set(components)-set(METHODS):raise ValueError('결제 항목을 확인하세요.')
+        values={key:money(components.get(key,0)) for key in METHODS}
+        total=sum(values.values())
+        if not total:raise ValueError('결제금액을 입력해주시기 바랍니다.')
+        memo=text(memo,'결제 메모',maximum=300)
+        snapshot=self.payment_context(partner_id,payment_date,document_id)
+        if not expected_state or expected_state!=snapshot['state']:raise ValueError('잔액이 바뀌었습니다. 다시 조회한 뒤 결제하세요.')
+        if total>snapshot['cap']:raise ValueError('현재 또는 선택일의 결제 가능 잔액을 초과합니다.')
+        if details is not None:
+            from .purchase_payment_plan import normalize_plan
+            details=normalize_plan(details)
+            if details['partner_id']!=partner_id or details['datetime'][:10]!=snapshot['date'] or money(details['target'])!=total or any(money(details['components'][k])!=v for k,v in values.items()) or details['bill']!=bill or details['memo']!=memo:
+                raise ValueError('상세 결제와 지급 입력값이 일치하지 않습니다.')
+        if values['bill']:
+            if not isinstance(bill,dict) or set(bill)!={'number','due_date','bank'}:raise ValueError('어음번호·만기일·은행을 확인하세요.')
+            bill=dict(number=text(bill['number'],'어음번호',True,80),due_date=day(bill['due_date']),bank=text(bill['bank'],'은행',maximum=100))
+            if bill['due_date']<snapshot['date']:raise ValueError('어음 만기일은 발행일보다 빠를 수 없습니다.')
+            if self.db.execute('SELECT 1 FROM payable_bills WHERE number=?',(bill['number'],)).fetchone():raise ValueError('이미 등록된 어음번호입니다. 취소 이력도 같은 번호를 재사용하지 않습니다.')
+        elif bill:raise ValueError('어음금액이 없는 발행 정보입니다.')
+        ids=[]
+        self._finance_batch_active=True
+        try:
+            for method,value in values.items():
+                if not value:continue
+                if document_id is None:
+                    identifier=self._settle_supplier_in_tx(partner_id,public_amount(value),snapshot['date'],method,memo)
+                else:identifier=self._insert_trade_payment(document_id,value,snapshot['date'],method,memo)
+                ids.append(dict(id=identifier,type='settlement' if document_id is None else 'payment',method=method))
+                if method=='bill':
+                    key='settlement_id' if document_id is None else 'payment_id'
+                    self.db.execute(f'INSERT INTO payable_bills({key},number,due_date,bank) VALUES(?,?,?,?)',(identifier,bill['number'],bill['due_date'],bill['bank']))
+        finally:self._finance_batch_active=False
+        self._audit('financial_payment_batch','partner',partner_id,dict(records=ids,document_id=document_id,amount=total,details=details))
+        return dict(records=ids,amount=total,paid_total=sum(v for k,v in values.items() if k not in DISCOUNTS),discount_total=sum(values[k] for k in DISCOUNTS))
 
     def payment_summary(self,start,end,search='',only_purchases=False,partner_id=None):
         self._require('trade');self.require_menu('payments')
