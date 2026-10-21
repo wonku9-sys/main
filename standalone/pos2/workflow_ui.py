@@ -50,6 +50,7 @@ def _dates(layout, callback):
 
 def _compact_scroll_row(layout, height=50):
     """Let small windows scroll controls, never widen the native frame."""
+    layout.setContentsMargins(0,0,0,0)
     content=QWidget();content.setLayout(layout)
     from PySide6.QtGui import QPalette
     palette=content.palette();palette.setColor(QPalette.ColorRole.Window,QColor('#DCE1DA'))
@@ -59,7 +60,10 @@ def _compact_scroll_row(layout, height=50):
     scroll.viewport().setPalette(palette)
     scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
     scroll.setSizePolicy(QSizePolicy.Policy.Ignored,QSizePolicy.Policy.Fixed)
-    scroll.setFixedHeight(height)
+    # A horizontal scrollbar consumes viewport height. Reserve it as well as
+    # the styled controls' true minimum height instead of cutting button text.
+    content.ensurePolished();layout.activate()
+    scroll.setFixedHeight(max(height,content.minimumSizeHint().height()+scroll.horizontalScrollBar().sizeHint().height()+2))
     return scroll
 
 
@@ -799,7 +803,7 @@ class TradeDialog(QDialog):
         self.table.setHorizontalHeaderLabels(["상품명", "규격", "바코드", "매입량" if kind.startswith("purchase") else "수량", "단위", "입수량", "총수량", "매입금액" if kind.startswith("purchase") else "거래금액", "매입단가" if kind.startswith("purchase") else "거래단가", "판매단가", "이익률(%)", "분류", "공급사", "현재고", "메모"])
         self.table.setSortingEnabled(False)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
-        for column, width in enumerate((220, 75, 125, 75, 180, 60, 100, 85, 95, 130, 85, 140, 150, 130, 60)):
+        for column, width in enumerate((220, 75, 135, 90, 180, 80, 100, 135, 135, 135, 90, 140, 150, 130, 160)):
             self.table.setColumnWidth(column, width)
         self.table.verticalHeader().setDefaultSectionSize(44)
         self.detail_tabs = QTabWidget()
@@ -1206,6 +1210,7 @@ class TradeDialog(QDialog):
             row[key].setMargin(5)
         for key in ("qty", "price",'total','factor','sale_price'):
             row[key].setAlignment(Qt.AlignmentFlag.AlignRight)
+            row[key].setStyleSheet('padding:2px 4px;min-width:0px;')
         row['total'].setReadOnly(self.kind!='purchase' or self.readonly)
         row['factor'].setReadOnly(self.kind!='purchase' or self.readonly)
         row['sale_price'].setReadOnly(self.kind!='purchase' or self.readonly)

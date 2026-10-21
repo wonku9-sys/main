@@ -143,6 +143,29 @@ def test_crash_work_recovery_keeps_datetime_amount_factor_sale_price_and_memo(sh
     assert recovered.line_rows[0]['total'].text()=='100.00'
 
 
+def test_styled_purchase_rows_reserve_scrollbar_height_and_show_complete_amount(shop):
+    from pos2.app import STYLE
+    from pos2.workflow_ui import _compact_scroll_row
+    from PySide6.QtWidgets import QHBoxLayout,QScrollArea
+    app,_,window,_,product,_,_=shop
+    previous=app.styleSheet();app.setStyleSheet(STYLE)
+    try:
+        layout=QHBoxLayout();button=QPushButton('상품검색 (F5)');layout.addWidget(button)
+        strip=_compact_scroll_row(layout,46);strip.resize(180,strip.height());strip.show();app.processEvents()
+        assert strip.viewport().height()>=button.minimumSizeHint().height()
+        trade=TradeDialog(window);trade.add_line(product,price='12345678.90');trade.show();app.processEvents()
+        for key in ('total','price','sale_price'):
+            field=trade.line_rows[-1][key]
+            needed=field.fontMetrics().horizontalAdvance(field.text())+12
+            assert field.width()>=needed,(key,field.width(),needed)
+        for strip in trade.findChildren(QScrollArea):
+            if strip.objectName()=='popupScroll':continue
+            if strip.widget() and strip.widget().layout():
+                assert strip.viewport().height()>=strip.widget().layout().minimumSize().height()
+        strip.close();trade.close()
+    finally:app.setStyleSheet(previous)
+
+
 def test_real_nested_supplier_product_amount_save_price_check_sequence(shop,monkeypatch):
     app,store,window,supplier,product,_,warnings=shop
     page=TradesPage(window,'purchase');sequence=[];errors=[];original=QDialog.exec
