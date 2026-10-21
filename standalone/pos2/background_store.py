@@ -16,7 +16,12 @@ class StoreTask(QThread):
         if not hasattr(app, '_sy_catalog_workers'):
             app._sy_catalog_workers = []
         app._sy_catalog_workers.append(self)
-        self.finished.connect(lambda: app._sy_catalog_workers.remove(self) if self in app._sy_catalog_workers else None)
+        def forget(*_):
+            if self in app._sy_catalog_workers:app._sy_catalog_workers.remove(self)
+        self.finished.connect(forget)
+        # A parent may be destroyed after run() stops but before the queued
+        # finished callback is delivered. Never retain a deleted Qt wrapper.
+        self.destroyed.connect(forget)
 
     def run(self):
         from .store import Store

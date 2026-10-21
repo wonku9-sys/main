@@ -15,7 +15,7 @@ class RemotePaymentCheck(QThread):
 
 class PaymentAccessDialog(FormDialog):
     def __init__(self,window):
-        super().__init__('결제관리 · 사용자 확인',window);self.store=window.store;self.worker=None;self.verified=False;self.failure=''
+        super().__init__('결제관리 · 사용자 확인',window);self.store=window.store;self.worker=None;self.verified=False;self.failure='';self.busy=False
         self._sy_no_home_button=True;self.resize(470,310);self.setMinimumWidth(430)
         self.setStyleSheet('QDialog{background:#F6EFDD;} QLabel#dialogTitle{background:#EABF62;font-size:17px;padding:10px;}')
         name=self.field('name','사용자 이름',self.store.actor['name']);name.setReadOnly(True)
@@ -27,7 +27,7 @@ class PaymentAccessDialog(FormDialog):
         self._sy_compact_confirmation=True;self._sy_no_extra_close=True;self._sy_pinned_footer=self.buttons
         self.password.returnPressed.connect(self.submit)
     def submit(self):
-        if self.worker and self.worker.isRunning():return
+        if self.authentication_pending():return
         if not self.password.text():self.message.setText('비밀번호를 입력하세요.');return
         if getattr(self.store,'is_shared_client',False):
             self.worker=RemotePaymentCheck(self,self.store,self.password.text())
@@ -38,16 +38,20 @@ class PaymentAccessDialog(FormDialog):
         else:
             from .background_store import StoreTask
             self.worker=StoreTask(self,self.store,'verify_payment_access',(self.password.text(),))
-        self.failure='';self.verified=False;self.password.clear();self.buttons.setEnabled(False)
+        self.failure='';self.verified=False;self.busy=True;self.password.clear();self.password.setEnabled(False);self.buttons.setEnabled(False)
         self.worker.succeeded.connect(self.succeeded);self.worker.failed.connect(self.failed);self.worker.finished.connect(self.completed);self.worker.start()
     def succeeded(self,result):self.verified=result.get('user_id')==self.store.actor['id']
     def failed(self,error):self.failure=error
     def completed(self):
+        self.busy=False
+        self.password.clear();self.password.setEnabled(True)
         self.buttons.setEnabled(True)
         if self.verified:self.accept()
         else:self.message.setText(self.failure or '사용자 확인에 실패했습니다.');self.password.setFocus()
     def reject(self):
-        if not self.worker or not self.worker.isRunning():super().reject()
+        if not self.authentication_pending():super().reject()
     def closeEvent(self,event):
-        if self.worker and self.worker.isRunning():event.ignore()
+        if self.authentication_pending():event.ignore()
         else:super().closeEvent(event)
+    def authentication_pending(self):
+        return self.busy or bool(self.worker and self.worker.isRunning())

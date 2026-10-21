@@ -96,8 +96,8 @@ def test_payment_access_wrong_password_keeps_identity_and_async_success(shop):
     with pytest.raises(ValueError):s.verify_payment_access('wrong')
     assert s.actor==actor
     dialog=PaymentAccessDialog(window);dialog.show();dialog.password.setText(PASSWORD);dialog.submit();deadline=monotonic()+10
-    while dialog.worker.isRunning() and monotonic()<deadline:app.processEvents();time.sleep(.005)
-    app.processEvents();assert dialog.verified and dialog.result()==dialog.DialogCode.Accepted and not dialog.password.text() and s.actor==actor
+    while dialog.busy and monotonic()<deadline:app.processEvents();time.sleep(.005)
+    app.processEvents();assert not dialog.busy and dialog.verified and dialog.result()==dialog.DialogCode.Accepted and not dialog.password.text() and s.actor==actor
     assert dialog.fields['code'].isReadOnly()
 
 

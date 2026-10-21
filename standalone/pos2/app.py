@@ -1593,7 +1593,7 @@ def main(argv=None):
                             capture('-payment-access',payment_access)
                             payment_access.password.setText(DEMO_PASSWORD);payment_access.submit()
                             deadline=monotonic()+15
-                            while payment_access.worker.isRunning() and monotonic()<deadline:
+                            while payment_access.busy and monotonic()<deadline:
                                 app.processEvents();sleep(.005)
                             app.processEvents();assert payment_access.verified
                             payment_access.deleteLater()
