@@ -109,8 +109,9 @@ def test_draft_then_post_changes_stock_only_after_explicit_confirmation(app, sho
     assert len(persisted["payments"]) == 1
     assert store.products()[0]["stock_qty"] == "2.500"
     readonly = TradeDialog(window, "purchase", persisted)
-    assert readonly.readonly and not readonly.scan.isEnabled()
-    assert not readonly.line_rows[0]["qty"].isEnabled()
+    assert readonly.amending and not readonly.readonly and readonly.scan.isEnabled()
+    assert not readonly.draft_button.isVisible()  # Posted revisions never reopen as drafts.
+    assert readonly.line_rows[0]["qty"].isEnabled()
 
 
 def test_date_change_preserves_manual_price_until_confirmed_quote_apply(app, shop, monkeypatch):
