@@ -49,7 +49,7 @@ jobs:
           import shutil
           for kind,pattern in (('Windows-x64','*-Windows-x64-portable-*.zip'),('source','*-source-*.zip')):
               files=list(Path('standalone/dist').glob(pattern));assert len(files)==1
-              target=Path('standalone/dist')/('SY-POS-v2.4.0rc32-'+kind+'-icons3d.zip')
+              target=Path('standalone/dist')/('SY-POS-v2.4.0rc33-'+kind+'-icons3d.zip')
               shutil.copyfile(files[0],target)
               target.with_suffix('.zip.sha256').write_text(sha256(target.read_bytes()).hexdigest()+'  '+target.name+'\n',encoding='utf-8')
       - uses: actions/upload-artifact@v4
@@ -86,4 +86,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}
-        run: gh release create "$RELEASE_TAG" --verify-tag --prerelease --latest=false --title "SY POS v2.4.0rc32 · 매입 시트와 상세 결제" --notes-file standalone/RELEASE_NOTES.md release-assets/*.zip release-assets/*.zip.sha256
+        run: gh release create "$RELEASE_TAG" --verify-tag --prerelease --latest=false --title "SY POS v2.4.0rc33 · 매입 상품검색창 연속 유지" --notes-file standalone/RELEASE_NOTES.md release-assets/*.zip release-assets/*.zip.sha256

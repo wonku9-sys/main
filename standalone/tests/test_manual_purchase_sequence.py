@@ -100,6 +100,7 @@ def test_space_immediately_adds_without_posting_and_checkbox_enter_still_works(s
     assert len([r for r in trade.line_rows if r['product'].currentData()])==1
     picker.close()
     picker=ProductPicker(trade);picker.set_apply_callback(trade.apply_picked_products)
+    picker.keep_open.setChecked(False)  # explicit optional close-after-apply mode
     picker.show();picker.activateWindow();app.processEvents()
     QTest.keyClick(picker.search,Qt.Key.Key_Down)
     picker.grid.cellDoubleClicked.emit(0,2);assert len(picker.checked)==1
@@ -182,6 +183,8 @@ def test_real_nested_supplier_product_amount_save_price_check_sequence(shop,monk
     def product_step(dialog):
         sequence.append('상품검색');dialog.search.setText('사과');press(dialog.search,'Down')
         press(dialog.grid,'Space');sequence.append('상품 즉시 추가');assert dialog.applied_batches==1
+        assert dialog.isVisible() and dialog.keep_open.isChecked()
+        dialog.close()  # return to quantity entry only when the user closes it
     def price_step(dialog):
         sequence.append('매입상품 체크');assert dialog.selected_updates()==[]
         dialog.checks[0]['sale_price'].setChecked(True);dialog.confirm_button.click()

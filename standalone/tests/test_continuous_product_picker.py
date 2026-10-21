@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 import pytest
 from PySide6.QtCore import Qt, QCoreApplication, QEvent
-from PySide6.QtGui import QKeySequence
+from PySide6.QtGui import QKeySequence,QKeyEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QMessageBox
 from pos2.app import MainWindow
@@ -67,6 +67,34 @@ def test_failed_or_stale_batch_keeps_selection_and_does_not_apply(desktop):
     picker=ProductPicker(trade);picker.set_apply_callback(calls.append);picker.show();app.processEvents()
     picker.check_all(True);store.save_product({'active':False},ids[0]);picker.apply_checked()
     assert not calls and len(picker.checked)==3 and picker.isVisible() and picker.applied_batches==0
+
+
+def test_purchase_space_keeps_search_open_by_default_and_ignores_auto_repeat(desktop):
+    app,store,window,ids=desktop
+    trade=TradeDialog(window,'purchase')
+    picker=ProductPicker(trade);picker.set_apply_callback(trade.apply_picked_products)
+    picker.show();picker.activateWindow();app.processEvents()
+    assert picker.keep_open.isChecked()
+    before=store.audit_revision()
+    for index,name in enumerate(('사과','배','귤'),1):
+        picker.search.setText(name);picker.search_now()
+        picker.grid.setFocus();QTest.keyClick(picker.grid,Qt.Key.Key_Space);app.processEvents()
+        assert picker.isVisible() and picker.applied_batches==index
+        assert picker.search.hasFocus() and not picker.search.text() and not picker.checked
+        QCoreApplication.sendEvent(picker.grid,QKeyEvent(QEvent.Type.KeyPress,Qt.Key.Key_Space,Qt.KeyboardModifier.NoModifier,' ',True,2))
+        assert picker.applied_batches==index
+    assert [r['product'].currentData() for r in trade.line_rows]==ids
+    assert store.audit_revision()==before and not store.documents()
+    picker.close();assert not picker.isVisible()
+
+
+def test_non_purchase_picker_default_and_single_selection_contract_do_not_change(desktop):
+    _,_,window,_=desktop
+    sale=ProductPicker(TradeDialog(window,'sale'))
+    assert not sale.keep_open.isChecked()
+    purchase=ProductPicker(TradeDialog(window,'purchase'))
+    purchase.choose()
+    assert purchase.result()==purchase.DialogCode.Accepted  # no apply callback: ordinary selection closes
 
 
 def test_four_check_controls_sort_filter_and_function_keys(desktop):

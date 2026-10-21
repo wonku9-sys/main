@@ -225,7 +225,8 @@ class ProductPicker(QDialog):
         body.addWidget(self.supplier_label)
         body.addWidget(QLabel("Space: 선택 상품 즉시 추가 · 더블클릭: 체크/해제 · Enter: 체크한 상품 확인 · F4: 검색어 · F5: 검색"))
         self.keep_open = QCheckBox('적용 후 검색창 유지 · 연속 검색/추가')
-        self.keep_open.setChecked(False); self.keep_open.hide(); body.addWidget(self.keep_open)
+        self.keep_open.setChecked(getattr(parent,'kind',None)=='purchase')
+        self.keep_open.hide(); body.addWidget(self.keep_open)
         self.result_label = QLabel(); body.addWidget(self.result_label)
         self.grid = ProductSelectionGrid(["선택", "상품코드", "상품명", "규격", "바코드", "단위", "공급사", "매입가", "판매가", "현재고"])
         from PySide6.QtWidgets import QAbstractItemView
@@ -324,7 +325,7 @@ class ProductPicker(QDialog):
         finally:self.grid.setSortingEnabled(sorting)
 
     def toggle_current(self):
-        """Space checks a selection; only explicit confirmation adds it."""
+        """Toggle checked rows without immediately adding them."""
         rows=self.grid.selectionModel().selectedRows()
         if not rows and self.grid.currentRow()>=0:
             self.grid.selectRow(self.grid.currentRow())
