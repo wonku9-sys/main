@@ -1410,6 +1410,10 @@ def main(argv=None):
                             idle_import.deleteLater()
                             picker = ProductPicker(purchase)
                             picker.set_apply_callback(purchase.apply_picked_products)
+                            # This capture explicitly tests optional continuous
+                            # entry; normal confirmation now closes by default.
+                            assert not picker.keep_open.isChecked()
+                            picker.keep_open.setChecked(True)
                             assert picker.supplier_only.isChecked()
                             assert 0 < picker.grid.rowCount() < len(store.products())
                             picker.check_all(True)
