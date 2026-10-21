@@ -1,0 +1,15 @@
+Lottery reference photograph attribution
+
+Title: National Lottery machine Guinevere
+Photographer: Matt Brown
+Source: https://commons.wikimedia.org/wiki/File:National_Lottery_machine_Guinevere.jpg
+Image: https://upload.wikimedia.org/wikipedia/commons/e/e1/National_Lottery_machine_Guinevere.jpg
+License: Creative Commons Attribution 2.0 Generic (CC BY 2.0)
+License terms: https://creativecommons.org/licenses/by/2.0/
+Legal code: https://creativecommons.org/licenses/by/2.0/legalcode
+
+The original photograph is included unchanged in assets/lottery-machine.jpg.
+The application displays a resized, orientation-correct preview, with attribution.
+The interactive game artwork is newly drawn by SY POS, not extracted from the photo.
+The photographer and lottery operators do not endorse SY POS. The photograph is
+a reference illustration, not an official Korean lottery service or drawing.

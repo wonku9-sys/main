@@ -1,0 +1,96 @@
+name: Native package verified rc24 runtime
+
+on:
+  push:
+    tags:
+      - 'native-package-v*'
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 15
+    env:
+      QT_QPA_PLATFORM: windows
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: x64
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.12.23'
+          enable-cache: true
+          cache-dependency-glob: standalone/uv.lock
+      - name: Verify identical runtime and completed Windows test gates
+        shell: python
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          import json, subprocess
+          tested = '429deb89241e4e0b1fbfd9b57ec2b7917e104983'
+          subprocess.run(['git', 'diff', '--exit-code', tested, 'HEAD', '--',
+              'standalone/pos2', 'standalone/tests', 'standalone/pyproject.toml',
+              'standalone/uv.lock', 'standalone/requirements.txt'], check=True)
+          def api(path):
+              return json.loads(subprocess.check_output(['gh','api',path], text=True, encoding='utf-8'))
+          run = api('repos/wonku9-sys/main/actions/runs/39524329560')
+          assert run['head_sha'] == tested
+          job = api('repos/wonku9-sys/main/actions/jobs/118975330643')
+          assert job['run_id'] == run['id']
+          steps = {step['name']: step['conclusion'] for step in job['steps']}
+          for gate in ('Test new independent business engine and desktop',
+              'Test full independent business engine and desktop',
+              'Explicitly validate customer credit and manual card corrections'):
+              assert steps.get(gate) == 'success', (gate, steps.get(gate))
+          print('PASS: unchanged runtime, tests, dependencies; all three native Windows test gates already passed')
+      - name: Install exact tested dependencies
+        run: uv sync --frozen --extra dev --project standalone
+      - name: Build and execute actual Windows EXE with diagnostic log
+        run: uv run --frozen --extra dev --project standalone python standalone/build_portable.py
+      - name: Package corresponding source
+        run: uv run --frozen --extra dev --project standalone python standalone/package_source.py
+      - name: Preserve isolated smoke diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rc24-native-smoke
+          if-no-files-found: warn
+          path: |
+            standalone/dist/SY-POS-Windows-smoke*.log
+            standalone/dist/SY-POS-Windows-smoke*.png
+      - name: Preserve verified packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: rc24-native-packages
+          if-no-files-found: error
+          path: |
+            standalone/dist/SY-POS-v*.zip
+            standalone/dist/SY-POS-v*.zip.sha256
+
+  release:
+    needs: windows
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: rc24-native-packages
+          path: release-assets
+      - name: Verify archive checksums
+        working-directory: release-assets
+        run: sha256sum --check SY-POS-v*.zip.sha256
+      - name: Publish tested native package
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: gh release create "$RELEASE_TAG" --verify-tag --prerelease --latest=false --title "SY POS v2.4.0rc24 · 매입전표 결제관리" --notes-file standalone/RELEASE_NOTES.md release-assets/*.zip release-assets/*.zip.sha256
