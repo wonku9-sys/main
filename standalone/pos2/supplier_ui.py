@@ -471,8 +471,8 @@ class SuppliersPage(Page):
         from PySide6.QtWidgets import QMenu
         menu = QMenu(self)
         menu.addAction('등록정보 / 수정', self.edit)
-        menu.addAction('줄여보기', lambda: self.grid.verticalHeader().setDefaultSectionSize(25))
-        menu.addAction('펼쳐보기', lambda: self.grid.verticalHeader().setDefaultSectionSize(38))
+        menu.addAction('줄여보기', lambda: self.set_row_density(True))
+        menu.addAction('펼쳐보기', lambda: self.set_row_density(False))
         for label, columns in (('사람/연락처 보기', (4, 5, 6, 7, 8)), ('계좌정보 보기', (12, 13, 14))):
             entry = menu.addAction(label); entry.setCheckable(True)
             entry.setChecked(all(not self.grid.isColumnHidden(c) for c in columns))
@@ -495,6 +495,13 @@ class SuppliersPage(Page):
         menu.addAction('모두 선택', self.grid.selectAll)
         menu.addAction('선택 해제', self.grid.clearSelection)
         return menu
+
+    def set_row_density(self, compact):
+        # Native Windows header metrics can require 27px or more. Respect the
+        # actual font/style minimum rather than clipping letters to force 25px.
+        header=self.grid.verticalHeader()
+        height=max(25 if compact else 38,header.minimumSectionSize(),self.grid.fontMetrics().height()+6)
+        header.setDefaultSectionSize(height)
 
     def change_payment_method(self, method):
         rows = self.selected_suppliers()

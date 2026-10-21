@@ -61,7 +61,9 @@ def test_context_menu_operates_on_arbitrary_selected_rows(shop,monkeypatch):
     menu=page.make_context_menu();actions={a.text():a for a in menu.actions()}
     actions['사람/연락처 보기'].trigger();assert all(page.grid.isColumnHidden(c) for c in (4,5,6,7,8))
     actions['계좌정보 보기'].trigger();assert page.grid.isColumnHidden(12)
-    actions['줄여보기'].trigger();assert page.grid.verticalHeader().defaultSectionSize()==25
+    actions['줄여보기'].trigger()
+    header=page.grid.verticalHeader()
+    assert header.defaultSectionSize()==max(25,header.minimumSectionSize(),page.grid.fontMetrics().height()+6)
     monkeypatch.setattr('pos2.supplier_ui.confirm',lambda *_:True)
     actions['선택 공급사 무효'].trigger()
     assert [r['active'] for r in store.partners('supplier')]==[0,1,0,1]

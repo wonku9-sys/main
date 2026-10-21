@@ -75,6 +75,17 @@ def test_four_toolbar_groups_are_ordered_without_extra_commands(desktop):
     assert groups==[['이전','다음'],['첫화면','달력'],['상품장','매입전표','판매조회'],['F8 스캔']]
 
 
+@pytest.mark.parametrize('font_px',[14,18,22])
+def test_supplier_compact_rows_never_clip_native_font(desktop,font_px):
+    app,_,window,_=desktop;window.open_page('suppliers');page=window.current_page
+    font=page.grid.font();font.setPixelSize(font_px);page.grid.setFont(font);app.processEvents()
+    page.set_row_density(True);small=page.grid.verticalHeader().defaultSectionSize()
+    assert small>=page.grid.fontMetrics().height()+6
+    assert small>=page.grid.verticalHeader().minimumSectionSize()
+    page.set_row_density(False)
+    assert page.grid.verticalHeader().defaultSectionSize()>=max(38,small)
+
+
 def test_opened_editor_actions_stay_fixed_and_no_duplicate_home(desktop):
     app,store,window,_=desktop
     from pos2.widgets import FormDialog
