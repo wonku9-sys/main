@@ -267,7 +267,7 @@ def test_new_product_popup_applies_without_posting_trade(app,shop):
     popup.page.product_saved.emit(product)
     row=next(r for r in trade.line_rows if r["product"].currentData()==product)
     assert row["qty"].text()=="0"
-    assert row["price"].text()=="1200.25"
+    assert row["price"].text()=="1,200.25"
     assert store.db.execute("SELECT COUNT(*) FROM documents").fetchone()[0]==0
     popup.deleteLater();trade.deleteLater();window.close();window.deleteLater()
 
