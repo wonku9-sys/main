@@ -1,0 +1,31 @@
+name: Diagnose native PDF embedding
+on:
+  push:
+    tags: ['pdf-probe-*']
+permissions:
+  contents: read
+jobs:
+  pdf:
+    runs-on: windows-2022
+    timeout-minutes: 8
+    env:
+      QT_QPA_PLATFORM: windows
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: x64
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.12.23'
+          enable-cache: true
+          cache-dependency-glob: standalone/uv.lock
+      - run: uv sync --frozen --extra dev --project standalone
+      - run: uv run --frozen --extra dev --project standalone python standalone/pdf_probe.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pdf-probe
+          path: standalone/dist/pdf-probe
