@@ -1,0 +1,48 @@
+name: Name the already verified rc25 download
+on:
+  push:
+    tags: ['delivery-rc25-*']
+permissions:
+  contents: write
+  actions: read
+jobs:
+  name-download:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Confirm the unchanged tested application and successful native run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: python
+        run: |
+          import json,subprocess
+          tested='b81cfe3bc0d5f8495689447fe6aa4ad320f431b6'
+          subprocess.run(['git','diff','--exit-code',tested,'HEAD','--','standalone'],check=True)
+          run=json.loads(subprocess.check_output(['gh','api','repos/wonku9-sys/main/actions/runs/39530487549'],text=True))
+          assert run['head_sha']==tested and run['conclusion']=='success'
+      - uses: actions/download-artifact@v4
+        with:
+          name: standalone-windows-x64
+          path: verified-input
+          run-id: 39530487549
+          github-token: ${{ github.token }}
+      - name: Copy only the checksum-verified native ZIP with an ASCII filename
+        shell: python
+        run: |
+          from pathlib import Path
+          from hashlib import sha256
+          import shutil
+          files=list(Path('verified-input').glob('*-Windows-x64-*.zip'))
+          assert len(files)==1
+          expected='62db67fe2e2ba8e6dde0f5b87034fb9557bd61e62806eda9049a4d96dd359552'
+          assert sha256(files[0].read_bytes()).hexdigest()==expected
+          destination=Path('SY-POS-v2.4.0rc25-Windows-x64-icons3d.zip')
+          shutil.copyfile(files[0],destination)
+          destination.with_suffix('.zip.sha256').write_text(expected+'  '+destination.name+'\n',encoding='utf-8')
+      - name: Publish the identical verified download without overwriting any asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload standalone-v2.4.0rc25-build2 --repo wonku9-sys/main SY-POS-v2.4.0rc25-Windows-x64-icons3d.zip SY-POS-v2.4.0rc25-Windows-x64-icons3d.zip.sha256
