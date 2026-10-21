@@ -152,8 +152,10 @@ def test_real_supplier_voucher_f5_f4_space_check_enter_close_and_draft_sequence(
         assert not dialog.isVisible()
     def product_step(picker):
         sequence.append('products');assert picker.supplier_only.isChecked()
+        picker.keep_open.setChecked(True)
         picker.search.setText('우유');press(app,picker,'F5');assert picker.grid.hasFocus()
-        press(app,picker.grid,'Space');assert picker.applied_batches==1 and picker.isVisible()
+        press(app,picker.grid,'Space');assert picker.applied_batches==0 and len(picker.checked)==1
+        press(app,picker.grid,'Return');assert picker.applied_batches==1 and picker.isVisible()
         press(app,picker,'F4');assert picker.search.hasFocus()
         press(app,picker,'F7');assert not picker.supplier_only.isChecked()
         picker.search.setText('다른상품');press(app,picker,'F5')
@@ -161,9 +163,9 @@ def test_real_supplier_voucher_f5_f4_space_check_enter_close_and_draft_sequence(
         press(app,picker,'F9');assert not picker.checked
         picker.check_all_button.click();press(app,picker.grid,'Return');assert picker.applied_batches==2
         press(app,picker,'F4');picker.expanded_units.setChecked(True);picker.search.setText('006600');press(app,picker,'F5')
-        press(app,picker.grid,'Space');assert picker.applied_batches==3
+        press(app,picker.grid,'Space');press(app,picker.grid,'Return');assert picker.applied_batches==3
         assert not [b for b in picker.findChildren(QPushButton) if b.text()=='첫화면']
-        picker.close_button.click();assert not picker.isVisible()
+        picker.close();assert not picker.isVisible()
     def voucher_step(dialog):
         sequence.append('voucher');assert dialog.partner.currentData()==ids['supplier']
         press(app,dialog,'F5')
@@ -173,7 +175,7 @@ def test_real_supplier_voucher_f5_f4_space_check_enter_close_and_draft_sequence(
         press(app,dialog,'Ctrl+B');assert dialog.scan.hasFocus()
         press(app,dialog,'Alt+A');assert store.document(dialog.saved_id)['status']=='draft'
         assert all(Decimal(p['stock_qty'])==0 for p in store.products())
-        dialog.close_button.click()
+        dialog.close()
     monkeypatch.setattr(PartnerPicker,'exec',lambda dialog:modal_run(dialog,supplier_step))
     monkeypatch.setattr(ProductPicker,'exec',lambda dialog:modal_run(dialog,product_step))
     monkeypatch.setattr(TradeDialog,'exec',lambda dialog:modal_run(dialog,voucher_step))

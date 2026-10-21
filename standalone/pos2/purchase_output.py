@@ -44,6 +44,8 @@ def purchase_record(dialog):
             lines.append(dict(product_id=product['id'],product_name=product['name'],unit_name=row['unit'].currentText(),qty=quantity,unit_price=price,total=total,tax_mode=product['tax_mode'],price_basis=row.get('price_basis',1)))
         record=dict(kind=dialog.kind,number=(dialog.record or {}).get('number','미확정 입력'),date=dialog.date.date().toString('yyyy-MM-dd'),partner_id=dialog.partner.currentData(),status='draft',memo=dialog.memo.text(),user_name=store.actor['name'],total=sum((Decimal(str(l['total'])) for l in lines),Decimal(0)),cash_paid=Decimal(0),balance=Decimal(0))
     if not lines:raise ValueError('출력할 상품이 없습니다.')
+    record['entry_datetime']=record.get('entry',{}).get('datetime') if dialog.readonly else dialog.date.dateTime().toString('yyyy-MM-dd HH:mm:ss')
+    record['entry_staff']=record.get('entry',{}).get('staff') if dialog.readonly else dialog.entry_staff.text()
     supplier=next((p for p in store.partners('supplier') if p['id']==record['partner_id']),None)
     if supplier is None:raise ValueError('전표의 공급사를 확인하세요.')
     for line in lines:
@@ -94,12 +96,12 @@ def purchase_html(record):
         party_rows=''.join(f'<tr><th width="12%">{label}</th><td width="38%">{e(left)}</td><th width="12%">{label}</th><td width="38%">{e(right)}</td></tr>' for label,left,right in parties(record))
         heading=' style="page-break-before:always"' if offset else ''
         pages.append(f'''<h1 align="center"{heading}>{e(record['title'])}</h1>
-        <p>매입일: {e(record['date'])}　전표번호: {e(record['number'])}　{e(status_text(record))}</p>
+        <p>매입일: {e(record.get('entry_datetime') or record['date'])}　전표번호: {e(record['number'])}　{e(status_text(record))}</p>
         <table width="100%"><tr><th colspan="2">공 급 자</th><th colspan="2">공 급 받 는 자</th></tr>{party_rows}</table><br>
         <table width="100%"><thead><tr>{''.join('<th>'+e(v)+'</th>' for v in HEADERS)}</tr></thead>{''.join(rows)}</table>
         <p align="right">페이지 소계: {sum(Decimal(str(l['total'])) for l in chunk):,.2f} 원　 /　전표 총합계: {Decimal(str(record['total'])):,.2f} 원</p>
         <p>단위별 총수량: {e(quantity_text(record))}<br>메모: {e(record.get('memo',''))}<br>
-        담당자: {e(record.get('user_name',''))}　품목 묶음 {offset//18+1}/{(len(lines)+17)//18}<br>{e(NOTICE)}<br>과/면은 저장된 구분이며 이 문서는 법정 세금계산서가 아닙니다.</p>''')
+        담당자: {e(record.get('entry_staff') or record.get('user_name',''))}　품목 묶음 {offset//18+1}/{(len(lines)+17)//18}<br>{e(NOTICE)}<br>과/면은 저장된 구분이며 이 문서는 법정 세금계산서가 아닙니다.</p>''')
     return '<html><head><style>body{font-size:8pt;color:#111}h1{font-size:22pt}table{border-collapse:collapse}td,th{border:1px solid #333;padding:3px}th{background:#E3E3E3}</style></head><body>'+''.join(pages)+'</body></html>'
 
 
@@ -125,7 +127,7 @@ def purchase_workbook(record):
             if fill:item.fill=PatternFill('solid',fgColor='E3E3E3')
         return cell
     put(1,1,10,record['title'],True,align='center').font=Font(name='맑은 고딕',size=22,bold=True)
-    put(2,1,10,f"매입일: {record['date']}    전표번호: {record['number']}    {status_text(record)}")
+    put(2,1,10,f"매입일: {record.get('entry_datetime') or record['date']}    전표번호: {record['number']}    {status_text(record)}")
     put(3,1,5,'공 급 자',True,True,'center');put(3,6,10,'공 급 받 는 자',True,True,'center')
     for row,(label,left,right) in enumerate(parties(record),4):
         put(row,1,1,label,True);put(row,2,5,left);put(row,6,6,label,True);put(row,7,10,right)
@@ -141,7 +143,7 @@ def purchase_workbook(record):
             if numeric:cell.number_format='#,##0.###' if start==7 else '#,##0.00'
     bottom=12+max(18,len(record['lines']))
     put(bottom,1,8,'전표 총합계',True,True,'right');put(bottom,9,10,float(record['total']),True).number_format='#,##0.00'
-    for row,value in enumerate((f"단위별 총수량: {quantity_text(record)}",f"메모: {record.get('memo','')}",f"담당자: {record.get('user_name','')}",NOTICE,'법정 세금계산서가 아닙니다.'),bottom+1):
+    for row,value in enumerate((f"단위별 총수량: {quantity_text(record)}",f"메모: {record.get('memo','')}",f"담당자: {record.get('entry_staff') or record.get('user_name','')}",NOTICE,'법정 세금계산서가 아닙니다.'),bottom+1):
         put(row,1,10,value);sheet.row_dimensions[row].height=30
     for i,width in enumerate((12,20,15,10,14,14,11,15,17,8),1):sheet.column_dimensions[get_column_letter(i)].width=width
     sheet.row_dimensions[1].height=36;sheet.row_dimensions[2].height=30

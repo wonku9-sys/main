@@ -98,5 +98,5 @@ def test_other_forms_keep_scroll_and_close_footer(shop):
     try:
         dialog.show();app.processEvents()
         assert dialog.findChild(QScrollArea,'popupScroll') is not None
-        assert dialog._popup_close_button.isVisible() and dialog._popup_close_button.text()=='이 창 닫기'
+        assert not hasattr(dialog,'_popup_close_button')
     finally:dialog.close();dialog.deleteLater();app.processEvents()

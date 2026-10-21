@@ -15,7 +15,7 @@ def window_controls(dialog):
     dialog._window_controls=True
     # Keep the native Windows frame: every edge and corner remains resizable.
     flags=dialog.windowFlags() & ~Qt.WindowType.MSWindowsFixedSizeDialogHint
-    dialog.setWindowFlags(flags|Qt.WindowType.WindowMinMaxButtonsHint|Qt.WindowType.WindowSystemMenuHint)
+    dialog.setWindowFlags(flags|Qt.WindowType.WindowMinMaxButtonsHint|Qt.WindowType.WindowSystemMenuHint|Qt.WindowType.WindowCloseButtonHint)
     dialog.setSizeGripEnabled(True)
     for grip in dialog.findChildren(QSizeGrip):
         grip.setAccessibleName('창 크기 조절')
@@ -31,7 +31,12 @@ def accessible_content(dialog):
     dialog._accessible_content=True
     layout=dialog.layout()
     if layout is None:return
-    close=getattr(dialog,'_sy_close_button',None)
+    # Closing belongs to the native X. Keep cancel/save/lock actions, but
+    # remove redundant plain close controls without bypassing close guards.
+    for button in dialog.findChildren(QPushButton):
+        if button.text().replace(' ','') in {'닫기','이창닫기'}:
+            button.hide()
+    close=None
     pinned=getattr(dialog,'_sy_pinned_footer',None)
     compact_fits=False
     if getattr(dialog,'_sy_compact_confirmation',False):
@@ -58,16 +63,6 @@ def accessible_content(dialog):
         if pinned is not None:outer.addWidget(pinned)
         elif close is not None:
             footer=QHBoxLayout();footer.addStretch();footer.addWidget(close);outer.addLayout(footer)
-    # Keep a separate close control reachable even when the form is scrolled.
-    if not getattr(dialog,'_sy_no_extra_close',False):
-        if close is None:close=next((button for button in dialog.findChildren(QPushButton) if button.text()=='이 창 닫기'),None)
-        if close is None:
-            close=QPushButton('이 창 닫기',dialog);close.setAutoDefault(False)
-            close.clicked.connect(dialog.close)
-            footer=QHBoxLayout();footer.addStretch();footer.addWidget(close)
-            dialog.layout().addLayout(footer)
-        close.setToolTip('현재 팝업만 닫습니다. 저장하지 않은 작업은 먼저 확인합니다.\n단축키: Ctrl+W')
-        dialog._popup_close_button=close
     close_action=QAction('이 창 닫기',dialog);close_action.setShortcut(QKeySequence('Ctrl+W'))
     close_action.setShortcutContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
     close_action.setAutoRepeat(False);close_action.triggered.connect(dialog.close);dialog.addAction(close_action)

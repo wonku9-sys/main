@@ -23,7 +23,8 @@ def app():
 
 
 @pytest.fixture
-def shop(tmp_path):
+def shop(tmp_path,monkeypatch):
+    monkeypatch.setattr(TradeDialog,'check_catalog_prices',lambda self:[])
     store = Store(tmp_path / "workflow.db")
     store.setup_admin("owner", "관리자", "StrongPassword2026!")
     supplier = store.save_partner({"kind": "supplier", "code": "SUP", "name": "축산 공급사"})

@@ -58,6 +58,7 @@ def test_picker_paging_cached_coalesced_search_and_revalidation(shop,monkeypatch
 def test_multi_selection_coloring_checks_arrows_and_space_apply_without_post(shop):
     app,store,_,window=shop
     dialog=TradeDialog(window,'purchase');picker=ProductPicker(dialog);picker.set_apply_callback(dialog.apply_picked_products)
+    picker.keep_open.setChecked(True)
     picker.show();picker.activateWindow();app.processEvents();picker.grid.sortItems(1,Qt.SortOrder.AscendingOrder);picker.grid.selectRow(0)
     for index in (1,2):
         picker.grid.selectionModel().select(picker.grid.model().index(index,0),QItemSelectionModel.SelectionFlag.Select|QItemSelectionModel.SelectionFlag.Rows)
@@ -65,6 +66,8 @@ def test_multi_selection_coloring_checks_arrows_and_space_apply_without_post(sho
     picker.check_current(True);assert len(picker.checked)==3
     picker.check_current(False);assert not picker.checked
     picker.grid.setFocus();QTest.keyClick(picker.grid,Qt.Key.Key_Space);app.processEvents()
+    assert len(picker.checked)==3 and picker.applied_batches==0
+    QTest.keyClick(picker.grid,Qt.Key.Key_Return);app.processEvents()
     assert len([r for r in dialog.line_rows if r['product'].currentData()])==3
     assert picker.isVisible() and picker.applied_batches==1 and not store.documents()
     picker.grid.setCurrentCell(0,1);QTest.keyClick(picker.grid,Qt.Key.Key_Down)

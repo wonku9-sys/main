@@ -33,13 +33,16 @@ def test_continuous_multi_search_and_single_keep_window_no_posting(desktop,kind)
     app,store,window,ids=desktop
     trade=TradeDialog(window,kind);trade.show();app.processEvents()
     picker=ProductPicker(trade);picker.set_apply_callback(trade.apply_picked_products);picker.show();app.processEvents()
+    picker.keep_open.setChecked(True)
     picker.search.setText('사과');picker.check_all(True)
     picker.search.setText('배');picker.check_all(True)
-    assert len(picker.checked)==2 and '체크된 상품 적용' in picker.apply_checked_button.text()
+    assert len(picker.checked)==2 and '확인' in picker.apply_checked_button.text()
     picker.apply_checked_button.click();app.processEvents()
     assert picker.isVisible() and picker.applied_batches==1 and not picker.checked
     assert {r['product'].currentData() for r in trade.line_rows}==set(ids[:2])
     picker.search.setText('귤');picker.grid.setFocus();QTest.keyClick(picker.grid,Qt.Key.Key_Space);app.processEvents()
+    assert picker.applied_batches==1 and len(picker.checked)==1
+    QTest.keyClick(picker.grid,Qt.Key.Key_Return);app.processEvents()
     assert picker.isVisible() and picker.applied_batches==2
     assert {r['product'].currentData() for r in trade.line_rows}==set(ids)
     assert store.documents()==[] and all(float(row['stock_qty'])==0 for row in store.products())
@@ -51,6 +54,7 @@ def test_quotation_and_promotion_share_batch_picker_without_financial_posting(de
     app,store,window,ids=desktop
     quote=SalesFormDialog(window,'quotations');quote.show();app.processEvents()
     picker=ProductPicker(quote);picker.set_apply_callback(quote.apply_picked_products)
+    picker.keep_open.setChecked(True)
     picker.show();picker.check_all(True);picker.apply_checked();app.processEvents()
     assert set(ids)<={r['product'].currentData() for r in quote.rows} and picker.isVisible()
     promo=PromotionDialog(store,parent=window);promo.show();app.processEvents()
@@ -83,12 +87,12 @@ def test_dedicated_close_only_closes_popup_and_respects_unsaved_cancel(desktop,m
     app,store,window,ids=desktop
     trade=TradeDialog(window);trade.show();app.processEvents()
     picker=ProductPicker(trade);picker.show();app.processEvents()
-    assert picker._popup_close_button.text()=='닫기'
-    picker._popup_close_button.click();app.processEvents()
+    assert not hasattr(picker,'_popup_close_button')
+    picker.close();app.processEvents()
     assert not picker.isVisible() and trade.isVisible() and window.isVisible()
     trade.scan_barcode('1')
     monkeypatch.setattr('pos2.navigation.ask_unsaved',lambda *_:QMessageBox.StandardButton.Cancel)
-    trade._popup_close_button.click();app.processEvents();assert trade.isVisible() and store.documents()==[]
+    trade.close();app.processEvents();assert trade.isVisible() and store.documents()==[]
     monkeypatch.setattr('pos2.navigation.ask_unsaved',lambda *_:QMessageBox.StandardButton.Discard)
     trade.activateWindow();app.processEvents();QTest.keySequence(trade,QKeySequence('Ctrl+W'));app.processEvents()
     assert not trade.isVisible() and window.isVisible() and store.documents()==[]
@@ -101,5 +105,6 @@ def test_loyalty_only_staff_can_search_and_apply_promotion_products(desktop):
     promo=PromotionDialog(store,parent=window)
     picker=ProductPicker(promo,product_loader=store.loyalty_products,read_permissions=('loyalty',))
     picker.set_apply_callback(promo.apply_picked_products);picker.show();app.processEvents()
+    picker.keep_open.setChecked(True)
     picker.search.setText('귤');picker.choose()
     assert picker.applied_batches==1 and picker.isVisible()

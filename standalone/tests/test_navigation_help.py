@@ -101,7 +101,7 @@ def test_save_on_close_keeps_trade_as_draft_without_posting(shop, monkeypatch):
     dialog.line_rows[0]["qty"].setText("3")
     monkeypatch.setattr("pos2.navigation.ask_unsaved", lambda *_: QMessageBox.StandardButton.Save)
     assert not hasattr(dialog,'_home_button')
-    dialog._popup_close_button.click()
+    dialog.close()
     app.processEvents()
     assert store.document(dialog.saved_id)["status"] == "draft"
     assert Decimal(store.products()[0]["stock_qty"]) == 0

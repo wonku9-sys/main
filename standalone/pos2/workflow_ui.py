@@ -4,11 +4,11 @@ from __future__ import annotations
 from datetime import date
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
-from PySide6.QtCore import QDate, Qt, QTimer, QEvent, QItemSelectionModel
+from PySide6.QtCore import QDate, QDateTime, Qt, QTimer, QEvent, QItemSelectionModel
 from PySide6.QtGui import QIcon, QKeySequence, QShortcut, QColor
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QGridLayout, QHBoxLayout,
-    QHeaderView, QInputDialog, QLabel, QLineEdit, QMessageBox, QPushButton,
+    QHeaderView, QInputDialog, QLabel, QLineEdit, QMessageBox, QPushButton, QDateTimeEdit,
     QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget, QMenu, QScrollArea, QFrame, QSizePolicy,
 )
 
@@ -219,15 +219,15 @@ class ProductPicker(QDialog):
         body.addWidget(_compact_scroll_row(filters,62))
         self.supplier_label = QLabel(parent.partner.currentText() if self.supplier_id else "전체 공급사 상품")
         body.addWidget(self.supplier_label)
-        body.addWidget(QLabel("Space·더블클릭: 선택 품목 적용 · Enter: 체크 품목 적용 · F4: 검색어 · F5: 검색 · F7: 공급사"))
+        body.addWidget(QLabel("Space·더블클릭: 상품 체크/해제 · Enter: 체크한 상품 확인 · F4: 검색어 · F5: 검색 · F7: 공급사"))
         self.keep_open = QCheckBox('적용 후 검색창 유지 · 연속 검색/추가')
-        self.keep_open.setChecked(True); self.keep_open.hide(); body.addWidget(self.keep_open)
+        self.keep_open.setChecked(False); self.keep_open.hide(); body.addWidget(self.keep_open)
         self.result_label = QLabel(); body.addWidget(self.result_label)
         self.grid = ProductSelectionGrid(["선택", "상품코드", "상품명", "규격", "바코드", "단위", "공급사", "매입가", "판매가", "현재고"])
         from PySide6.QtWidgets import QAbstractItemView
         self.grid.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.grid.setStyleSheet('QTableWidget::item:selected {background:#176CB0;color:white;}')
-        self.grid.setToolTip('방향키: 상품 이동 · 드래그/Ctrl/Shift: 여러 행 선택\nSpace: 선택 상품을 전표에 추가 · F8: 선택행 체크 · F9: 선택행 체크해제')
+        self.grid.setToolTip('방향키: 상품 이동 · 드래그/Ctrl/Shift: 여러 행 선택\nSpace·더블클릭: 체크/해제 · Enter: 체크한 상품 확인 · F8: 체크 · F9: 해제')
         self.grid.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.grid.customContextMenuRequested.connect(self.context_menu)
         self.grid.installEventFilter(self)
@@ -236,7 +236,7 @@ class ProductPicker(QDialog):
         for control in (self.supplier_only,self.expanded_units,self.include_inactive,self.tracked_only):
             control.toggled.connect(self.scope_changed)
         self.grid.itemChanged.connect(self.check_changed)
-        self.grid.cellDoubleClicked.connect(lambda *_: self.choose())
+        self.grid.cellDoubleClicked.connect(lambda *_: self.toggle_current())
         controls = QHBoxLayout()
         self.check_row_button=action('선택행 체크 (F8)',lambda:self.check_current(True))
         self.uncheck_row_button=action('선택행 체크해제 (F9)',lambda:self.check_current(False))
@@ -258,8 +258,7 @@ class ProductPicker(QDialog):
         footer=QHBoxLayout();footer.setContentsMargins(0,0,0,0)
         footer.addWidget(_compact_scroll_row(controls),1)
         footer.addWidget(self.apply_checked_button)
-        self.close_button=action('닫기',self.reject);footer.addWidget(self.close_button)
-        self._sy_close_button=self.close_button;body.addLayout(footer)
+        body.addLayout(footer)
         self.search.returnPressed.connect(self.search_enter)
         self.search.installEventFilter(self)
         for button in self.findChildren(QPushButton):
@@ -284,7 +283,7 @@ class ProductPicker(QDialog):
             return True
         if watched is self.grid and event.type() == QEvent.Type.KeyPress and event.key() == Qt.Key.Key_Space:
             if not event.isAutoRepeat():
-                self.apply_selected()
+                self.toggle_current()
             event.accept()
             return True
         return super().eventFilter(watched, event)
@@ -320,6 +319,16 @@ class ProductPicker(QDialog):
             for item in items:item.setCheckState(Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked)
         finally:self.grid.setSortingEnabled(sorting)
 
+    def toggle_current(self):
+        """Space checks a selection; only explicit confirmation adds it."""
+        rows=self.grid.selectionModel().selectedRows()
+        if not rows and self.grid.currentRow()>=0:
+            self.grid.selectRow(self.grid.currentRow())
+            rows=self.grid.selectionModel().selectedRows()
+        if rows:
+            checked=all(self.grid.item(index.row(),0).checkState()==Qt.CheckState.Checked for index in rows)
+            self.check_current(not checked)
+
     def apply_selected(self):
         indices = self.grid.selectionModel().selectedRows()
         if len(indices) <= 1:
@@ -334,14 +343,13 @@ class ProductPicker(QDialog):
         if item is not None and not item.isSelected():
             self.grid.selectRow(item.row())
         menu = QMenu(self)
-        for label, callback in (('선택 상품 적용 (Space)', self.apply_selected),
+        for label, callback in (('선택 상품 체크/해제 (Space)', self.toggle_current),
                 ('체크된 상품 적용 (Enter)', self.apply_checked),
                 ('선택행 체크 (F8)', lambda: self.check_current(True)),
                 ('선택행 체크해제 (F9)', lambda: self.check_current(False)),
                 ('현재 페이지 모두 체크', lambda: self.check_all(True)),
                 ('모든 체크해제', lambda: self.check_all(False))):
             menu.addAction(label, callback)
-        menu.addSeparator(); menu.addAction('이 창 닫기', self.reject)
         menu.exec(self.grid.viewport().mapToGlobal(point))
 
     def records(self, search='', supplier_id=None):
@@ -423,7 +431,7 @@ class ProductPicker(QDialog):
         super().done(result)
 
     def update_checked_count(self):
-        self.apply_checked_button.setText(f"체크된 상품 적용 ({len(self.checked):,})")
+        self.apply_checked_button.setText(f"확인 ({len(self.checked):,})")
 
     def check_changed(self, item):
         if item.column() != 0:
@@ -602,6 +610,40 @@ class PurchaseBatchDialog(QDialog):
         super().reject()
 
 
+class PurchasePriceCheckDialog(QDialog):
+    """Manual's explicit post-save catalog price selection, unchecked by default."""
+    def __init__(self,parent,changes):
+        super().__init__(parent)
+        self.setWindowTitle('매입상품 체크 · 상품장 가격 변경')
+        self.resize(940,440);self.changes=changes;self.checks=[]
+        body=QVBoxLayout(self)
+        notice=QLabel('상품장과 다른 가격이 있습니다. 반영할 가격만 체크하세요.\n체크하지 않으면 매입전표만 저장하며 상품장 가격은 유지합니다. X를 누르면 저장 단계로 돌아갑니다.')
+        notice.setWordWrap(True);body.addWidget(notice)
+        self.grid=DataGrid(['상품명','단위','기존 매입가','전표 매입가','매입가 반영','기존 판매가','전표 판매가','판매가 반영'])
+        self.grid.setSortingEnabled(False)
+        self.grid.fill([[r['name'],r['unit'],r['old_purchase_price'],r['purchase_price'],'',r['old_sale_price'],r['sale_price'],''] for r in changes])
+        for index,change in enumerate(changes):
+            boxes={}
+            for key,column in (('purchase_price',4),('sale_price',7)):
+                box=QCheckBox('반영');box.setChecked(False)
+                box.setEnabled(change[key]!=change['old_'+key]);self.grid.setCellWidget(index,column,box);boxes[key]=box
+            self.checks.append(boxes)
+        body.addWidget(self.grid,1)
+        self.confirm_button=action('확인 · 저장 (Alt+S)',self.accept,True)
+        self._sy_pinned_footer=QWidget();footer=QHBoxLayout(self._sy_pinned_footer)
+        footer.addStretch();footer.addWidget(self.confirm_button);body.addWidget(self._sy_pinned_footer)
+        self.shortcut=QShortcut(QKeySequence('Alt+S'),self);self.shortcut.activated.connect(self.accept)
+
+    def selected_updates(self):
+        updates=[]
+        for change,boxes in zip(self.changes,self.checks):
+            if not any(box.isChecked() for box in boxes.values()):continue
+            update={key:change[key] for key in ('product_id','unit_id','old_purchase_price','old_sale_price')}
+            for field,box in boxes.items():update[field]=change[field] if box.isChecked() else change['old_'+field]
+            updates.append(update)
+        return updates
+
+
 class TradeDialog(QDialog):
     """Explicit draft/post workflow; scans only edit unsaved line quantities."""
 
@@ -633,7 +675,7 @@ class TradeDialog(QDialog):
         from .trade_product_model import TradeProductModel
         self.product_model = TradeProductModel([p for p in self.products if p['active'] or self.readonly or self.is_return], self)
         self._batch_lines = False
-        self.line_columns = ("product", "spec", "barcode", "qty", "unit", "factor", "base_qty", "price", "total", "sale_price", "margin", "category", "supplier", "stock", "delete")
+        self.line_columns = ("product", "spec", "barcode", "qty", "unit", "factor", "base_qty", "total", "price", "sale_price", "margin", "category", "supplier", "stock", "line_memo")
         self.setWindowTitle(("새 반품전표" if self.is_return else "새 매입전표") if kind.startswith("purchase") and not self.record else f"{KINDS[kind]} 전표 · " + (self.record["number"] if self.record else "새 전표"))
         self.resize(1180, 820)
         self.setMinimumSize(850, 620)
@@ -651,9 +693,12 @@ class TradeDialog(QDialog):
         self.explanation.setWordWrap(True)
         body.addWidget(self.explanation)
         metadata = QHBoxLayout()
-        self.date = date_field((self.record or {}).get("date"))
-        metadata.addWidget(QLabel("거래일"))
-        metadata.addWidget(self.date)
+        self.date = QDateTimeEdit()
+        self.date.setCalendarPopup(True);self.date.setDisplayFormat('yyyy-MM-dd HH:mm')
+        timestamp=(self.record or {}).get('entry',{}).get('datetime')
+        self.date.setDateTime(QDateTime.fromString(timestamp,'yyyy-MM-dd HH:mm:ss') if timestamp else QDateTime.currentDateTime())
+        if self.record and not timestamp:self.date.setDate(QDate.fromString(self.record['date'],'yyyy-MM-dd'))
+        self.date.setToolTip('매입일·시간을 직접 입력하거나 달력에서 선택합니다. 날짜 변경만으로 입력한 단가를 바꾸지 않습니다.\n단축키: Alt+D')
         self.partner = QComboBox()
         self.partner.setMinimumWidth(230)
         self.partner.addItem("거래처를 선택하세요", None)
@@ -663,9 +708,17 @@ class TradeDialog(QDialog):
         for party in api(party_kind):
             self.party_map[party["id"]] = party
             self.partner.addItem(f"{party['code']} · {party['name']}", party["id"])
-        metadata.addWidget(self.partner, 1)
         self.pick_button = action("공급사 (F3)" if kind.startswith("purchase") else "거래처 검색", lambda: self.pick_partner(party_kind))
         metadata.addWidget(self.pick_button)
+        metadata.addWidget(self.partner,1)
+        self.trade_mode=QLabel('직매입' if kind.startswith('purchase') else '판매');metadata.addWidget(self.trade_mode)
+        metadata.addWidget(QLabel('VAT 포함'))
+        metadata.addWidget(QLabel('매입일시' if kind.startswith('purchase') else '거래일시'));metadata.addWidget(self.date)
+        metadata.addWidget(QLabel('담당자'))
+        self.entry_staff=QLineEdit((self.record or {}).get('entry',{}).get('staff',(self.store.actor or {}).get('name','')))
+        self.entry_staff.setMaximumWidth(110);self.entry_staff.setMaxLength(100)
+        self.entry_staff.setToolTip('전표에 표시할 업무 담당자입니다. 실제 저장 사용자는 별도로 감사 기록에 남습니다.')
+        metadata.addWidget(self.entry_staff)
         self.member = QComboBox()
         self.member.addItem("비회원", None)
         if kind.startswith("sale"):
@@ -743,7 +796,7 @@ class TradeDialog(QDialog):
         if kind.startswith('purchase'):body.addWidget(_compact_scroll_row(line_tools,48))
         body.addWidget(_compact_scroll_row(scanner,48))
         self.table = HeaderSafeTable(0, len(self.line_columns))
-        self.table.setHorizontalHeaderLabels(["상품명", "규격", "바코드", "매입량" if kind.startswith("purchase") else "수량", "입력 단위", "환산량", "총수량 (기본단위)", "매입단가" if kind.startswith("purchase") else "거래단가", "매입금액" if kind.startswith("purchase") else "거래금액", "현재 판매단가 (참고)", "예상이익률", "분류", "공급사", "현재고 / 반품 가능", "삭제"])
+        self.table.setHorizontalHeaderLabels(["상품명", "규격", "바코드", "매입량" if kind.startswith("purchase") else "수량", "단위", "입수량", "총수량", "매입금액" if kind.startswith("purchase") else "거래금액", "매입단가" if kind.startswith("purchase") else "거래단가", "판매단가", "이익률(%)", "분류", "공급사", "현재고", "메모"])
         self.table.setSortingEnabled(False)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         for column, width in enumerate((220, 75, 125, 75, 180, 60, 100, 85, 95, 130, 85, 140, 150, 130, 60)):
@@ -834,7 +887,7 @@ class TradeDialog(QDialog):
             self.new_product_button = action("새 상품등록 (F9)", self.new_product)
             self.new_product_button.setEnabled(not self.readonly and not self.is_return and can_action(self.store.actor, "products", "create"))
             footer.addWidget(self.new_product_button)
-            self.tax_info_button=action('과면세 정보 (F11)',self.tax_info)
+            self.tax_info_button=action('부가정보 (F11)',self.tax_info)
             footer.addWidget(self.tax_info_button)
             self.payment_button=action('결제 (P)',self.payment_input)
             self.payment_button.setEnabled(not self.readonly or bool(self.record and self.record['status']=='posted' and self.kind=='purchase'))
@@ -843,25 +896,23 @@ class TradeDialog(QDialog):
         footer.addStretch()
         self.draft_button = action("전표 적용 (A)" if kind.startswith("purchase") else "초안 저장", lambda: self.save(False, not self.kind.startswith("purchase")))
         self.draft_button.setToolTip("입력을 초안으로 저장하고 계속 작업합니다. 재고·결제에는 반영하지 않습니다." if kind.startswith("purchase") else "초안을 저장합니다.")
-        self.post_button = action("저장" if kind.startswith("purchase") else "전표 확정", lambda: self.save(True), True)
+        self.post_button = action("저장 (S)" if kind.startswith("purchase") else "전표 확정", lambda: self.save(True), True)
         allowed = can_action(self.store.actor, resource, "edit" if self.record else "create")
         if self.is_return:
             allowed = allowed and can_action(self.store.actor, resource, "delete")
         self.draft_button.setEnabled(allowed)
         self.post_button.setEnabled(allowed)
-        self.close_button = action("닫기", self.reject)
-        self._sy_close_button=self.close_button
         for button in (self.draft_button, self.post_button):
             button.setAutoDefault(False)
             footer.addWidget(button)
-        if kind.startswith('purchase'):
-            footer_row=QHBoxLayout();footer_row.addWidget(_compact_scroll_row(footer,50),1);footer_row.addWidget(self.close_button)
-            body.addLayout(footer_row)
-        else:footer.addWidget(self.close_button);body.addLayout(footer)
+        self._sy_pinned_footer=_compact_scroll_row(footer,56)
+        body.addWidget(self._sy_pinned_footer)
         self.shortcut_scan = QShortcut(QKeySequence(scan_key), self)
         self.shortcut_scan.activated.connect(self.focus_scan)
         self.shortcut_product = QShortcut(QKeySequence("F5"), self)
         self.shortcut_product.activated.connect(self.pick_product)
+        self.shortcut_date=QShortcut(QKeySequence('Alt+D'),self)
+        self.shortcut_date.activated.connect(lambda:self.date.setFocus())
         self.shortcut_delete = QShortcut(QKeySequence("F7"), self)
         self.shortcut_delete.activated.connect(self.remove_selected_line)
         if kind.startswith("purchase"):
@@ -897,11 +948,18 @@ class TradeDialog(QDialog):
             row = self.add_line(line["product_id"], unit_id, "0" if self.source else line["input_qty"], line["unit_price"], source_line)
             if self.record:
                 row["saved_line"] = line
+                extra=line.get('entry',{})
+                row['line_memo'].setText(extra.get('memo',''))
+                if 'sale_price' in extra:row['sale_price'].setText(extra['sale_price'])
+                row['factor'].setText(amount(line['factor']))
+                normal=rounded(value_decimal(line['input_qty'])*line['unit_price']/line.get('price_basis',1),self.rounding_mode)
+                if not self.is_return and self.kind=='purchase' and normal!=line['total']:
+                    row['amount_override']=line['total']
         if not lines and not self.readonly:
             self.add_line()
         self._batch_lines = False
         if self.readonly:
-            for widget in (self.date, self.partner, self.pick_button, self.member, self.scan, self.add_button, self.search_button, self.quote_button, self.paid, self.method, self.points, self.memo):
+            for widget in (self.date, self.entry_staff, self.partner, self.pick_button, self.member, self.scan, self.add_button, self.search_button, self.quote_button, self.paid, self.method, self.points, self.memo):
                 widget.setEnabled(False)
             for row in self.line_rows:
                 for widget in row.values():
@@ -1114,6 +1172,7 @@ class TradeDialog(QDialog):
     def update_partner_info(self, *_):
         party = self.party_map.get(self.partner.currentData(), {})
         mode = "수수료 공급사" if party.get("supplier_mode") == "commission" else "직매입" if self.kind.startswith("purchase") else "판매"
+        self.trade_mode.setText(mode)
         self.partner_info.setText(f"사업자번호 {party.get('business_no') or '미등록'}  ·  {mode}  ·  부가세 포함 단가  ·  담당자 {(self.store.actor or {}).get('name', '')}")
 
     def focus_scan(self):
@@ -1136,14 +1195,27 @@ class TradeDialog(QDialog):
         product = row["product"] = TradeProductCombo(self.product_model)
         unit = row["unit"] = QComboBox()
         row["qty"], row["price"] = QLineEdit(str(quantity)), QLineEdit("0" if price is None else str(price))
-        row["total"], row["stock"] = QLabel(), QLabel()
-        for key in ("spec", "barcode", "factor", "base_qty", "sale_price", "margin", "category", "supplier"):
+        row["stock"] = QLabel()
+        row['total'],row['factor'],row['sale_price'],row['line_memo']=QLineEdit(),QLineEdit('1'),QLineEdit('0'),QLineEdit()
+        row['barcode']=QLineEdit()
+        row['barcode'].setReadOnly(self.readonly or self.is_return)
+        row['barcode'].setToolTip('바코드를 입력한 뒤 Enter를 누르면 해당 상품·확장단위를 이 행에 적용합니다. 상품장의 바코드는 변경하지 않습니다.')
+        row['barcode'].returnPressed.connect(lambda:self.apply_row_barcode(row))
+        for key in ("spec", "base_qty", "margin", "category", "supplier"):
             row[key] = QLabel()
             row[key].setMargin(5)
-        for key in ("qty", "price"):
+        for key in ("qty", "price",'total','factor','sale_price'):
             row[key].setAlignment(Qt.AlignmentFlag.AlignRight)
-        row["total"].setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        row["total"].setMargin(5)
+        row['total'].setReadOnly(self.kind!='purchase' or self.readonly)
+        row['factor'].setReadOnly(self.kind!='purchase' or self.readonly)
+        row['sale_price'].setReadOnly(self.kind!='purchase' or self.readonly)
+        for key,hint in {'qty':'매입 수량입니다. 소수점 셋째 자리까지 입력합니다.',
+                'factor':'입력 단위 한 개에 포함된 기본단위 수량입니다. 상품장 단위 설정은 바꾸지 않습니다.',
+                'total':'매입금액 직접 입력 시 수량에 맞춰 단가를 계산합니다. 나눗셈 반올림 차이는 입력한 금액 그대로 보존합니다.',
+                'price':'단가를 입력하면 매입금액을 다시 계산합니다. 금액·단가는 소수점 둘째 자리까지 입력합니다.',
+                'sale_price':'예상 판매단가입니다. 저장 후 매입상품 체크에서 선택한 경우에만 상품장에 반영됩니다.',
+                'line_memo':'이 품목의 메모입니다. 전표를 다시 열어 확인할 수 있습니다.'}.items():
+            row[key].setToolTip(hint)
         row["delete"] = action("×", lambda: self.remove_line(row))
         # A decorative icon plus ordinary button padding hides the cross in
         # the compact delete column. Keep a clear, named single-symbol action.
@@ -1158,8 +1230,11 @@ class TradeDialog(QDialog):
             self.table.setCellWidget(index, column, row[key])
         product.currentIndexChanged.connect(lambda _=0: self.product_changed(row))
         unit.currentIndexChanged.connect(lambda _=0: self.unit_changed(row))
-        row["qty"].textChanged.connect(self.recalculate)
-        row["price"].textChanged.connect(self.recalculate)
+        row["qty"].textChanged.connect(lambda *_:self.line_basis_changed(row))
+        row["price"].textChanged.connect(lambda *_:self.line_basis_changed(row))
+        row['total'].textEdited.connect(lambda *_:self.line_amount_changed(row))
+        row['factor'].textChanged.connect(self.recalculate)
+        row['sale_price'].textChanged.connect(self.recalculate)
         product.setCurrentIndex(max(0, product.findData(product_id)))
         if product_id:
             if unit_id and unit.findData(unit_id) < 0:
@@ -1177,6 +1252,40 @@ class TradeDialog(QDialog):
             row["stock"].setText(f"최대 {amount(source_line.get('remaining_qty', source_line['input_qty']))}")
         self.recalculate()
         return row
+
+    def apply_row_barcode(self,row):
+        if self.readonly or self.is_return:return
+        try:
+            found=self.store.lookup_barcode(row['barcode'].text().strip())
+            if not found:raise ValueError('등록되지 않은 바코드입니다. F5 상품검색 또는 F9 상품등록을 이용하세요.')
+            product=found['product'];self.product_map[product['id']]=product;self.product_model.ensure(product)
+            row['product'].setCurrentIndex(row['product'].findData(product['id']))
+            row['unit'].setCurrentIndex(max(0,row['unit'].findData((found.get('unit') or {}).get('id'))))
+            row['qty'].setFocus();row['qty'].selectAll()
+        except (ValueError,PermissionError) as exc:_warn(self,exc)
+
+    @staticmethod
+    def set_line_text(field,value):
+        previous=field.blockSignals(True)
+        field.setText(str(value));field.blockSignals(previous)
+
+    def line_basis_changed(self,row):
+        row.pop('amount_override',None)
+        self.recalculate()
+
+    def line_amount_changed(self,row):
+        if self.readonly or self.kind!='purchase':return
+        row['editing_amount']=True
+        try:
+            quantity=value_decimal(row['qty'].text())
+            if quantity<=0:raise ValueError('매입량을 먼저 입력하세요.')
+            value=money(row['total'].text())
+            row['amount_override']=value
+            self.set_line_text(row['price'],rounded(value*row.get('price_basis',1)/quantity))
+        except (ValueError,InvalidOperation,OverflowError):
+            row['amount_override']='invalid'
+        try:self.recalculate()
+        finally:row['editing_amount']=False
 
     def product_changed(self, row):
         identifier = row["product"].currentData()
@@ -1242,6 +1351,9 @@ class TradeDialog(QDialog):
             self._batch_lines = False
             self.table.setUpdatesEnabled(True)
         self.recalculate()
+        if selections and selections[0][0]:
+            first=next((r for r in self.line_rows if r['product'].currentData()==selections[0][0]['id']),None)
+            if first:first['qty'].setFocus();first['qty'].selectAll()
 
     def unit_changed(self, row):
         identifier = row["product"].currentData()
@@ -1259,17 +1371,17 @@ class TradeDialog(QDialog):
         self.table.setColumnWidth(column, max(self.table.columnWidth(column), needed + 24))
         row["price_basis"] = (row.get("source") or {}).get("price_basis", 100 if gram_input else 1 if unit else product.get("price_basis", 1))
         row["barcode"].setText(unit.get("barcode") or product["barcode"])
-        row["factor"].setText(amount((row.get("source") or {}).get("factor", "0.001" if gram_input else unit.get("factor", "1"))))
+        self.set_line_text(row["factor"],amount((row.get("source") or {}).get("factor", "0.001" if gram_input else unit.get("factor", "1"))))
         row["reference_sale"] = unit.get("sale_price", product["sale_price"])
         if gram_input:
             row['reference_sale'] = rounded(row['reference_sale'] / 10)
-        row["sale_price"].setText(won(row["reference_sale"]))
+        self.set_line_text(row["sale_price"],row["reference_sale"])
         if not row.get("source") and not self.readonly:
             quote = self.store.quote(identifier, _date(self.date), None if gram_input else row["unit"].currentData(), self.member.currentData())
             if gram_input:
                 quote = {**quote, "price": rounded(quote["price"] / 10), "purchase_price": rounded(quote["purchase_price"] / 10)}
             row["reference_sale"] = quote["price"]
-            row["sale_price"].setText(won(quote["price"]))
+            self.set_line_text(row["sale_price"],quote["price"])
             row["price"].setText(str(quote["purchase_price"] if self.kind.startswith("purchase") else quote["price"]))
         self.recalculate()
 
@@ -1345,9 +1457,9 @@ class TradeDialog(QDialog):
                 saved = row.get("saved_line") if self.readonly else None
                 original = row.get("source")
                 snapshot = saved or original or {}
-                factor = value_decimal(snapshot.get("factor", "0.001" if row["unit"].currentData() == "grams" else unit.get("factor", "1")))
+                factor = value_decimal(snapshot.get("factor",row['factor'].text() or '0'))
+                if factor<=0:raise ValueError('입수량은 0보다 커야 합니다.')
                 base_qty = quantity * factor
-                row["factor"].setText(amount(factor))
                 row["base_qty"].setText(f"{amount(base_qty)} {product['base_unit']}")
                 if saved:
                     value = saved["total"]
@@ -1357,8 +1469,10 @@ class TradeDialog(QDialog):
                     value = rounded(Decimal(original["total"]) * (before + quantity) / denominator) - rounded(Decimal(original["total"]) * before / denominator)
                 else:
                     value = rounded(quantity * price / row.get("price_basis", 1), self.rounding_mode)
-                row["total"].setText(won(value))
-                sale = rounded(quantity * row.get("reference_sale", product["sale_price"]) / row.get("price_basis", 1), self.rounding_mode)
+                    if 'amount_override' in row:value=money(row['amount_override'])
+                if not row.get('editing_amount'):
+                    self.set_line_text(row['total'],won(value))
+                sale = rounded(quantity * money(row['sale_price'].text() or '0') / row.get("price_basis", 1), self.rounding_mode)
                 row["margin"].setText(f"{(Decimal(sale - value) * 100 / sale):.2f}%" if sale else "—")
                 row["margin"].setToolTip("현재 판매가 기준 참고 이익률입니다. 확정 매출의 실제 이익이 아닙니다.")
                 total += value
@@ -1370,7 +1484,7 @@ class TradeDialog(QDialog):
                 quantities[product["base_unit"]] = quantities.get(product["base_unit"], Decimal(0)) + base_qty
             except (InvalidOperation, ValueError, OverflowError):
                 invalid = True
-                row["total"].setText("입력 확인")
+                row['total'].setToolTip('입력값을 확인하세요. 수량·입수량은 양수, 금액은 0 이상이어야 합니다.')
         if hasattr(self, "total_label"):
             self.total_label.setText(f"{'매입합계' if self.kind.startswith('purchase') else '합계'} {won(total)}원")
             vat = rounded(Decimal(taxable) / 11)
@@ -1423,7 +1537,37 @@ class TradeDialog(QDialog):
             if self.is_return and value_decimal(quantity or "0") == 0:
                 continue
             lines.append({"product_id": product_id, "unit_id": None if row["unit"].currentData() == "grams" else row["unit"].currentData(), "gram_input": row["unit"].currentData() == "grams", "qty": quantity, "unit_price": row["price"].text().strip(), "source_line_id": row["source"]["id"] if row.get("source") else None})
-        return {"kind": self.kind, "date": _date(self.date), "partner_id": self.partner.currentData(), "member_id": self.member.currentData(), "source_id": (self.source or self.record or {}).get("id") if self.source else (self.record or {}).get("source_id"), "lines": lines, "paid": self.paid.text(), "method": self.method.currentData(), "points_used": self.points.text() if self.kind == "sale" else 0, "memo": self.memo.text(),"rounding_mode":self.rounding_mode}
+            lines[-1].update(sale_price=row['sale_price'].text() or '0',line_memo=row['line_memo'].text())
+            if self.kind=='purchase':
+                lines[-1]['factor_override']=row['factor'].text()
+                if 'amount_override' in row:lines[-1]['amount_override']=row['amount_override']
+        return {"kind": self.kind, "date": _date(self.date), 'entry_datetime':self.date.dateTime().toString('yyyy-MM-dd HH:mm:ss'),
+            'entry_staff':self.entry_staff.text(), "partner_id": self.partner.currentData(), "member_id": self.member.currentData(), "source_id": (self.source or self.record or {}).get("id") if self.source else (self.record or {}).get("source_id"), "lines": lines, "paid": self.paid.text(), "method": self.method.currentData(), "points_used": self.points.text() if self.kind == "sale" else 0, "memo": self.memo.text(),"rounding_mode":self.rounding_mode}
+
+    def check_catalog_prices(self):
+        from .permissions import can_action
+        if self.kind!='purchase' or not can_action(self.store.actor,'products','edit'):return []
+        changes={};conflicts=set()
+        for row in self.line_rows:
+            product=self.product_map.get(row['product'].currentData())
+            if not product:continue
+            unit_id=row['unit'].currentData()
+            if unit_id=='grams':continue
+            current=row.get('units',{}).get(unit_id) if unit_id else product
+            if not current or value_decimal(row['factor'].text())!=value_decimal(current.get('factor','1')):continue
+            purchase,sale=money(row['price'].text()),money(row['sale_price'].text())
+            if purchase==current['purchase_price'] and sale==current['sale_price']:continue
+            key=(product['id'],unit_id)
+            if key in conflicts:continue
+            change=dict(product_id=product['id'],unit_id=unit_id,name=product['name'],unit=row['unit'].currentText(),
+                old_purchase_price=current['purchase_price'],old_sale_price=current['sale_price'],purchase_price=purchase,sale_price=sale)
+            if key in changes and any(changes[key][field]!=change[field] for field in ('purchase_price','sale_price')):
+                changes.pop(key);conflicts.add(key);continue
+            changes[key]=change
+        if not changes:return []
+        dialog=PurchasePriceCheckDialog(self,list(changes.values()))
+        if dialog.exec()!=QDialog.DialogCode.Accepted:return None
+        return dialog.selected_updates()
 
     def save(self, post, close=True):
         if self.readonly:
@@ -1436,6 +1580,10 @@ class TradeDialog(QDialog):
                 raise ValueError("거래처를 선택하세요.")
             if post and not _confirm(self, "전표 확정", "재고·결제·포인트에 반영합니다. 확정할까요?"):
                 return
+            if post:
+                changes=self.check_catalog_prices()
+                if changes is None:return
+                data['catalog_updates']=changes
             identifier = self.record["id"] if self.record else None
             self.saved_id = self.store.post_document(data, identifier) if post else self.store.save_draft(data, identifier)
             from .navigation import mark_saved
@@ -1444,7 +1592,7 @@ class TradeDialog(QDialog):
                 self.accept()
             else:
                 self.record = self.store.document(self.saved_id)
-                self.return_mode.setEnabled(False)
+                if self.return_mode is not None:self.return_mode.setEnabled(False)
                 mark_saved(self)
                 self.explanation.setText("전표를 초안으로 저장했습니다. 계속 입력하거나 ‘저장’을 눌러 재고·결제에 반영하세요.")
         except (ValueError, PermissionError, InvalidOperation) as exc:
@@ -1662,7 +1810,7 @@ class TradesPage(Page):
         if kind=='purchase':
             self.grid=self.table(['No.','구분','유형','코드','공급사','입고일시','매입합계','결제금액','외상매입','메모','수정일시','상태','전표번호','담당자','포인트'],PurchaseJournalGrid)
             for column,width in enumerate((44,55,62,52,150,100,90,90,90,65,128,80,200,100,80)):self.grid.setColumnWidth(column,width)
-            self.grid.horizontalHeaderItem(5).setToolTip('저장된 입고일입니다. 입고 시간은 보관하지 않아 만들어 표시하지 않습니다.')
+            self.grid.horizontalHeaderItem(5).setToolTip('전표에서 선택해 저장한 매입일시입니다. 이전 버전의 전표는 기록된 날짜만 표시합니다.')
             self.grid.horizontalHeaderItem(10).setToolTip('전표 저장·확정·취소 감사기록의 마지막 일시입니다. 과거에 기록이 없으면 빈칸입니다.')
             self.grid.horizontalHeaderItem(2).setToolTip('현재 등록된 공급사의 직매입/수수료 구분입니다.')
             self.grid.sortItems(0,Qt.SortOrder.AscendingOrder)
@@ -1736,7 +1884,7 @@ class TradesPage(Page):
                     members=self._supplier_groups.get(self.group_filter.currentData(),set())
                     rows=[r for r in rows if (r['partner_id'] in members)!=self.group_exclude.isChecked()]
                 if self.by_user.isChecked():
-                    rows=[r for r in rows if self.user_filter.text().strip().casefold() in r.get('user_name','').casefold()]
+                    rows=[r for r in rows if self.user_filter.text().strip().casefold() in (r.get('entry_staff') or r.get('user_name','')).casefold()]
             if self.kind!='purchase':self.grid.fill([[r["number"], KINDS[r["kind"]], r["date"], r.get("partner_name", ""), -r["total"] if r["kind"].endswith("_return") else r["total"], r.get("cash_paid", 0), r.get("points_used", 0), r.get("net_balance", -r.get("balance", 0) if r["kind"].endswith("_return") else r.get("balance", 0)), STATUSES[r["status"]], r.get("user_name", ""), r["memo"]] for r in rows], rows)
             active = [r for r in rows if r["status"] == "posted"]
             total = sum((-1 if r["kind"].endswith("_return") else 1) * r["total"] for r in active)
@@ -1745,9 +1893,9 @@ class TradesPage(Page):
             paid = sum((-1 if r["kind"].endswith("_return") else 1) * r["cash_paid"] for r in active)
             net_balance = sum(r.get("net_balance", -r.get("balance", 0) if r["kind"].endswith("_return") else r.get("balance", 0)) for r in active)
             if self.kind=='purchase':
-                values=[[index,KINDS[r['kind']],'수수료' if supplier_modes.get(r['partner_id'])=='commission' else '직매입',r['partner_code'],r['partner_name'],r['date'],
+                values=[[index,KINDS[r['kind']],'수수료' if supplier_modes.get(r['partner_id'])=='commission' else '직매입',r['partner_code'],r['partner_name'],r.get('entry_datetime') or r['date'],
                     -r['total'] if r['kind'].endswith('_return') else r['total'],
-                    -r['cash_paid'] if r['kind'].endswith('_return') else r['cash_paid'],r.get('net_balance',0),r['memo'],modified.get(r['id'],''),STATUSES[r['status']],r['number'],r['user_name'],r.get('points_used',0)] for index,r in enumerate(rows,1)]
+                    -r['cash_paid'] if r['kind'].endswith('_return') else r['cash_paid'],r.get('net_balance',0),r['memo'],modified.get(r['id'],''),STATUSES[r['status']],r['number'],r.get('entry_staff') or r['user_name'],r.get('points_used',0)] for index,r in enumerate(rows,1)]
                 if rows:
                     values.append(['','','','','Σ 합계 (확정)', '',total,paid,net_balance,'','','','','',''])
                 self.grid.fill(values,rows+([None] if rows else []))

@@ -5,6 +5,7 @@ import pytest
 from openpyxl import load_workbook
 from PySide6.QtCore import QPoint,Qt,QCoreApplication,QEvent,QObject,Signal
 from PySide6.QtPdf import QPdfDocument
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication,QFileDialog,QLabel,QMessageBox
 
 from pos2.app import MainWindow
@@ -103,7 +104,18 @@ def test_all_seven_fields_in_dialog_real_pdf_png_print_and_excel_keep_issued_sna
     pdf=tmp/(key+'.pdf');monkeypatch.setattr(QFileDialog,'getSaveFileName',lambda *_:(str(pdf),'PDF'))
     output_paper(store,identifier,title,window,'pdf');assert pdf.read_bytes().startswith(b'%PDF')
     reader=QPdfDocument(app);assert reader.load(str(pdf))==QPdfDocument.Error.None_
+    # Loading may complete asynchronously on the native Windows PDF backend.
+    for _ in range(200):
+        if reader.status() in (QPdfDocument.Status.Ready,QPdfDocument.Status.Error):break
+        QTest.qWait(10)
+    assert reader.status()==QPdfDocument.Status.Ready and reader.pageCount()>0,(reader.status(),reader.error(),reader.pageCount())
     text='\n'.join(reader.getAllText(i).text() for i in range(reader.pageCount()))
+    import os,shutil
+    from pathlib import Path
+    if os.environ.get('SY_TEST_CAPTURE_DIR'):
+        captures=Path(os.environ['SY_TEST_CAPTURE_DIR']);captures.mkdir(parents=True,exist_ok=True)
+        shutil.copyfile(pdf,captures/pdf.name)
+        reader.render(0,__import__('PySide6.QtCore',fromlist=['QSize']).QSize(794,1123)).save(str(captures/(key+'-render.png')))
     assert_identity(text);reader.close();reader.deleteLater()
 
     png=tmp/(key+'.png');monkeypatch.setattr(QFileDialog,'getSaveFileName',lambda *_:(str(png),'PNG'))

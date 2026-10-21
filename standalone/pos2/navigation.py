@@ -2,7 +2,7 @@
 import weakref
 
 from PySide6.QtCore import QEvent, QObject, QTimer
-from PySide6.QtWidgets import QApplication, QCheckBox, QComboBox, QDateEdit, QDialog, QDialogButtonBox, QLineEdit, QMessageBox, QPushButton, QSpinBox, QDoubleSpinBox, QTextEdit, QWidget,QTimeEdit
+from PySide6.QtWidgets import QApplication, QCheckBox, QComboBox, QDateEdit, QDateTimeEdit, QDialog, QDialogButtonBox, QLineEdit, QMessageBox, QPushButton, QSpinBox, QDoubleSpinBox, QTextEdit, QWidget,QTimeEdit
 
 _NAVIGATION_EVENTS=frozenset((QEvent.Type.Polish,QEvent.Type.Show,QEvent.Type.Close))
 
@@ -15,6 +15,7 @@ def _value(control):
         return control.isChecked()
     if isinstance(control, QDateEdit):
         return control.date().toString("yyyy-MM-dd")
+    if isinstance(control,QDateTimeEdit):return control.dateTime().toString('yyyy-MM-dd HH:mm:ss')
     if isinstance(control, (QSpinBox, QDoubleSpinBox)):
         return control.value()
     if isinstance(control, QTextEdit):
@@ -31,7 +32,7 @@ def state(owner):
         return _value(owner.date), tuple((key, field.text()) for key, field in {**owner.components,**owner.discounts}.items()), owner.memo.text(),owner.bill_number.text(),_value(owner.bill_due),owner.bill_bank.text(),owner.dc_rate.text()
     if name in {"DiaryDialog","HouseholdDialog"}:return owner.snapshot()
     if name == "TradeDialog":
-        return owner.kind, (owner.source or {}).get("id"), tuple(_value(getattr(owner, key)) for key in ("date", "partner", "member", "paid", "method", "points", "memo")), tuple(tuple(_value(row[key]) for key in ("product", "unit", "qty", "price")) for row in owner.line_rows)
+        return owner.kind, (owner.source or {}).get("id"), tuple(_value(getattr(owner, key)) for key in ("date", "entry_staff", "partner", "member", "paid", "method", "points", "memo")), tuple(tuple(_value(row[key]) for key in ("product", "unit", "qty", "price",'total','sale_price','factor','line_memo')) for row in owner.line_rows)
     if name == "CountEditor":
         return owner.title.text(), _value(owner.date), tuple((key, field.text()) for key, field in sorted(owner.inputs.items()))
     if name == "PermissionsPage":

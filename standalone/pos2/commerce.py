@@ -5,8 +5,9 @@ catalog prices are silently rewritten by posting a differently priced purchase.
 """
 
 from collections import defaultdict
-from datetime import date as calendar_date
+from datetime import date as calendar_date, datetime
 from decimal import Decimal
+import json
 from uuid import uuid4
 
 from .common import LIMIT, day, money, now, qtext, qty, rounded, text
@@ -163,9 +164,10 @@ class CommerceMixin:
             values.extend([f"%{search}%"] * 3)
         for column,value in (('member_id',member_id),('user_id',user_id)):
             if value is not None:where.append('d.'+column+'=?');values.append(value)
-        sql = ("SELECT d.*,p.name partner_name,p.code partner_code,u.name user_name "
+        sql = ("SELECT d.*,p.name partner_name,p.code partner_code,u.name user_name,"
+               "json_extract(e.payload,'$.datetime') entry_datetime,json_extract(e.payload,'$.staff') entry_staff "
                "FROM documents d JOIN partners p ON p.id=d.partner_id "
-               "JOIN users u ON u.id=d.user_id")
+               "JOIN users u ON u.id=d.user_id LEFT JOIN document_entry e ON e.document_id=d.id")
         if where:
             sql += " WHERE " + " AND ".join(where)
         return [self._public_trade(row) for row in self.db.execute(sql + " ORDER BY d.date DESC,d.id DESC", values)]
@@ -198,6 +200,10 @@ class CommerceMixin:
             "SELECT p.*,u.name user_name FROM payments p JOIN users u ON u.id=p.user_id "
             "WHERE p.document_id=? ORDER BY p.date,p.id", (identifier,),
         )]
+        entry=self.db.execute('SELECT payload FROM document_entry WHERE document_id=?',(identifier,)).fetchone()
+        result['entry']=json.loads(entry[0]) if entry else {}
+        for item,extra in zip(result['lines'],result['entry'].get('lines',[])):
+            item['entry']=extra
         result['_edit_token']=self._edit_snapshot('documents',identifier)
         return result
 
@@ -206,6 +212,12 @@ class CommerceMixin:
         if kind not in KINDS:
             raise ValueError("전표 유형이 올바르지 않습니다.")
         result = {"kind": kind, "date": day(data.get("date")), "memo": text(data.get("memo", ""), "메모")}
+        timestamp=data.get('entry_datetime',result['date']+' 00:00:00')
+        try:
+            timestamp=datetime.strptime(timestamp,'%Y-%m-%d %H:%M:%S').strftime('%Y-%m-%d %H:%M:%S')
+        except (ValueError,TypeError):raise ValueError('매입일시를 확인하세요.') from None
+        if timestamp[:10]!=result['date']:raise ValueError('거래일과 매입일시의 날짜가 다릅니다.')
+        result['entry']={'datetime':timestamp,'staff':text(data.get('entry_staff',self.actor['name']),'담당자',True,100),'lines':[]}
         result["rounding_mode"] = data.get("rounding_mode", self._settings_values().get("rounding_mode", "decimal"))
         if result["rounding_mode"] not in {"decimal", "won"}:
             raise ValueError("반올림 설정을 확인하세요.")
@@ -310,6 +322,16 @@ class CommerceMixin:
                 item["unit_price"] = money(raw["unit_price"])
                 calculated = Decimal(item["input_qty"]) * item["unit_price"] / (1000 * item["price_basis"])
                 item["total"] = rounded(calculated / 100) * 100 if result["rounding_mode"] == "won" else rounded(calculated)
+                if raw.get('amount_override') is not None:
+                    if kind!='purchase':raise ValueError('금액 직접 입력은 일반 매입전표에서만 사용할 수 있습니다.')
+                    manual=money(raw['amount_override'])
+                    derived=rounded(Decimal(manual)*1000*item['price_basis']/item['input_qty'])
+                    if item['unit_price']!=derived:raise ValueError('직접 입력 금액과 수량에 맞는 매입단가를 확인하세요.')
+                    if result['rounding_mode']=='won' and manual%100:raise ValueError('원 단위 반올림 전표는 금액을 정수 원으로 입력하세요.')
+                    item['total']=manual
+                if raw.get('factor_override') is not None:
+                    if kind!='purchase':raise ValueError('입수량 변경은 일반 매입전표에서만 가능합니다.')
+                    item['factor']=qty(raw['factor_override'])
                 item["cost"] = item["total"] if kind == "purchase" else 0
                 if kind == "sale" and item["supplier_id"]:
                     supplier = self.db.execute("SELECT supplier_mode,commission_bps FROM partners WHERE id=?",
@@ -324,6 +346,8 @@ class CommerceMixin:
             if item["base_qty"] <= 0 or item["base_qty"] > LIMIT:
                 raise ValueError("환산 수량 허용 범위를 초과했습니다.")
             lines.append(item)
+            result['entry']['lines'].append({'sale_price':str(currency_amount(money(raw.get('sale_price',currency_amount(product['sale_price']))))),
+                'memo':text(raw.get('line_memo',''),'품목 메모',maximum=500)})
         result["lines"], result["total"] = lines, sum(item["total"] for item in lines)
         if result["total"] > LIMIT:
             raise ValueError("전표 합계 허용 범위를 초과했습니다.")
@@ -366,6 +390,8 @@ class CommerceMixin:
                  "supplier_id", "tax_mode", "commission_bps", "commission_amount", "price_basis")),
             )
         self.db.execute("UPDATE documents SET rounding_mode=? WHERE id=?", (prepared["rounding_mode"], identifier))
+        self.db.execute('INSERT OR REPLACE INTO document_entry(document_id,payload) VALUES(?,?)',
+            (identifier,json.dumps(prepared['entry'],ensure_ascii=False)))
         return identifier
 
     def save_draft(self, data, id=None):
@@ -415,6 +441,7 @@ class CommerceMixin:
         self._require('trade');self._require_trade_write(data,draft_id)
         self._check_edit_snapshot('documents',draft_id,data)
         prepared=self._prepare_trade(data,posting=True)
+        catalog_updates=self._purchase_catalog_updates(data,prepared)
         if prepared['date']>calendar_date.today().isoformat():raise ValueError('미래 거래는 확정할 수 없습니다. 예정 거래는 초안으로 보관하세요.')
         self._assert_open(prepared['date'])
         if prepared['kind']=='sale':self._assign_sale_costs(prepared)
@@ -427,8 +454,52 @@ class CommerceMixin:
         for item in prepared['lines']:
             if item['tracked']:self._move(item['product_id'],direction*item['base_qty'],direction*item['cost'],prepared['kind'],prepared['memo'],identifier,prepared['date'])
         if prepared['paid']:self._insert_trade_payment(identifier,prepared['paid'],prepared['date'],prepared['method'],'등록 시 정산')
+        for change in catalog_updates:
+            table='product_units' if change['unit_id'] else 'products'
+            key=change['unit_id'] or change['product_id']
+            self.db.execute(f'UPDATE {table} SET purchase_price=?,sale_price=? WHERE id=?',
+                (change['purchase_price'],change['sale_price'],key))
+            self.db.execute('UPDATE products SET updated_at=? WHERE id=?',(now(),change['product_id']))
+            self._audit('purchase_price_check','product',change['product_id'],dict(document_id=identifier,**change))
         self._audit('post','document',identifier,dict(kind=prepared['kind'],total=prepared['total'],points_used=points_used))
         return identifier
+
+    def _purchase_catalog_updates(self,data,prepared):
+        """Only explicitly checked, current prices can update the catalog.
+
+        Validation precedes posting; updates share the stock/payment transaction.
+        A failure therefore cannot leave a saved voucher with partial master edits.
+        """
+        requested=data.get('catalog_updates',[])
+        if not requested:return []
+        if prepared['kind']!='purchase' or not isinstance(requested,list) or len(requested)>2000:
+            raise ValueError('매입상품 가격 변경 대상을 확인하세요.')
+        self._require('catalog');self._require_capability('products','edit')
+        results=[];seen=set()
+        for change in requested:
+            if not isinstance(change,dict):raise ValueError('상품 가격 변경값을 확인하세요.')
+            product_id,unit_id=change.get('product_id'),change.get('unit_id') or None
+            key=(product_id,unit_id)
+            if key in seen:raise ValueError('같은 상품·단위의 가격 변경이 중복되었습니다.')
+            seen.add(key)
+            product=self.db.execute('SELECT * FROM products WHERE id=? AND active=1',(product_id,)).fetchone()
+            if not product:raise ValueError('변경할 상품을 다시 선택하세요.')
+            # Require the exact originally displayed prices, including units.
+            current=self.db.execute('SELECT * FROM product_units WHERE id=? AND product_id=? AND active=1',(unit_id,product_id)).fetchone() if unit_id else product
+            if not current or any(money(change.get('old_'+field))!=current[field] for field in ('purchase_price','sale_price')):
+                raise ValueError('상품장 가격이 다른 작업에서 변경되었습니다. 최신 가격을 다시 확인하세요.')
+            # Compare the immutable base/pack basis as well as the product ID.
+            factor=current['factor'] if unit_id else 1000
+            matching=[(line,extra) for line,extra in zip(prepared['lines'],prepared['entry']['lines'])
+                if line['product_id']==product_id and line['unit_id']==unit_id and line['factor']==factor
+                and line['price_basis']==(1 if unit_id else product['price_basis'])]
+            purchase=money(change.get('purchase_price',currency_amount(current['purchase_price'])))
+            sale=money(change.get('sale_price',currency_amount(current['sale_price'])))
+            if not matching or not any((purchase==current['purchase_price'] or purchase==line['unit_price'])
+                    and (sale==current['sale_price'] or sale==money(extra['sale_price'])) for line,extra in matching):
+                raise ValueError('전표에서 확인한 가격만 상품장에 적용할 수 있습니다. 환산 입력은 상품정보에서 확인하세요.')
+            results.append(dict(product_id=product_id,unit_id=unit_id,purchase_price=purchase,sale_price=sale))
+        return results
 
     def _move(self, product_id, qty_delta, cost_delta, kind, reason, document_id=None, date=None):
         if not self.db.in_transaction:

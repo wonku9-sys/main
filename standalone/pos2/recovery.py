@@ -25,10 +25,10 @@ CREATE TABLE IF NOT EXISTS restore_state (
  id INTEGER PRIMARY KEY CHECK(id=1), token TEXT NOT NULL
 );
 INSERT OR IGNORE INTO restore_state(id,token) VALUES(1,'');
-PRAGMA user_version=215;
+PRAGMA user_version=216;
 """
-SUPPORTED_VERSIONS = {200, 201, 202, 203, 204, 205, 206, 207, 208,209,210,211,212,213,214,215}
-SCHEMA_VERSION = 215
+SUPPORTED_VERSIONS = {200, 201, 202, 203, 204, 205, 206, 207, 208,209,210,211,212,213,214,215,216}
+SCHEMA_VERSION = 216
 APPLICATION_ID = 1398362162
 
 
@@ -58,6 +58,8 @@ def _validate_database(db):
         raise ValueError("지원하지 않는 백업 버전입니다. 같은 독립판 버전의 백업을 선택하세요.")
     expected = dict(_expected_objects())
     actual = _objects(db)
+    if version<216 and ('table','document_entry') not in actual:
+        expected.pop(('table','document_entry'),None)
     if version<215:
         for table in ('payable_bills','business_entries'):
             if ('table',table) not in actual:expected.pop(('table',table),None)
@@ -135,6 +137,22 @@ def _validate_database(db):
         raise ValueError("백업 파일이 손상되어 복원할 수 없습니다.")
     if db.execute("PRAGMA foreign_key_check").fetchone():
         raise ValueError("백업의 거래·상품 연결 이력이 손상되어 복원할 수 없습니다.")
+    if ('table','document_entry') in actual:
+        from .common import day,money,text
+        from datetime import datetime
+        for entry in db.execute('SELECT e.payload,d.date,(SELECT COUNT(*) FROM document_lines l WHERE l.document_id=d.id) count FROM document_entry e JOIN documents d ON d.id=e.document_id'):
+            try:
+                payload=json.loads(entry[0])
+                if set(payload)!={'datetime','staff','lines'}:raise ValueError()
+                stamp=datetime.strptime(payload['datetime'],'%Y-%m-%d %H:%M:%S')
+                if stamp.date().isoformat()!=day(entry[1]):raise ValueError()
+                text(payload['staff'],'담당자',True,100)
+                if not isinstance(payload['lines'],list) or len(payload['lines'])!=entry[2]:raise ValueError()
+                for line in payload['lines']:
+                    if set(line)!={'sale_price','memo'}:raise ValueError()
+                    money(line['sale_price']);text(line['memo'],'품목 메모',maximum=500)
+            except (ValueError,TypeError,KeyError,OverflowError):
+                raise ValueError('백업의 매입일시·담당자·품목 입력정보가 올바르지 않습니다.') from None
     if ('table','member_registration') in actual:
         from .member_registration import decode
         for row in db.execute('SELECT data FROM member_registration'):decode(row[0])

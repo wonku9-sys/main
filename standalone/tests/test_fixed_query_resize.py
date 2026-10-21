@@ -73,7 +73,7 @@ def test_popup_fixed_query_native_frame_resize_and_fullscreen_restore(desktop):
         popup.resize(size);app.processEvents();assert popup.size()==size
         pos=bar.pos();scroll=window.scrollers['worklog']
         scroll.verticalScrollBar().setValue(scroll.verticalScrollBar().maximum());app.processEvents()
-        assert bar.pos()==pos and bar.query_button.isVisible() and popup._popup_close_button.isVisible()
+        assert bar.pos()==pos and bar.query_button.isVisible() and not hasattr(popup,'_popup_close_button')
         assert abs(bar.query_button.mapTo(bar,bar.query_button.rect().center()).x()-bar.rect().center().x())<=1
     popup.showFullScreen();app.processEvents();assert popup.isFullScreen()
     popup.showNormal();app.processEvents();assert not popup.isFullScreen()
@@ -91,7 +91,7 @@ def test_main_and_product_dialog_resize_keep_overflow_accessible(desktop):
     from PySide6.QtWidgets import QScrollArea
     scroll=dialog.findChild(QScrollArea,'popupScroll')
     assert scroll is not None and scroll.verticalScrollBar().maximum()>0
-    assert dialog._popup_close_button.isVisible()
+    assert not hasattr(dialog,'_popup_close_button')
     dialog.close()
 
 

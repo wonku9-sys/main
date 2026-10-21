@@ -1,0 +1,89 @@
+name: Native manual purchase workflow release
+on:
+  push:
+    tags: ['manual-purchase-v*']
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 40
+    env:
+      QT_QPA_PLATFORM: windows
+      PYTHONUTF8: '1'
+      SY_TEST_CAPTURE_DIR: ${{ github.workspace }}/standalone/dist/manual-captures
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: x64
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.12.23'
+          enable-cache: true
+          cache-dependency-glob: standalone/uv.lock
+      - name: Install exact dependencies
+        run: uv sync --frozen --extra dev --project standalone
+      - name: Real purchase keyboard and business papers on Windows
+        run: uv run --frozen --extra dev --project standalone python -m pytest -q standalone/tests/test_manual_purchase_sequence.py standalone/tests/test_store_business_documents.py
+      - name: Full business and desktop regression
+        run: uv run --frozen --extra dev --project standalone python -m pytest -q --tb=short standalone/tests
+      - name: Purchase popup at 125 percent
+        env:
+          QT_SCALE_FACTOR: '1.25'
+        run: uv run --frozen --extra dev --project standalone python -m pytest -q standalone/tests/test_manual_purchase_sequence.py standalone/tests/test_payment_access_layout.py
+      - name: Purchase popup at 150 percent
+        env:
+          QT_SCALE_FACTOR: '1.5'
+        run: uv run --frozen --extra dev --project standalone python -m pytest -q standalone/tests/test_manual_purchase_sequence.py standalone/tests/test_payment_access_layout.py
+      - name: Build and run actual portable Windows executable
+        run: uv run --frozen --extra dev --project standalone python standalone/build_portable.py
+      - name: Package corresponding source
+        run: uv run --frozen --extra dev --project standalone python standalone/package_source.py
+      - name: Clear versioned names and SHA256
+        shell: python
+        run: |
+          from pathlib import Path
+          from hashlib import sha256
+          import shutil
+          for kind,pattern in (('Windows-x64','*-Windows-x64-portable-*.zip'),('source','*-source-*.zip')):
+              files=list(Path('standalone/dist').glob(pattern));assert len(files)==1
+              target=Path('standalone/dist')/('SY-POS-v2.4.0rc31-'+kind+'-icons3d.zip')
+              shutil.copyfile(files[0],target)
+              target.with_suffix('.zip.sha256').write_text(sha256(target.read_bytes()).hexdigest()+'  '+target.name+'\n',encoding='utf-8')
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: manual-purchase-native-captures
+          if-no-files-found: warn
+          path: |
+            standalone/dist/manual-captures
+            standalone/dist/SY-POS-Windows-smoke*.png
+            standalone/dist/SY-POS-Windows-smoke*.log
+      - uses: actions/upload-artifact@v4
+        with:
+          name: manual-purchase-verified-packages
+          if-no-files-found: error
+          path: |
+            standalone/dist/SY-POS-v*-icons3d.zip
+            standalone/dist/SY-POS-v*-icons3d.zip.sha256
+  release:
+    needs: windows
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: manual-purchase-verified-packages
+          path: release-assets
+      - name: Verify package checksums
+        working-directory: release-assets
+        run: sha256sum --check *.zip.sha256
+      - name: Publish tested purchase workflow build
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: gh release create "$RELEASE_TAG" --verify-tag --prerelease --latest=false --title "SY POS v2.4.0rc31 · 매입 입력 순서 보완" --notes-file standalone/RELEASE_NOTES.md release-assets/*.zip release-assets/*.zip.sha256

@@ -33,6 +33,7 @@ def source_files():
     files += [ROOT/'pos2'/'assets'/'sounds'/row[0] for row in MOUSE_PCM.values()]
     files += [ROOT/'pos2'/'assets'/'sounds'/'SOUNDS.md']
     files += [ROOT.parent / ".github" / "workflows" / name for name in ('standalone-windows.yml','native-package-retry.yml','menu-effects-release.yml','lucky-sequence-release.yml','personal-contrast-release.yml','payment-access-release.yml','business-profile-release.yml')]
+    files += [ROOT.parent/'.github'/'workflows'/'manual-purchase-release.yml']
     for source in sorted(set(files)):
         if source.is_file() and "__pycache__" not in source.parts:
             yield source

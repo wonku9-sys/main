@@ -94,6 +94,10 @@ CREATE TABLE IF NOT EXISTS document_lines (
  commission_amount INTEGER NOT NULL DEFAULT 0 CHECK(commission_amount>=0),
  tax_mode TEXT NOT NULL DEFAULT 'exempt' CHECK(tax_mode IN ('exempt','taxable'))
 );
+CREATE TABLE IF NOT EXISTS document_entry (
+ document_id INTEGER PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE,
+ payload TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS supplier_settlements (
  id INTEGER PRIMARY KEY, partner_id INTEGER NOT NULL REFERENCES partners(id) ON DELETE RESTRICT,
  date TEXT NOT NULL, amount INTEGER NOT NULL CHECK(amount BETWEEN 1 AND 9000000000000),
