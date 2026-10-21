@@ -86,7 +86,7 @@ def test_tax_tree_member_tab_modeless_and_structured_change_columns(shop,app):
     dialog.tax_mode.setCurrentIndex(dialog.tax_mode.findData('taxable'));assert dialog.tax_badge.text()=='과 · 과세'
     assert dialog.tax_badge.styleSheet()!=page.grid.item(0,14).background().color().name()
     dialog.tax_mode.setCurrentIndex(dialog.tax_mode.findData('exempt'))
-    dialog.sale_price.setText('250.75');dialog.apply_changes()
+    dialog.sale_price.setText('250.75');dialog.save(False)
     assert [dialog.audit_table.horizontalHeaderItem(i).text() for i in range(7)]==['변경내용','변경전','변경후','변경차','비율(%)','변경일시','변경사용자']
     index=next(i for i in range(dialog.audit_table.rowCount()) if dialog.audit_table.item(i,0).text()=='판매단가')
     assert dialog.audit_table.item(index,3).data(Qt.ItemDataRole.UserRole+1)==Decimal('50.25')

@@ -12,6 +12,7 @@ from .currency import public_input, round_amount
 from .navigation import mark_saved, confirm_dialog_exit
 from .permissions import can_action
 from .commercial_paper import supplier_summary
+from .trade_sheet import EntrySheet
 
 
 def iso(field):
@@ -364,7 +365,7 @@ class SalesFormDialog(FormDialog):
         self.rows = []
         self.rounding_mode = (record or {}).get("rounding_mode",self.store.calculation_policy()["rounding_mode"])
         self.body.addWidget(QLabel("견적서·거래명세서·계산서 참고자료는 재고·매출·결제·포인트를 변경하지 않습니다. 세금 신고·전자세금계산서 발행 기능이 아닙니다."))
-        self.table = QTableWidget(0,6)
+        self.table = EntrySheet(0,6)
         self.table.setHorizontalHeaderLabels(["상품","단위","수량","단가","금액","삭제"])
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.horizontalHeader().setStretchLastSection(False)

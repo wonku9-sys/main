@@ -19,7 +19,7 @@ def desktop(tmp_path, monkeypatch):
     QCoreApplication.sendPostedEvents(None,QEvent.Type.DeferredDelete);app.processEvents();store.close()
 
 
-@pytest.mark.parametrize('kind',['product','supplier'])
+@pytest.mark.parametrize('kind',['supplier'])
 def test_apply_is_immediate_stays_open_no_duplicates_and_next_record(desktop,kind):
     app,store,window=desktop
     dialog=ProductDialog(store,parent=window) if kind=='product' else SupplierDialog(window)
@@ -41,7 +41,7 @@ def test_apply_is_immediate_stays_open_no_duplicates_and_next_record(desktop,kin
     dialog.reject();assert not dialog.isVisible() and len(rows())==2
 
 
-@pytest.mark.parametrize('kind',['product','supplier'])
+@pytest.mark.parametrize('kind',['supplier'])
 def test_invalid_apply_or_next_keeps_input_and_does_not_reset(desktop,kind):
     app,store,window=desktop
     dialog=ProductDialog(store,parent=window) if kind=='product' else SupplierDialog(window)
@@ -56,4 +56,5 @@ def test_apply_refreshes_catalog_without_closing_editor(desktop):
     page.product_saved.connect(seen.append)
     dialog=ProductDialog(store,parent=page);dialog.saved.connect(page._product_saved)
     dialog.show();app.processEvents();dialog.fields['name'].setText('즉시 표시 상품');dialog.apply_button.click()
-    assert dialog.isVisible() and page.grid.rowCount()==1 and seen==[dialog.saved_id]
+    assert dialog.isVisible() and page.grid.rowCount()==1 and seen==[dialog.last_saved_id]
+    assert not dialog.record and dialog.saved_id is None and not dialog.fields['name'].text()

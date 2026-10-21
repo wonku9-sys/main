@@ -42,7 +42,7 @@ def get_product(store, identifier):
     return next(p for p in store.products() if p["id"] == identifier)
 
 
-def test_product_dialog_real_tabs_and_persistent_apply_does_not_duplicate(app, shop):
+def test_product_dialog_real_tabs_and_internal_save_does_not_duplicate(app, shop):
     store, _, supplier, _, _, _ = shop
     root = store.save_category({"name": "한우"})
     store.save_category({"name": "냉장육", "parent_id": root})
@@ -58,12 +58,12 @@ def test_product_dialog_real_tabs_and_persistent_apply_does_not_duplicate(app, s
     dialog.supplier.setCurrentIndex(dialog.supplier.findData(supplier))
     dialog.purchase_price.setText("30000")
     dialog.sale_price.setText("45000")
-    dialog.apply_changes()
+    dialog.save(False)
     identifier = dialog.saved_id
     assert identifier and dialog.result() != QDialog.DialogCode.Accepted
     assert "33.33" in dialog.margin.text()
     dialog.fields["shelf"].setText("A-02")
-    dialog.apply_changes()
+    dialog.save(False)
     assert dialog.saved_id == identifier
     assert len(store.products()) == 2
     saved = get_product(store, identifier)
@@ -99,10 +99,12 @@ def test_save_button_closes_but_apply_remains_open(app, shop):
     dialog.show()
     QTest.mouseClick(dialog.apply_button, Qt.MouseButton.LeftButton)
     assert dialog.isVisible()
+    assert not dialog.fields['name'].text()
+    dialog.fields['name'].setText('다음 상품 클릭 저장')
     QTest.mouseClick(dialog.save_button, Qt.MouseButton.LeftButton)
     assert not dialog.isVisible()
     assert dialog.result() == QDialog.DialogCode.Accepted
-    assert len(shop[0].products()) == 2
+    assert len(shop[0].products()) == 3
 
 
 def test_product_history_filters_posted_totals_and_refreshes_real_stock(app, shop):

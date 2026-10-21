@@ -70,7 +70,8 @@ class MemberDialog(FormDialog):
         shortcut=QShortcut(QKeySequence('Ctrl+S'),self);shortcut.activated.connect(self.save)
         self.finished.connect(self.stop_lookup)
     def editable_rows(self,title,headers,rows,keys):
-        group=QGroupBox(title);layout=QVBoxLayout(group);table=QTableWidget(0,2);table.setHorizontalHeaderLabels(headers);table.setMaximumHeight(115);table.horizontalHeader().setStretchLastSection(True)
+        from .trade_sheet import EntrySheet
+        group=QGroupBox(title);layout=QVBoxLayout(group);table=EntrySheet(0,2);table.setHorizontalHeaderLabels(headers);table.setMaximumHeight(115);table.horizontalHeader().setStretchLastSection(True)
         for row in rows:
             index=table.rowCount();table.insertRow(index)
             for col,key in enumerate(keys):table.setItem(index,col,QTableWidgetItem(row[key]))

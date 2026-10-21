@@ -1444,9 +1444,32 @@ def main(argv=None):
                             capture("-categories", window)
                             from .catalog_ui import ProductDialog,CategorySearchDialog
                             new_product=ProductDialog(store,parent=window);capture('-new-product-categories',new_product)
+                            assert new_product.width()<=720 and new_product.height()>new_product.width()
+                            assert not hasattr(new_product,'_home_button') and not hasattr(new_product,'next_button')
+                            assert all('▸' in b.text() for b in new_product.category_buttons.values())
                             category_search=CategorySearchDialog(store,new_product);category_search.filters[2].setText('신상품')
                             assert category_search.grid.rowCount()>0
                             capture('-product-category-search',category_search);category_search.close();new_product.close()
+                            # Test the frozen program's three actions in an isolated synthetic catalog.
+                            proof_store=Store(directory/'isolated-product-form-proof.db')
+                            try:
+                                proof_store.setup_admin('owner','검증 관리자','Product-Form-Proof-2026!')
+                                product_form=ProductDialog(proof_store,parent=window);seen_products=[]
+                                product_form.saved.connect(seen_products.append)
+                                capture('-product-portrait',product_form)
+                                for name in ('연속 등록 검증1','연속 등록 검증2'):
+                                    product_form.fields['name'].setText(name);product_form.fields['sale_price'].setText('1234567.50')
+                                    product_form.apply_button.click();app.processEvents()
+                                    assert product_form.isVisible() and not product_form.record and not product_form.fields['name'].text()
+                                assert len(set(seen_products))==2 and len(proof_store.products())==2
+                                assert all(str(p['sale_price'])=='1234567.50' for p in proof_store.products())
+                                product_form.fields['name'].setText('저장하지 않을 상품');product_form.cancel_button.click()
+                                assert not product_form.isVisible() and len(proof_store.products())==2
+                                product_form=ProductDialog(proof_store,parent=window);product_form.fields['name'].setText('저장 후 닫기 검증')
+                                product_form.show();app.processEvents();product_form.save_button.click()
+                                assert not product_form.isVisible() and len(proof_store.products())==3
+                                print('PASS compact product form: portrait, save closes, cancel discards, apply saves and clears for unique products',flush=True)
+                            finally:proof_store.close()
                             from .menu_shortcuts import ShortcutGuide
                             shortcut_guide=ShortcutGuide(window);capture('-shortcut-guide',shortcut_guide);shortcut_guide.close()
                             for key,suffix in (('inventory_categories','-inventory-categories'),('inventory_suppliers','-inventory-suppliers'),('inventory_monthly','-inventory-monthly')):
@@ -1464,6 +1487,7 @@ def main(argv=None):
                             capture("-reports",window)
                             from .offline_ui import SalesFormDialog
                             paper=SalesFormDialog(window,"quotations")
+                            assert paper.table.property('syEntryWorksheet')
                             if paper.rows:
                                 paper.rows[0]["qty"].setText("1")
                             capture("-quotation",paper);paper.close()
@@ -1717,6 +1741,7 @@ def main(argv=None):
                             window.popup_menus=False;window.open_page('home')
                             from .lucky_numbers import open_lucky_numbers
                             lucky=open_lucky_numbers(window)
+                            assert not lucky.page.header.query_button.isVisible() and not lucky.page.header.query_button.isEnabled()
                             lucky.page.draw_five()
                             for _ in range(30):lucky.page.finish_draw()
                             assert len(lucky.page.results)==5 and all(len(set(values))==6 for values in lucky.page.results)

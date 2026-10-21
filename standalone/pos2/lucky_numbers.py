@@ -106,6 +106,9 @@ class LuckyNumbersPage(Page):
     FIVE_TICKS=8
     def __init__(self,window):
         super().__init__(window,'행운의 숫자','한 개씩 또는 자동으로 · 1~45 중 6개씩 5줄 · 로그인·인터넷 불필요')
+        # This is a draw tool, not a database query; retain its title but no dummy F5 action.
+        self.header.query_button.setEnabled(False)
+        self.header.query_button.hide()
         self.remaining=list(range(1,46));self.drawn=[];self.results=[];self.ticks=0;self.batch_rows=0;self.pending_balls=0;self.draw_ticks=self.SINGLE_TICKS
         row=QHBoxLayout();self.machine=LuckyMachine();self.machine.clicked.connect(self.draw);row.addWidget(self.machine,1)
         panel=QFrame();panel.setObjectName('luckyResults');panel.setStyleSheet('QFrame#luckyResults{background:#F5FAF6;border:1px solid #D8E7DD;border-radius:16px;}')

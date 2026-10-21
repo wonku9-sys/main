@@ -64,16 +64,16 @@ def test_invalid_settings_cannot_be_saved_by_home_navigation(shop, monkeypatch):
     assert window.current_page is page
 
 
-def test_modal_product_home_button_saves_and_returns_home(shop, monkeypatch):
+def test_compact_product_has_no_redundant_home_button_and_global_home_still_saves(shop, monkeypatch):
     app, store, window, *_ = shop
     window.open_page("products")
     dialog = ProductDialog(store, parent=window)
     dialog.show()
     app.processEvents()
-    assert dialog._home_button.text() == "첫화면"
+    assert not hasattr(dialog, '_home_button')
     dialog.fields["name"].setText("목살")
     monkeypatch.setattr("pos2.navigation.ask_unsaved", lambda *_: QMessageBox.StandardButton.Save)
-    dialog._home_button.click()
+    window.navigation.request_home()
     app.processEvents()
     assert not dialog.isVisible() and window.current_key == "home"
     assert any(row["name"] == "목살" for row in store.products())

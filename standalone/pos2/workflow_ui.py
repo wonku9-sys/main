@@ -16,6 +16,7 @@ from .widgets import DataGrid, Cell, HeaderSafeTable, Page, ScanField, action, a
 from .common import decimal as value_decimal, qty
 from .currency import public_input as money, round_amount as rounded
 from .number_edit import GroupedNumberEdit
+from .trade_sheet import EntrySheet
 
 
 KINDS = {"purchase": "매입", "sale": "매출", "purchase_return": "매입 반품", "sale_return": "매출 반품"}
@@ -583,7 +584,7 @@ class PurchaseBatchDialog(QDialog):
         self.setWindowTitle('매입 수량·단가 일괄입력');self.resize(760,500)
         layout=QVBoxLayout(self)
         layout.addWidget(QLabel('현재 전표의 수량·단가만 적용합니다. 최종 저장 전에는 재고·결제가 바뀌지 않습니다.'))
-        self.table=HeaderSafeTable(0,4);self.table.setHorizontalHeaderLabels(['상품명','입력 단위','수량','매입단가'])
+        self.table=EntrySheet(0,4);self.table.setHorizontalHeaderLabels(['상품명','입력 단위','수량','매입단가'])
         self.inputs=[]
         for row in trade.line_rows:
             if not row['product'].currentData():continue
@@ -1572,7 +1573,7 @@ class TradeDialog(QDialog):
                     self.set_line_text(row['total'],won(value))
                 for key in ('qty','factor','total','price','sale_price'):
                     column=self.line_columns.index(key)
-                    needed=row[key].fontMetrics().horizontalAdvance(row[key].text())+12
+                    needed=row[key].fontMetrics().horizontalAdvance(row[key].text())+14  # include the grid line as well as editor padding
                     if self.table.columnWidth(column)<needed:self.table.setColumnWidth(column,needed)
                 sale = rounded(quantity * money(row['sale_price'].text() or '0') / row.get("price_basis", 1), self.rounding_mode)
                 row["margin"].setText(f"{(Decimal(sale - value) * 100 / sale):.2f}%" if sale else "—")
@@ -2157,7 +2158,7 @@ class CountEditor(QDialog):
         form.addWidget(self.date)
         body.addLayout(form)
         body.addWidget(QLabel("실제 수량을 기본단위로 입력하세요. 빈칸은 실사에서 제외합니다. 초안 저장 후 차이를 검토하고 별도 확정합니다."))
-        self.grid = QTableWidget(0, 5)
+        self.grid = EntrySheet(0, 5)
         self.grid.setHorizontalHeaderLabels(["상품코드", "상품명", "기본단위", "장부수량", "실제수량 (빈칸 제외)"])
         self.grid.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.inputs = {}

@@ -343,7 +343,8 @@ class HouseholdDialog(QDialog):
         if not row or row['kind'] not in {'income','expense'}:return
         d=FormDialog('거래 나누기 · 합계 보존',self);d.resize(760,520)
         note=QLabel('원래 금액 '+won(row['amount'])+'원 · 같은 날짜·통장·수입/지출로 분리합니다.\n첫 번째 세부 거래에 원래 첨부파일을 유지합니다. 차량·고정비 거래는 분할하지 않습니다.');note.setWordWrap(True);d.body.addWidget(note)
-        grid=QTableWidget(10,3);grid.setHorizontalHeaderLabels(['분류','내용','금액']);d.body.addWidget(grid,1)
+        from .trade_sheet import EntrySheet
+        grid=EntrySheet(10,3);grid.setHorizontalHeaderLabels(['분류','내용','금액']);d.body.addWidget(grid,1)
         for c,value in enumerate((row['category'],row['title'],str(row['amount']))):grid.setItem(0,c,QTableWidgetItem(value))
         total=QLabel();d.body.addWidget(total)
         def parts():return [dict(zip(('category','title','amount'),[(grid.item(r,c).text().strip() if grid.item(r,c) else '') for c in range(3)])) for r in range(grid.rowCount()) if any(grid.item(r,c) and grid.item(r,c).text().strip() for c in range(3))]

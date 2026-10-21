@@ -8,6 +8,7 @@ from .widgets import Page,DataGrid,FormDialog,action,date_field,won
 from .worklog import ACTIVITIES,STATUSES
 from .menu_icons import menu_icon
 from .household_finance_ui import MoneyChart
+from .trade_sheet import EntrySheet
 
 
 class WorkLogPage(Page):
@@ -79,11 +80,11 @@ class WorkLogPage(Page):
         layout=panel('업무·인수인계');body=QTextEdit();body.setPlainText(r.get('body',''));body.setPlaceholderText('오늘 처리한 일과 확인할 일을 기록하세요.');layout.addWidget(body)
         handover=QTextEdit();handover.setPlainText(details.get('handover',''));handover.setPlaceholderText('인수인계 · 다음 근무자가 확인할 내용');layout.addWidget(handover)
         issue=QLineEdit(details.get('issue',''));issue.setPlaceholderText('사고·안전·특이사항');layout.addWidget(issue)
-        layout=panel('작업량·생산성');moves=QTableWidget(max(10,len(details.get('movements',[]))+3),4);moves.setHorizontalHeaderLabels(['작업 구분','EA / BOX / PLT','작업 수량','해당 작업 소요시간(h)']);layout.addWidget(moves)
+        layout=panel('작업량·생산성');moves=EntrySheet(max(10,len(details.get('movements',[]))+3),4);moves.setHorizontalHeaderLabels(['작업 구분','EA / BOX / PLT','작업 수량','해당 작업 소요시간(h)']);layout.addWidget(moves)
         for i,row in enumerate(details.get('movements',[])):
             for c,k in enumerate(('activity','unit','qty','hours')):moves.setItem(i,c,QTableWidgetItem(str(row[k])))
         note=QLabel('작업 구분: '+', '.join(ACTIVITIES)+'\n75분=1.25시간. 단위별·작업별 수량과 시간을 별도 입력하며 섞어서 합산하지 않습니다.');note.setWordWrap(True);layout.addWidget(note)
-        layout=panel('작업인원');workers=QTableWidget(max(8,len(details.get('workers',[]))+3),7);workers.setHorizontalHeaderLabels(['작업자','정규/임시/지원','정규시간(h)','잔업시간(h)','시급(원)','잔업 배율','비고(저장 제외)']);layout.addWidget(workers)
+        layout=panel('작업인원');workers=EntrySheet(max(8,len(details.get('workers',[]))+3),7);workers.setHorizontalHeaderLabels(['작업자','정규/임시/지원','정규시간(h)','잔업시간(h)','시급(원)','잔업 배율','비고(저장 제외)']);layout.addWidget(workers)
         names={'regular':'정규','temporary':'임시','support':'지원'}
         for i,row in enumerate(details.get('workers',[])):
             for c,k in enumerate(('name','kind','regular_hours','overtime_hours','hourly_rate','overtime_factor')):workers.setItem(i,c,QTableWidgetItem(names[row[k]] if k=='kind' else str(row[k])))

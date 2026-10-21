@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
 )
 
 from .widgets import DataGrid, FormDialog, Page, ScanField, action, date_field, won,authorize_output
+from .trade_sheet import EntrySheet
 
 
 def choose(grid, parent):
@@ -204,7 +205,7 @@ class PromotionDialog(FormDialog):
         self.active.setChecked(self.record.get("active", True))
         self.form.addRow("상태", self.active)
         self.products = store.loyalty_products()
-        self.lines = QTableWidget(0, 4)
+        self.lines = EntrySheet(0, 4)
         self.lines.setHorizontalHeaderLabels(["상품", "특매 매입가 (빈칸=기본)", "특매 판매가 (빈칸=기본)", ""])
         self.lines.horizontalHeader().setStretchLastSection(False)
         self.lines.setColumnWidth(0, 300)

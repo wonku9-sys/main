@@ -89,7 +89,7 @@ def test_main_and_product_dialog_resize_keep_overflow_accessible(desktop):
     dialog.resize(600,440);app.processEvents();assert dialog.size()==QSize(600,440)
     assert dialog.findChild(QDialog) is None
     from PySide6.QtWidgets import QScrollArea
-    scroll=dialog.findChild(QScrollArea,'popupScroll')
+    scroll=dialog.findChild(QScrollArea,'productFormScroll')
     assert scroll is not None and scroll.verticalScrollBar().maximum()>0
     assert not hasattr(dialog,'_popup_close_button')
     dialog.close()

@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
-from PySide6.QtCore import QDate, QTime, Qt, Signal, QTimer, QEvent
+from PySide6.QtCore import QDate, QTime, Qt, Signal, QTimer, QEvent, QSize
 from PySide6.QtGui import QColor, QShortcut, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
     QDialogButtonBox, QFileDialog, QFormLayout, QFrame, QGridLayout,
     QGroupBox, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMessageBox,
     QPushButton, QScrollArea, QTabWidget, QTableWidgetItem, QTextEdit, QVBoxLayout, QWidget,
-    QMenu, QStyle, QTreeWidget, QTreeWidgetItem, QSpinBox, QTimeEdit,QSplitter,
+    QMenu, QStyle, QTreeWidget, QTreeWidgetItem, QSpinBox, QTimeEdit,QSplitter, QToolButton,
 )
 
 from .widgets import DataGrid, Page, ScanField, won, date_field, action, search_icon
@@ -613,17 +613,29 @@ class ProductDialog(QDialog):
         self.fields = {}
         self.history_tables, self.history_filters, self.history_summaries = {}, {}, {}
         self.setObjectName("productDialog")
+        self._sy_no_home_button = True
+        self._fixed_query_header = True  # Tabs own scrolling; the footer stays visible.
         self.setWindowTitle("상품 등록정보" if record else "새 상품 등록")
-        self.resize(1110, 830)
-        self.setMinimumSize(850, 620)
+        self.resize(700, 800)
+        self.setMinimumSize(420, 400)
+        self.setStyleSheet('''
+            QDialog#productDialog QLineEdit, QDialog#productDialog QComboBox {
+                min-width:0px; min-height:20px; padding:3px 5px;
+            }
+            QDialog#productDialog QPushButton {min-height:20px; padding:4px 8px;}
+            QDialog#productDialog QToolButton {min-width:0px; padding:2px 3px;}
+            QDialog#productDialog QTabBar::tab {padding:6px 7px;}
+            QDialog#productDialog QGroupBox {margin-top:10px; padding-top:9px; border-radius:3px;}
+        ''')
         root = QVBoxLayout(self)
-        root.setContentsMargins(22, 18, 22, 18)
+        root.setContentsMargins(10, 8, 10, 8)
+        root.setSpacing(5)
         head = QHBoxLayout()
         heading = self.heading = QLabel("상품 등록정보" if record else "새 상품 등록")
         heading.setObjectName("dialogHeading")
         head.addWidget(heading)
         head.addStretch()
-        head.addWidget(QLabel("기본단위 기준 원 / 수량 소수 3자리"))
+        head.addWidget(QLabel("금액: 원 · 수량: 소수 3자리"))
         root.addLayout(head)
         self.tabs = QTabWidget()
         root.addWidget(self.tabs, 1)
@@ -638,28 +650,41 @@ class ProductDialog(QDialog):
         self.error_label.setWordWrap(True)
         self.error_label.setStyleSheet("color:#bd3232;")
         root.addWidget(self.error_label)
-        footer = QHBoxLayout()
+        self.footer = QWidget()
+        self._sy_pinned_footer = self.footer
+        footer = QHBoxLayout(self.footer)
+        footer.setContentsMargins(0, 0, 0, 0)
         self.meta = QLabel()
         self.meta.setWordWrap(True)
         self.meta.setObjectName("muted")
         footer.addWidget(self.meta)
         footer.addStretch()
-        self.apply_button = _button("적용", self.apply_changes, footer)
-        self.apply_button.setToolTip('입력 내용을 즉시 저장하고 창을 유지합니다. 같은 상품을 계속 수정할 수 있습니다.')
-        self.next_button = _button('저장 후 다음 상품', self.next_record, footer)
-        self.next_button.setEnabled(can_action(self.store.actor, 'products', 'create'))
-        self.next_button.setToolTip('현재 상품을 저장한 뒤 새 상품 입력칸을 엽니다. 분류·공급사는 이어서 사용합니다.')
-        self.cancel_button = _button("닫기", self.reject, footer)
-        self.save_button = _button("저장", self.save, footer, True)
-        root.addLayout(footer)
+        self.save_button = _button("저장(S)", self.save, footer, True)
+        self.cancel_button = _button("취소", self.cancel, footer)
+        self.apply_button = _button("적용(A)", self.apply_changes, footer)
+        self.apply_button.setEnabled(can_action(self.store.actor, 'products', 'create'))
+        self.save_button.setToolTip('Alt+S · 상품을 저장하고 창을 닫습니다.')
+        self.cancel_button.setToolTip('입력 중인 내용은 저장하지 않고 창을 닫습니다.')
+        self.apply_button.setToolTip('Alt+A · 상품을 저장하고 새 입력칸을 엽니다. 분류·공급사만 유지합니다.')
+        from .menu_icons import menu_icon
+        for button, icon in ((self.save_button, '저장'), (self.cancel_button, '취소'), (self.apply_button, '추가')):
+            button.setIcon(menu_icon(icon)); button.setIconSize(QSize(20, 20))
+            button.setAutoDefault(False)
+        self._shortcuts = []
+        for key, callback in (('Alt+S', self.save), ('Alt+A', self.apply_changes), ('Alt+C', self.choose_category), ('Alt+V', self.pick_supplier)):
+            shortcut = QShortcut(QKeySequence(key), self); shortcut.setAutoRepeat(False)
+            shortcut.activated.connect(callback); self._shortcuts.append(shortcut)
+        root.addWidget(self.footer)
         self.refresh_details()
         screen = self.screen()
         if screen:
             available = screen.availableGeometry()
-            self.resize(min(1110, available.width() - 40), min(830, available.height() - 60))
+            height = max(400, min(800, available.height() - 60))
+            self.resize(max(420, min(700, available.width() - 40, height - 30)), height)
 
     def _field(self, layout, key, label, default=""):
-        field = ScanField() if key == "barcode" else QLineEdit()
+        from .number_edit import GroupedNumberEdit
+        field = ScanField() if key == "barcode" else GroupedNumberEdit() if key in {'purchase_price', 'sale_price', 'min_qty'} else QLineEdit()
         field.setText(str(self.record.get(key, default)))
         self.fields[key] = field
         layout.addRow(label, field)
@@ -668,21 +693,24 @@ class ProductDialog(QDialog):
     def _group(self, title):
         group = QGroupBox(title)
         form = QFormLayout(group)
-        form.setContentsMargins(12, 8, 12, 10)
-        form.setSpacing(6)
+        form.setContentsMargins(8, 5, 8, 7)
+        form.setSpacing(4)
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
         return group, form
 
     def _product_tab(self):
         viewport = QScrollArea()
+        viewport.setObjectName('productFormScroll')
         viewport.setWidgetResizable(True)
         content = QWidget()
         layout = QVBoxLayout(content)
-        layout.setContentsMargins(14, 15, 14, 15)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(5)
         classification = QFrame()
         top = QVBoxLayout(classification)
         top.setContentsMargins(4, 4, 4, 4)
-        top.setSpacing(8)
-        choices=QHBoxLayout();choices.setSpacing(12);top.addLayout(choices)
+        top.setSpacing(5)
+        choices=QHBoxLayout();choices.setSpacing(8);top.addLayout(choices)
         def paired(label,field,stretch=0):
             group=QWidget();line=QHBoxLayout(group);line.setContentsMargins(0,0,0,0);line.setSpacing(5)
             text=QLabel(label);text.setBuddy(field);line.addWidget(text);line.addWidget(field,1);choices.addWidget(group,stretch)
@@ -699,18 +727,27 @@ class ProductDialog(QDialog):
             _,_,fg,bg=tax_style(self.tax_mode.currentData())
             self.tax_mode.setStyleSheet(f'QComboBox{{color:{fg};background:{bg};font-weight:700;}}')
         self.tax_mode.currentIndexChanged.connect(tax_changed);tax_changed()
+        choices.addStretch()
+        choices = QHBoxLayout(); choices.setSpacing(5); top.addLayout(choices)
         self.category_displays={}
-        for key, label in (("category", "대분류"), ("category_mid", "중분류"), ("category_small", "소분류")):
+        self.category_buttons = {}
+        for key, label in (("category", "대"), ("category_mid", "중"), ("category_small", "소")):
             field = CategoryChoice()
             field.addItem("선택 안 함", "")
             field.setPlaceholderText(label)
             self.fields[key] = field
             field.setParent(classification);field.hide()
-            display=QLineEdit();display.setReadOnly(True);display.setMinimumWidth(66)
+            display=QLineEdit();display.setReadOnly(True);display.setMinimumWidth(40)
             display.setStyleSheet('QLineEdit{color:#214A40;background:#F6FAF7;font-weight:600;}')
-            display.setToolTip('오른쪽 분류 검색에서 대·중·소분류를 함께 선택합니다.')
-            self.category_displays[key]=display;paired(label,display,1)
-        self.classification_button=QPushButton('분류 검색');self.classification_button.clicked.connect(lambda:self.choose_category())
+            display.setToolTip('옆의 화살표로 해당 단계 분류를 선택하거나 분류(C)에서 전체 경로를 검색합니다.')
+            self.category_displays[key]=display
+            group=QWidget();line=QHBoxLayout(group);line.setContentsMargins(0,0,0,0);line.setSpacing(2)
+            arrow=QToolButton();arrow.setText(label+' ▸');arrow.setAccessibleName(label+'분류 선택')
+            arrow.setToolTip(label+'분류 선택 · 상위 분류에 속한 유효 분류만 표시합니다.')
+            arrow.clicked.connect(lambda checked=False,k=key:self.open_category_menu(k))
+            self.category_buttons[key]=arrow;line.addWidget(arrow);line.addWidget(display,1);choices.addWidget(group,1)
+        self.classification_button=QPushButton('분류(C)');self.classification_button.clicked.connect(lambda:self.choose_category())
+        self.classification_button.setToolTip('Alt+C · 대·중·소분류 전체 경로 검색')
         choices.addWidget(self.classification_button)
         self.fields["category"].currentIndexChanged.connect(self.reload_middle)
         self.fields["category_mid"].currentIndexChanged.connect(self.reload_small)
@@ -720,7 +757,8 @@ class ProductDialog(QDialog):
         self.supplier = _combo(options, self.record.get("supplier_id"))
         supplier_row=QHBoxLayout();supplier_row.setSpacing(5);supplier_label=QLabel('공급사');supplier_label.setBuddy(self.supplier);supplier_row.addWidget(supplier_label)
         supplier_row.addWidget(self.supplier,1)
-        supplier_search = QPushButton("공급사 검색")
+        supplier_search = QPushButton("공급사(V)")
+        supplier_search.setToolTip('Alt+V · 공급사 검색')
         supplier_search.clicked.connect(self.pick_supplier)
         supplier_row.addWidget(supplier_search);top.addLayout(supplier_row)
         layout.addWidget(classification)
@@ -737,12 +775,12 @@ class ProductDialog(QDialog):
         self.unit = _combo([(u, u) for u in units], current, editable=True)
         form.addRow("기본단위 *", self.unit)
         self.price_basis = _combo([("기본단위 1당", 1), ("100g당", 100)], self.record.get("price_basis", 100 if current == "g" else 1))
-        form.addRow("매입·판매 단가 기준", self.price_basis)
+        form.addRow("단가 기준", self.price_basis)
         def update_basis(unit):
             if unit != "g" and self.price_basis.currentData() == 100:
                 self.price_basis.setCurrentIndex(0)
         self.unit.currentTextChanged.connect(update_basis)
-        unit_note = QLabel("기본단위 기준 단가·재고입니다. 이력·확장단위 등록 후에는 기본단위를 바꿀 수 없습니다.")
+        unit_note = QLabel("이력·확장단위 등록 후 기본단위 변경 불가")
         unit_note.setWordWrap(True)
         unit_note.setObjectName("muted")
         form.addRow(unit_note)
@@ -752,7 +790,7 @@ class ProductDialog(QDialog):
         self.sale_price = self._field(form, "sale_price", "판매단가 (원)", 0)
         self.margin = QLabel()
         self.margin.setObjectName("amount")
-        form.addRow("판매가 기준 이익률", self.margin)
+        form.addRow("이익률", self.margin)
         self.purchase_price.textChanged.connect(self.update_margin)
         self.sale_price.textChanged.connect(self.update_margin)
         note = QLabel("과세·면세는 상품 분류 정보이며 입력 단가는 최종 거래단가입니다.\n특매·예약·회원가격은 기준단가를 변경하지 않습니다.")
@@ -779,8 +817,9 @@ class ProductDialog(QDialog):
         self._field(form, "keywords", "검색어")
         self.memo = QTextEdit(self.record.get("memo", ""))
         self.memo.setAcceptRichText(False)
-        self.memo.setMinimumHeight(110)
-        form.addRow("상품설명 / 메모", self.memo)
+        self.memo.setMinimumHeight(100)
+        form.addRow(QLabel('상품설명 / 메모'))
+        form.addRow(self.memo)
         right.addWidget(memo)
         right.addStretch()
         columns.addLayout(left, 1)
@@ -948,6 +987,28 @@ class ProductDialog(QDialog):
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self.apply_category_id(dialog.record['id'])
 
+    def category_menu(self, key):
+        """Pick one registered level, with its ancestors validated again on apply."""
+        level = CATEGORY_FIELDS.index(key) + 1
+        parent_path = [self.fields[k].text() for k in CATEGORY_FIELDS[:level-1]]
+        menu = QMenu(self)
+        for row in selectable_category_records(self.store.categories()):
+            if row['level'] != level or row['path'][:-1] != parent_path:
+                continue
+            choice = menu.addAction(row['name'])
+            choice.setData(row['id']); choice.setCheckable(True)
+            choice.setChecked(row['name'] == self.fields[key].text())
+            choice.triggered.connect(lambda checked=False, identifier=row['id']: self.apply_category_id(identifier))
+        if not menu.actions():
+            menu.addAction('먼저 상위 분류를 선택하거나 분류를 등록하세요.').setEnabled(False)
+        menu.aboutToHide.connect(menu.deleteLater)
+        return menu
+
+    def open_category_menu(self, key):
+        button = self.category_buttons[key]
+        menu = self.category_menu(key)
+        menu.popup(button.mapToGlobal(button.rect().bottomLeft()))
+
     def update_margin(self):
         try:
             cost = Decimal(self.purchase_price.text().replace(",", ""))
@@ -981,6 +1042,7 @@ class ProductDialog(QDialog):
             self.refresh_details()
             self.saved.emit(self.saved_id)
         except (ValueError, PermissionError) as exc:
+            self.error_label.setStyleSheet('color:#bd3232;')
             self.error_label.setText(str(exc))
             return False
         if close:
@@ -988,26 +1050,37 @@ class ProductDialog(QDialog):
         return True
 
     def apply_changes(self):
-        if self.save(False):
-            self.error_label.setText('저장되었습니다. 계속 수정하거나 ‘저장 후 다음 상품’으로 새 상품을 입력하세요.')
-
-    def next_record(self):
         if not can_action(self.store.actor, 'products', 'create'):
-            self.error_label.setText('새 상품을 등록할 권한이 없습니다.');return
-        if not self.save(False):return
+            self.error_label.setText('새 상품을 등록할 권한이 없습니다.');return False
+        if not self.save(False):return False
+        self.last_saved_id = self.saved_id
         path = [self.fields[key].text() for key in CATEGORY_FIELDS]
         self.record = {}; self.saved_id = None
         for key, field in self.fields.items():
             if key not in CATEGORY_FIELDS:field.setText('0' if key in {'purchase_price','sale_price','min_qty'} else '')
         self.memo.clear(); self.product_status.setCurrentIndex(0); self.tracked.setChecked(True)
+        self.tax_mode.setCurrentIndex(self.tax_mode.findData('exempt'))
+        self.unit.setCurrentText('g'); self.price_basis.setCurrentIndex(self.price_basis.findData(100))
         self.reload_categories(); self.set_category_path(path)
         self.stock_table.fill([]); self.audit_table.fill([]); self.unit_table.fill([])
         self.setWindowTitle('새 상품 등록'); self.heading.setText('새 상품 등록')
         self.refresh_details(); self.tabs.setCurrentIndex(0)
         from .navigation import mark_saved
         mark_saved(self)
-        self.error_label.setText('이전 상품을 저장했습니다. 다음 상품을 입력하세요.')
+        self.error_label.setStyleSheet('color:#156757;')
+        self.error_label.setText('등록 완료 · 새 상품을 입력하세요. 분류·공급사만 유지합니다.')
         self.fields['name'].setFocus()
+        return True
+
+    def next_record(self):
+        # Legacy callers use the same single apply operation, not another button.
+        return self.apply_changes()
+
+    def cancel(self):
+        """Explicit cancel discards only the current inputs, never saved products."""
+        from .navigation import mark_saved
+        mark_saved(self)  # Forget any recovery draft without writing catalog data.
+        super().reject()
 
     @staticmethod
     def _audit_text(detail):
@@ -1457,7 +1530,7 @@ class ProductsPage(Page):
     def show_product_dialog(self,record):
         from shiboken6 import isValid
         key=record['id'] if record else None;existing=self.product_dialogs.get(key)
-        if existing is not None and isValid(existing) and existing.isVisible():existing.raise_();existing.activateWindow();return existing
+        if existing is not None and isValid(existing) and existing.isVisible() and existing.record.get('id') == key:existing.raise_();existing.activateWindow();return existing
         dialog=ProductDialog(self.store,record,self);dialog.saved.connect(self._product_saved);dialog.setWindowModality(Qt.WindowModality.NonModal);self.product_dialogs[key]=dialog;dialog.show();return dialog
 
     def _product_saved(self, identifier):

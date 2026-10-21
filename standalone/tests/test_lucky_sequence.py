@@ -21,6 +21,14 @@ def visible_count(page):
     return sum(label.text()!='?' for row in page.rows for label in row)
 
 
+def test_draw_tool_has_no_dummy_query_button(lucky):
+    app, dialog, page = lucky
+    assert not page.header.query_button.isVisible() and not page.header.query_button.isEnabled()
+    assert page.header.context.isVisible() and page.draw_button.isVisible()
+    page.draw_six(); page.finish_draw()
+    assert visible_count(page) == 1  # Removing query must not affect sequential drawing.
+
+
 @pytest.mark.parametrize('method,total,ticks',[
     ('draw',1,60),('draw_six',6,16),('draw_five',30,8),
 ])

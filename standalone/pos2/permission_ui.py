@@ -4,6 +4,7 @@ from PySide6.QtWidgets import QCheckBox, QComboBox, QHBoxLayout, QHeaderView, QL
 
 from .permissions import ACTIONS, MENU_POLICIES, can_action, has_menu
 from .widgets import Page, action
+from .trade_sheet import EntrySheet
 
 
 class PermissionsPage(Page):
@@ -20,7 +21,7 @@ class PermissionsPage(Page):
         self.note = QLabel()
         self.note.setWordWrap(True)
         self.body.addWidget(self.note)
-        self.grid = QTableWidget(0, 5)
+        self.grid = EntrySheet(0, 5)
         self.grid.setHorizontalHeaderLabels(["업무 메뉴", "조회 · 접근", "등록", "수정 · 편집", "삭제 · 취소"])
         self.grid.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         for column in range(1, 5):
