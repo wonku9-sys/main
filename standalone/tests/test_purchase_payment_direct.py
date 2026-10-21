@@ -158,7 +158,7 @@ def test_cancel_confirmation_does_not_disable_save_or_write(shop,monkeypatch):
 def test_posted_trade_footer_opens_same_manager_and_refreshes_record(shop,monkeypatch):
     app,s,window,_,_,_,document=shop
     trade=TradeDialog(window,'purchase',s.document(document))
-    assert trade.readonly and trade.payment_button.isEnabled()
+    assert trade.amending and trade.payment_button.isEnabled()
     called=[]
     def execute(dialog):
         called.append(dialog.document_id)

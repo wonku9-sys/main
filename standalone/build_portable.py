@@ -148,6 +148,9 @@ def build(output, native=False):
         if not capture.is_file() or capture.stat().st_size<1000:
             raise RuntimeError(f"The frozen executable did not validate visible single-window content: {suffix}")
     if label == "Windows":
+        for suffix in ('-purchase-revision','-purchase-revision-history','-purchase-zero-voucher'):
+            capture=screenshot.with_name(screenshot.stem+suffix+screenshot.suffix)
+            if not capture.is_file() or capture.stat().st_size<1000:raise RuntimeError('The frozen purchase revision was not exercised: '+suffix)
         for view in ('payables','supplier-ledger','payment-history','bills','receivables','member-ledger','sales-payments','business-journal','profit'):
             capture=screenshot.with_name(screenshot.stem+'-finance-'+view+screenshot.suffix)
             if not capture.is_file() or capture.stat().st_size<1000:raise RuntimeError('The frozen finance view was not exercised: '+view)

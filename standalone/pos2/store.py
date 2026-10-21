@@ -36,6 +36,7 @@ from .purchase_import import PurchaseImportMixin
 from .factory_reset import FactoryResetMixin
 from .member_registration import MemberRegistrationMixin
 from .payment_finance import PaymentFinanceMixin
+from .purchase_amendments import PurchaseAmendmentMixin
 
 APPLICATION_ID = 1398362162
 DEFAULT_SETTINGS = {
@@ -78,7 +79,7 @@ def password_matches(password, encoded):
 
 
 @currency_boundary
-class Store(PaymentFinanceMixin, MemberRegistrationMixin, FactoryResetMixin, PurchaseImportMixin, InventoryReportingMixin, CatalogMixin, CommerceMixin, OperationsMixin, LoyaltyMixin, RecoveryMixin, BackupPolicyMixin, SettlementMixin, BackupScheduleMixin, SupplierMixin, PurchaseReportingMixin, OfflineFeaturesMixin, DiaryMixin,HouseholdMixin,EmailRecoveryMixin,HealthMixin,AttachmentMixin,InspirationMixin):
+class Store(PurchaseAmendmentMixin, PaymentFinanceMixin, MemberRegistrationMixin, FactoryResetMixin, PurchaseImportMixin, InventoryReportingMixin, CatalogMixin, CommerceMixin, OperationsMixin, LoyaltyMixin, RecoveryMixin, BackupPolicyMixin, SettlementMixin, BackupScheduleMixin, SupplierMixin, PurchaseReportingMixin, OfflineFeaturesMixin, DiaryMixin,HouseholdMixin,EmailRecoveryMixin,HealthMixin,AttachmentMixin,InspirationMixin):
     def __init__(self, path):
         self.path = Path(path).expanduser().resolve() if str(path) != ":memory:" else None
         if self.path:

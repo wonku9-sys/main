@@ -26,7 +26,8 @@ STATUSES={'posted':'확정','draft':'초안','cancelled':'취소'}
 def purchase_record(dialog):
     store=dialog.store;store.require_menu('purchases')
     products={r['id']:r for r in store.products()}
-    if dialog.readonly:
+    saved_view = dialog.readonly or (getattr(dialog, 'amending', False) and dialog.payload() == dialog._purchase_revision_initial)
+    if saved_view:
         record=store.document(dialog.record['id'])
         if not record['kind'].startswith('purchase'):raise ValueError('매입전표를 선택하세요.')
         lines=[{**line,'qty':Decimal(line['input_qty'])} for line in record['lines']]
@@ -41,18 +42,20 @@ def purchase_record(dialog):
             price=number(row['price'].text().replace(',',''))
             total=number(row['total'].text().replace(',',''))
             if quantity<=0:raise ValueError('출력할 수량은 0보다 커야 합니다.')
-            lines.append(dict(product_id=product['id'],product_name=product['name'],unit_name=row['unit'].currentText(),qty=quantity,unit_price=price,total=total,tax_mode=product['tax_mode'],price_basis=row.get('price_basis',1)))
+            snapshot = row.get('saved_line', {}) if getattr(dialog, 'amending', False) and row.get('saved_line', {}).get('product_id') == product['id'] else {}
+            lines.append(dict(product_id=product['id'],product_name=snapshot.get('product_name',product['name']),unit_name=row['unit'].currentText(),qty=quantity,unit_price=price,total=total,tax_mode=snapshot.get('tax_mode',product['tax_mode']),price_basis=row.get('price_basis',1)))
         record=dict(kind=dialog.kind,number=(dialog.record or {}).get('number','미확정 입력'),date=dialog.date.date().toString('yyyy-MM-dd'),partner_id=dialog.partner.currentData(),status='draft',memo=dialog.memo.text(),user_name=store.actor['name'],total=sum((Decimal(str(l['total'])) for l in lines),Decimal(0)),cash_paid=Decimal(0),balance=Decimal(0))
-    if not lines:raise ValueError('출력할 상품이 없습니다.')
-    record['entry_datetime']=record.get('entry',{}).get('datetime') if dialog.readonly else dialog.date.dateTime().toString('yyyy-MM-dd HH:mm:ss')
-    record['entry_staff']=record.get('entry',{}).get('staff') if dialog.readonly else dialog.entry_staff.text()
+        if getattr(dialog, 'amending', False): record['number'] += ' · 미저장 수정안'
+    if not lines and not (saved_view and record['status']=='posted' and not record['total']):raise ValueError('출력할 상품이 없습니다.')
+    record['entry_datetime']=record.get('entry',{}).get('datetime') if saved_view else dialog.date.dateTime().toString('yyyy-MM-dd HH:mm:ss')
+    record['entry_staff']=record.get('entry',{}).get('staff') if saved_view else dialog.entry_staff.text()
     supplier=next((p for p in store.partners('supplier') if p['id']==record['partner_id']),None)
     if supplier is None:raise ValueError('전표의 공급사를 확인하세요.')
     for line in lines:
         current=products.get(line['product_id'],{})
         line.update(code=current.get('barcode') or current.get('code',''),specification=current.get('specification',''))
     title='매 입 반 품 전 표' if record['kind']=='purchase_return' else '매 입 전 표'
-    return {**record,'title':title,'supplier':supplier,'recipient':store.store_profile(),'lines':lines,'unsaved':not dialog.readonly}
+    return {**record,'title':title,'supplier':supplier,'recipient':store.store_profile(),'lines':lines,'unsaved':not saved_view}
 
 
 def quantity_text(record):

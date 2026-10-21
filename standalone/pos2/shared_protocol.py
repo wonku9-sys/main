@@ -57,6 +57,8 @@ READS=READS|{'payment_context','payment_summary','payable_bills','business_entri
 WRITES=WRITES|{'register_supplier_payment','pay_bill','add_business_entry','void_business_entry'}
 READS=READS|{'purchase_payment_batch'}
 WRITES=WRITES|{'replace_purchase_payment_batch','void_purchase_payment_batch'}
+READS=READS|{'purchase_edit_context','purchase_revisions'}
+WRITES=WRITES|{'revise_purchase'}
 
 def encode(value):
     def default(item):

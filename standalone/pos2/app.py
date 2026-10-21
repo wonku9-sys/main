@@ -1471,6 +1471,8 @@ def main(argv=None):
                                 assert not product_form.isVisible() and len(proof_store.products())==3
                                 print('PASS compact product form: portrait, save closes, cancel discards, apply saves and clears for unique products',flush=True)
                             finally:proof_store.close()
+                            from .purchase_revision_smoke import verify as verify_purchase_revisions
+                            verify_purchase_revisions(app,window,directory,capture)
                             from .menu_shortcuts import ShortcutGuide
                             shortcut_guide=ShortcutGuide(window);capture('-shortcut-guide',shortcut_guide);shortcut_guide.close()
                             for key,suffix in (('inventory_categories','-inventory-categories'),('inventory_suppliers','-inventory-suppliers'),('inventory_monthly','-inventory-monthly')):

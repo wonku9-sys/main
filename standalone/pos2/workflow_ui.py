@@ -676,6 +676,12 @@ class TradeDialog(QDialog):
         self.store.require_menu(resource)
         if self.record and not can_action(self.store.actor, resource, "edit"):
             self.readonly = True
+        self.amending = False
+        self.amend_context = None
+        if kind == 'purchase' and self.record and self.record['status'] == 'posted':
+            self.amend_context = self.store.purchase_edit_context(self.record['id'])
+            self.amending = self.amend_context['allowed'] and self.amend_context['document_token'] == self.record['_edit_token']
+            if self.amending: self.readonly = False
         self.is_return = kind.endswith("_return")
         self.rounding_mode = (self.record or self.source or {}).get("rounding_mode", self.store.calculation_policy()["rounding_mode"])
         self.saved_id = None
@@ -685,7 +691,7 @@ class TradeDialog(QDialog):
         self.products_revision = before if before == self.store.catalog_revision() else None
         self.product_map = {p["id"]: p for p in self.products}
         from .trade_product_model import TradeProductModel
-        self.product_model = TradeProductModel([p for p in self.products if p['active'] or self.readonly or self.is_return], self)
+        self.product_model = TradeProductModel([p for p in self.products if p['active'] or self.readonly or self.is_return or self.amending], self)
         self._batch_lines = False
         self.line_columns = ("product", "spec", "barcode", "qty", "unit", "factor", "base_qty", "total", "price", "sale_price", "margin", "category", "supplier", "stock", "line_memo")
         self.setWindowTitle(("새 반품전표" if self.is_return else "새 매입전표") if kind.startswith("purchase") and not self.record else f"{KINDS[kind]} 전표 · " + (self.record["number"] if self.record else "새 전표"))
@@ -920,6 +926,11 @@ class TradeDialog(QDialog):
         self.memo = QLineEdit((self.record or {}).get("memo", ""))
         self.memo.setPlaceholderText("전표 메모")
         body.addWidget(self.memo)
+        if self.amending:
+            self.revision_reason = QLineEdit()
+            self.revision_reason.setObjectName('purchaseRevisionReason')
+            self.revision_reason.setPlaceholderText('수정 사유 (필수 · 원래 전표와 함께 이력에 보존됩니다)')
+            body.addWidget(self.revision_reason)
         footer = QHBoxLayout()
         self.print_button = action("전표 인쇄", self.print_document)
         self.excel_button = action("엑셀 저장", self.export_document)
@@ -1046,6 +1057,9 @@ class TradeDialog(QDialog):
             self.payments_grid.itemDoubleClicked.connect(self.payment_input)
         self.refresh_payments()
         self.recalculate()
+        if self.amend_context:
+            from .purchase_amendment_ui import configure_revision
+            configure_revision(self)
 
     def switch_purchase_mode(self, checked):
         if self.record or self.readonly:
@@ -1169,6 +1183,8 @@ class TradeDialog(QDialog):
 
     def payment_input(self, *_):
         if self.record and self.record['status']=='posted' and self.kind=='purchase':
+            if self.amending and self.payload() != self._purchase_revision_initial:
+                return _warn(self, '전표 수정 내용이 있습니다. 먼저 저장하거나 창을 닫고 원래 전표를 다시 열어 결제를 처리하세요.')
             from .purchase_payment_ui import open_payment
             try:
                 if open_payment(self.window, self.record['id'], self):
@@ -1177,6 +1193,9 @@ class TradeDialog(QDialog):
                     self.paid.setText(str(self.record['cash_paid']))
                     self.refresh_payments()
                     self.recalculate()
+                    if self.amending:
+                        self.amend_context = self.store.purchase_edit_context(self.record['id'])
+                        self._purchase_revision_initial = self.payload()
                     from .navigation import mark_saved
                     mark_saved(self)
             except (ValueError, PermissionError) as exc:_warn(self, exc)
@@ -1580,7 +1599,8 @@ class TradeDialog(QDialog):
                 row["margin"].setToolTip("현재 판매가 기준 참고 이익률입니다. 확정 매출의 실제 이익이 아닙니다.")
                 total += value
                 estimated_sale += sale
-                if snapshot.get("tax_mode", product["tax_mode"]) == "taxable":
+                tax_snapshot = row.get('saved_line', {}) if self.amending and row.get('saved_line', {}).get('product_id') == identifier else snapshot
+                if tax_snapshot.get("tax_mode", product["tax_mode"]) == "taxable":
                     taxable += value
                 else:
                     exempt += value
@@ -1603,6 +1623,9 @@ class TradeDialog(QDialog):
                 raise ValueError("품목 입력을 확인하세요.")
             if self.readonly:
                 balance = self.record["balance"]
+            elif self.amending:
+                if paid > total: raise ValueError('수정 금액이 기존 결제금액보다 작습니다.')
+                balance = total - self.record['total'] + self.record['balance']
             else:
                 if paid + points > total:
                     raise ValueError("결제금액이 전표 금액을 초과했습니다.")
@@ -1610,19 +1633,19 @@ class TradeDialog(QDialog):
             label = "미환불잔액" if self.is_return else "미지급잔액" if self.kind.startswith("purchase") else "미수잔액"
             if self.is_return and not self.readonly:
                 label = "반품액 − 입력환불액 (외상 차감 전)"
-            preview = " (초안 예상)" if not self.readonly else ""
+            preview = " (수정 후 예상)" if self.amending else " (초안 예상)" if not self.readonly else ""
             self.balance_label.setText(f"{label}  {won(balance)}원{preview}")
             self.balance_label.setStyleSheet("color: #B35339;" if balance else "color: #16705A;")
             state = "미결제" if not paid and balance else "부분결제" if balance else "결제완료"
             if not total:
                 state = "입력 대기"
-            if self.readonly and not self.is_return and total and not balance and paid + points < total:
+            if (self.readonly or self.amending) and not self.is_return and total and not balance and paid + points < total:
                 state = "정산완료 (반품 반영)"
             if self.is_return:
                 state = "확정 시 원전표 외상과 정산" if not self.readonly else "환불 대기" if balance else "정산완료"
             if self.record and self.record["status"] == "cancelled":
                 state = "취소된 전표"
-            if not self.readonly and state == "결제완료":
+            if not self.readonly and not self.amending and state == "결제완료":
                 state = "입력상 결제완료 · 확정 전"
             self.payment_status.setText(state)
             if hasattr(self,'purchase_summary'):
@@ -1647,11 +1670,15 @@ class TradeDialog(QDialog):
                 continue
             lines.append({"product_id": product_id, "unit_id": None if row["unit"].currentData() == "grams" else row["unit"].currentData(), "gram_input": row["unit"].currentData() == "grams", "qty": quantity, "unit_price": row["price"].text().strip(), "source_line_id": row["source"]["id"] if row.get("source") else None})
             lines[-1].update(sale_price=row['sale_price'].text() or '0',line_memo=row['line_memo'].text())
+            if self.amending:
+                lines[-1].update(line_id=row.get('saved_line', {}).get('id'),
+                                 expected_price_basis=row.get('price_basis', 1),
+                                 expected_base_unit=self.product_map[product_id]['base_unit'])
             if self.kind=='purchase':
                 lines[-1]['factor_override']=row['factor'].text()
                 if 'amount_override' in row:lines[-1]['amount_override']=row['amount_override']
         return {"kind": self.kind, "date": _date(self.date), 'entry_datetime':self.date.dateTime().toString('yyyy-MM-dd HH:mm:ss'),
-            'entry_staff':self.entry_staff.text(), "partner_id": self.partner.currentData(), "member_id": self.member.currentData(), "source_id": (self.source or self.record or {}).get("id") if self.source else (self.record or {}).get("source_id"), "lines": lines, "paid": '0' if self.payment_plan else self.paid.text(), "method": self.method.currentData(), "points_used": self.points.text() if self.kind == "sale" else 0, "memo": self.memo.text(),"rounding_mode":self.rounding_mode, 'payment_plan':self.payment_plan}
+            'entry_staff':self.entry_staff.text(), "partner_id": self.partner.currentData(), "member_id": self.member.currentData(), "source_id": (self.source or self.record or {}).get("id") if self.source else (self.record or {}).get("source_id"), "lines": lines, "paid": '0' if self.payment_plan or self.amending else self.paid.text(), "method": self.method.currentData(), "points_used": self.points.text() if self.kind == "sale" else 0, "memo": self.memo.text(),"rounding_mode":self.rounding_mode, 'payment_plan':self.payment_plan}
 
     def check_catalog_prices(self):
         from .permissions import can_action
@@ -1681,6 +1708,9 @@ class TradeDialog(QDialog):
     def save(self, post, close=True):
         if self.readonly:
             return
+        if self.amending:
+            from .purchase_amendment_ui import save_revision
+            return save_revision(self, post, close)
         try:
             data = self.payload()
             data['_expected_token']=(self.record or {}).get('_edit_token')

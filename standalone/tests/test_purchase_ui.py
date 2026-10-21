@@ -126,7 +126,7 @@ def test_posted_balance_includes_later_payment_and_return_credits(shop):
     original = store.post_document({"kind": "purchase", "date": date.today().isoformat(), "partner_id": supplier, "lines": [{"product_id": product, "qty": "5", "unit_price": 10000}], "paid": 10000})
     returned = store.post_document({"kind": "purchase_return", "date": date.today().isoformat(), "partner_id": supplier, "source_id": original, "lines": [{"product_id": product, "source_line_id": store.document(original)["lines"][0]["id"], "qty": "2"}], "paid": 0})
     dialog = TradeDialog(window, "purchase", original)
-    assert dialog.readonly
+    assert dialog.amending and not dialog.table.isEnabled()  # Memo/staff only; return-linked stock is protected.
     assert dialog.line_rows[0]["total"].text() == "50,000.00"
     assert "20,000.00원" in dialog.balance_label.text()
     assert dialog.payment_status.text() == "부분결제"

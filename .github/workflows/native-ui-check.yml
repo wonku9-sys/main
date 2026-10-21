@@ -1,10 +1,12 @@
 name: Supplemental native UI font check
 on:
   push:
-    branches: ['manual-purchase-rc34']
+    branches: ['manual-purchase-*']
     paths:
       - 'standalone/tests/test_compact_catalog_shell.py'
       - '.github/workflows/native-ui-check.yml'
+      - 'standalone/pos2/purchase_amendments.py'
+      - 'standalone/tests/test_purchase_amendment*.py'
 permissions:
   contents: read
 jobs:
@@ -29,4 +31,4 @@ jobs:
       - name: Actual rendered 14 18 22 pixel fonts on Windows
         run: uv run --frozen --extra dev --project standalone python -m pytest -q standalone/tests/test_compact_catalog_shell.py -k supplier_compact_rows_never_clip_native_font
       - name: Payment confirmation completion and worker cleanup
-        run: uv run --frozen --extra dev --project standalone python -m pytest -x -v --tb=long -o faulthandler_timeout=120 standalone/tests/test_payment_access_completion.py standalone/tests/test_payment_finance.py standalone/tests/test_payment_reference_skins.py standalone/tests/test_payment_access_layout.py standalone/tests/test_purchase_import.py
+        run: uv run --frozen --extra dev --project standalone python -m pytest -x -v --tb=long -o faulthandler_timeout=120 standalone/tests/test_payment_access_completion.py standalone/tests/test_payment_finance.py standalone/tests/test_payment_reference_skins.py standalone/tests/test_payment_access_layout.py standalone/tests/test_purchase_import.py standalone/tests/test_purchase_amendments.py standalone/tests/test_purchase_amendment_ui.py standalone/tests/test_purchase_amendment_shared.py
