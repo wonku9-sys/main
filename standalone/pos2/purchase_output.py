@@ -15,7 +15,7 @@ from PySide6.QtGui import QPageSize,QTextDocument
 from PySide6.QtPrintSupport import QPrinter,QPrintPreviewDialog
 from PySide6.QtWidgets import QFileDialog,QMessageBox
 
-from .font_support import regular_font
+from .font_support import document_font
 from .widgets import DataGrid,authorize_output
 
 HEADERS=('No.','코드 / 바코드','품명','규격','단위','수량','단가','금액','과면세')
@@ -106,7 +106,7 @@ def purchase_html(record):
 
 
 def purchase_document(record):
-    document=QTextDocument();document.setDefaultFont(regular_font(8));document.setDocumentMargin(28)
+    document=QTextDocument();document.setDefaultFont(document_font(8));document.setDocumentMargin(28)
     document.setPageSize(QSizeF(794,1123));document.setHtml(purchase_html(record));return document
 
 
@@ -201,7 +201,7 @@ def output_purchase(dialog,mode):
             if mode=='grid':
                 grid=DataGrid(HEADERS);grid.setSortingEnabled(False)
                 grid.fill([line_values(i,line) for i,line in enumerate(fresh['lines'],1)])
-                document=QTextDocument();document.setDefaultFont(regular_font(8))
+                document=QTextDocument();document.setDefaultFont(document_font(8))
                 document.setHtml(grid.document_html(fresh['title'],f"{fresh['number']} · {fresh['date']} · {status_text(fresh)}\n공급자: {fresh['supplier']['name']} / 공급받는 자: {fresh['recipient']['store_name']}\n합계 {fresh['total']:,.2f} 원"));grid.deleteLater()
             else:document=purchase_document(fresh)
             if not authorize_output(dialog):preview.reject();return

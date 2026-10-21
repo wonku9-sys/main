@@ -1,5 +1,6 @@
 """A redistributable Korean font keeps screen, PDF and labels consistent."""
 from pathlib import Path
+import sys
 
 from PySide6.QtGui import QFont, QFontDatabase, QFontMetrics
 
@@ -30,7 +31,19 @@ def verify_glyphs():
 
 def regular_font(size=10):
     font=QFont(font_family(),size)
-    # A static Regular instance also allows Qt's Windows PDF backend to embed
-    # real text rather than convert the variable font to unsearchable outlines.
+    # A static Regular instance keeps the body weight consistent offline.
     font.setWeight(QFont.Weight.Normal)
     return font
+
+
+def document_font(size=10):
+    """Windows Qt outlines memory-loaded fonts even when embedding is on.
+
+    Installed Malgun Gothic embeds searchable Korean text correctly. Use that
+    host font for documents only, retaining the bundled offline UI font and
+    its complete Korean fallback if the native family is unavailable.
+    """
+    if sys.platform=='win32' and 'Malgun Gothic' in QFontDatabase.families():
+        font=QFont('Malgun Gothic',size);font.setWeight(QFont.Weight.Normal)
+        return font
+    return regular_font(size)

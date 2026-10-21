@@ -44,7 +44,7 @@ def test_real_keyboard_navigation_and_searchable_guide(desktop):
     press(app,window,window.menu_keys['purchase_categories'][0]); assert window.current_key=='purchase_categories'
     press(app,window,'F1'); guide = window._shortcut_guide
     assert guide.isVisible() and guide.grid.rowCount()==len(window.items)+9
-    guide.search.setText('상품장'); assert guide.grid.rowCount()==1
+    guide.search.setText('상품장'); assert guide.grid.rowCount()==2  # product menu and purchase price-check help
     assert 'Ctrl+1' in guide.grid.item(0,1).text()
     assert guide.grid.item(0,2).text()!='help'
 

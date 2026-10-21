@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
     QFrame, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMessageBox,
     QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
-from .font_support import font_family,regular_font
+from .font_support import font_family,document_font
 
 
 def won(value):
@@ -324,7 +324,7 @@ class DataGrid(HeaderSafeTable):
         if not authorize_output(self, parent):
             return False
         document = QTextDocument()
-        document.setDefaultFont(regular_font(9))
+        document.setDefaultFont(document_font(9))
         document.setHtml(self.document_html(title, info))
         if not authorize_output(self, parent):
             return False

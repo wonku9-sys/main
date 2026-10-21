@@ -3,7 +3,7 @@ from decimal import Decimal
 from html import escape
 from PySide6.QtCore import QRectF,QSizeF,Qt
 from PySide6.QtGui import QImage,QPainter,QTextDocument
-from .font_support import regular_font
+from .font_support import document_font
 from .currency import round_amount
 
 
@@ -62,7 +62,7 @@ def paper_html(record,title):
 
 
 def paper_document(record,title):
-    document=QTextDocument();document.setDefaultFont(regular_font(9));document.setDocumentMargin(28)
+    document=QTextDocument();document.setDefaultFont(document_font(9));document.setDocumentMargin(28)
     document.setPageSize(QSizeF(794,1123));document.setHtml(paper_html(record,title));return document
 
 

@@ -25,4 +25,4 @@ The original variable binary SHA256 was `194018e6b2b293a7964f037b25c0249ce1418bc
 fonttools varLib.instancer 'NotoSansKR[wght].ttf' wght=400 --static --update-name-table --no-recalc-timestamp -o NotoSansKR-Regular.ttf
 ```
 
-The static instance avoids Windows Qt PDF output converting all variable-font glyphs to outlines; PDF tests require the actual seven business fields to be searchable/extractable, not just painted on screen.
+The static instance gives consistent Regular UI rendering. Native diagnosis also showed that Windows Qt outlines even static memory-loaded fonts. Documents therefore prefer Windows' installed Malgun Gothic when present (not redistributed by this app), retaining this bundled font as an offline fallback. PDF tests require the actual seven business fields to be searchable/extractable, not just painted on screen.
