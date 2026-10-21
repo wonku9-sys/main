@@ -196,6 +196,12 @@ def test_gram_quantity_exact_amount_and_tax_supplier_snapshots(shop):
     line = s.document(identifier)['lines'][0]
     assert line['tax_mode'] == 'taxable' and line['product_name'] == '그램 상품'
     assert stock(s, product) == ('2000.000', Decimal('205.00'))
+    unit = s.save_unit(dict(product_id=product, name='봉', factor='2', purchase_price=20, sale_price=40))
+    data = payload(s, identifier); data['lines'][0].update(unit_id=unit, factor_override=2, qty=5, unit_price=20)
+    save(s, identifier, data)
+    line = s.document(identifier)['lines'][0]
+    assert line['tax_mode'] == 'taxable' and line['product_name'] == '그램 상품'
+    assert line['price_basis'] == 1 and line['unit_id'] == unit and line['total'] == 100
     _validate_database(s.db)
 
 

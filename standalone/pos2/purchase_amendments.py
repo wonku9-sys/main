@@ -129,9 +129,12 @@ class PurchaseAmendmentMixin:
                         raise ValueError('수정할 원래 품목 행을 다시 확인하세요.')
                     used.add(source)
                     original = originals[source]
+                    if original['product_id'] == line['product_id']:
+                        for key in ('product_name', 'supplier_id', 'tax_mode'):
+                            line[key] = original[key]
                     original_gram = original['unit_id'] is None and original['unit_name'] == 'g' and line['product']['base_unit'] == 'kg'
                     if (original['product_id'], original['unit_id']) == (line['product_id'], line['unit_id']) and original_gram == bool(raw.get('gram_input')):
-                        for key in ('product_name', 'unit_name', 'supplier_id', 'tax_mode', 'price_basis'):
+                        for key in ('unit_name', 'price_basis'):
                             line[key] = original[key]
             columns = ('product_id', 'unit_id', 'product_name', 'unit_name', 'factor', 'input_qty', 'base_qty',
                        'unit_price', 'total', 'cost', 'source_line_id', 'supplier_id', 'tax_mode', 'price_basis')
