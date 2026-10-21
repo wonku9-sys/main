@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QComboBox, QDateEdit, QDialog, QDialogButtonBox, QFileDialog, QFormLayout,
     QFrame, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMessageBox,
     QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget, QToolButton, QMenu,
+    QStyledItemDelegate, QStyleOptionViewItem,
 )
 from .font_support import font_family,document_font
 
@@ -74,9 +75,20 @@ def action_menu(text, controls, parent):
     return button
 
 
+class ReferenceCellDelegate(QStyledItemDelegate):
+    def paint(self, painter, option, index):
+        # The table's gray QSS background otherwise covers BackgroundRole,
+        # turning actual data cells gray too. Preserve Qt's native item drawing
+        # (icons, alignment, foreground/negative values and selection) without
+        # inheriting that table-surface CSS rule into every item.
+        native=QStyleOptionViewItem(option);native.widget=None
+        super().paint(painter,native,index)
+
+
 def reference_grid(grid, label_columns=(1,)):
     """Reference-style list surface without changing read-only flags or semantic colors."""
     grid.reference_layout=True;grid.reference_label_columns=label_columns
+    grid.setItemDelegate(ReferenceCellDelegate(grid))
     grid.setShowGrid(True);grid.setAlternatingRowColors(False)
     grid.verticalHeader().setDefaultSectionSize(32)
     grid.setStyleSheet('''QTableWidget{background:#A4A4A4;gridline-color:#B9BBB7;border:1px solid #8E9589;border-radius:0;}

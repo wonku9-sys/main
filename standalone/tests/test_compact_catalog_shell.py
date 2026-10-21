@@ -66,6 +66,22 @@ def test_catalog_supplier_filters_and_scan_still_work_after_rebuild(desktop):
     page.search.setText('없는 공급사');assert page.grid.rowCount()==0
 
 
+@pytest.mark.parametrize('key,name_column,plain_column',[('products',1,4),('suppliers',1,3)])
+def test_actual_rendered_cells_are_white_with_pale_labels_not_gray(desktop,key,name_column,plain_column):
+    app,store,window,_=desktop
+    if key=='products':
+        store.save_product(dict(name='두 번째 화면 상품',base_unit='개'))
+    else:store.save_partner(dict(kind='supplier',name='두 번째 화면 공급사'))
+    window.open_page(key);page=window.current_page;app.processEvents()
+    page.grid.clearSelection();page.grid.setCurrentCell(-1,-1);app.processEvents()
+    shot=page.grid.viewport().grab().toImage()
+    ratio=shot.devicePixelRatio()
+    for column,expected in ((name_column,'#eeefcf'),(plain_column,'#ffffff')):
+        rect=page.grid.visualItemRect(page.grid.item(1,column))
+        # Interior, before text/icons; verify pixels, not merely stored role metadata.
+        assert shot.pixelColor(round((rect.x()+2)*ratio),round((rect.y()+2)*ratio)).name()==expected
+
+
 def test_four_toolbar_groups_are_ordered_without_extra_commands(desktop):
     app,store,window,_=desktop;groups=[[]]
     for entry in window.toolbar.actions():
