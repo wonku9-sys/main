@@ -137,5 +137,10 @@ def test_address_bridge_opt_in_nonce_origin_single_use_and_no_identity(shop,monk
         response=connection.getresponse();assert response.status==403;response.read()
         connection.request('POST','/'+bridge.token,json.dumps({'postcode':'12345','address':'가상시 시험동'}),{'Content-Type':'application/json','Origin':bridge.origin})
         response=connection.getresponse();assert response.status==200;response.read()
-        QApplication.instance().processEvents();assert received==[{'postcode':'12345','address':'가상시 시험동'}] and bridge.used
+        from PySide6.QtTest import QTest
+        for _ in range(100):
+            QApplication.instance().processEvents()
+            if received and bridge.used:break
+            QTest.qWait(10)
+        assert received==[{'postcode':'12345','address':'가상시 시험동'}] and bridge.used
     finally:connection.close();bridge.stop()

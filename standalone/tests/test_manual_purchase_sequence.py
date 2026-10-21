@@ -85,20 +85,62 @@ def test_invalid_manual_values_never_change_stock_or_payments(shop,bad):
     assert not shop[1].db.execute('SELECT 1 FROM payments').fetchone()
 
 
-def test_space_doubleclick_check_then_enter_confirms_once(shop):
+@pytest.mark.parametrize('continuous',[False,True])
+def test_space_immediately_adds_without_posting_and_checkbox_enter_still_works(shop,continuous):
     app,store,window,supplier,*_=shop
     trade=TradeDialog(window);trade.partner.setCurrentIndex(trade.partner.findData(supplier))
     picker=ProductPicker(trade);picker.set_apply_callback(trade.apply_picked_products)
+    picker.keep_open.setChecked(continuous)
     picker.show();picker.activateWindow();app.processEvents()
     QTest.keyClick(picker.search,Qt.Key.Key_Down)
     assert picker.grid.hasFocus()
     QTest.keyClick(picker.grid,Qt.Key.Key_Space)
-    assert len(picker.checked)==1 and picker.applied_batches==0 and store.documents()==[]
-    QTest.keyClick(picker.grid,Qt.Key.Key_Space);assert not picker.checked
+    assert picker.applied_batches==1 and store.documents()==[]
+    assert picker.isVisible()==continuous
+    assert len([r for r in trade.line_rows if r['product'].currentData()])==1
+    picker.close()
+    picker=ProductPicker(trade);picker.set_apply_callback(trade.apply_picked_products)
+    picker.show();picker.activateWindow();app.processEvents()
+    QTest.keyClick(picker.search,Qt.Key.Key_Down)
     picker.grid.cellDoubleClicked.emit(0,2);assert len(picker.checked)==1
     QTest.keyClick(picker.grid,Qt.Key.Key_Return);app.processEvents()
     assert not picker.isVisible() and picker.applied_batches==1
-    assert len([r for r in trade.line_rows if r['product'].currentData()])==1
+    assert len([r for r in trade.line_rows if r['product'].currentData()])==2
+
+
+def test_pack_factor_barcode_and_rejected_price_check_leave_no_posting(shop,monkeypatch):
+    app,store,window,supplier,product,unit,warnings=shop
+    store.save_product({'barcode':'001122'},product)
+    trade=TradeDialog(window);trade.partner.setCurrentIndex(trade.partner.findData(supplier))
+    row=trade.line_rows[0];row['barcode'].setText('001122');QTest.keyClick(row['barcode'],Qt.Key.Key_Return)
+    assert row['product'].currentData()==product and not store.documents()
+    row['unit'].setCurrentIndex(row['unit'].findData(unit));row['qty'].setText('2');row['factor'].setText('12')
+    row['line_memo'].setText('이번 입고만 12개')
+    draft=store.save_draft(trade.payload())
+    loaded=TradeDialog(window,'purchase',draft)
+    assert loaded.line_rows[0]['factor'].text()=='12'
+    assert loaded.line_rows[0]['base_qty'].text()=='24 개'
+    # Price-check X must abort save, not silently post unchanged values.
+    row=loaded.line_rows[0];row['factor'].setText('10');row['price'].setText('300')
+    monkeypatch.setattr('pos2.workflow_ui._confirm',lambda *_:True)
+    monkeypatch.setattr(PurchasePriceCheckDialog,'exec',lambda _:QDialog.DialogCode.Rejected)
+    loaded.save(True)
+    assert store.document(draft)['status']=='draft' and store.products()[0]['stock_qty']=='0.000'
+    assert not store.db.execute('SELECT 1 FROM payments').fetchone() and not warnings
+
+
+def test_crash_work_recovery_keeps_datetime_amount_factor_sale_price_and_memo(shop):
+    from pos2.unsaved_work import capture_values,apply_values
+    _,_,window,supplier,product,_,_=shop
+    trade=TradeDialog(window);trade.partner.setCurrentIndex(trade.partner.findData(supplier))
+    row=trade.line_rows[0];row['product'].setCurrentIndex(row['product'].findData(product));row['qty'].setText('3')
+    row['total'].setText('100');trade.line_amount_changed(row)
+    row['factor'].setText('2');row['sale_price'].setText('60');row['line_memo'].setText('임시 기록')
+    trade.date.setDateTime(QDateTime.fromString(date.today().isoformat()+' 09:25:00','yyyy-MM-dd HH:mm:ss'))
+    trade.entry_staff.setText('복원 담당')
+    captured=capture_values(trade);recovered=TradeDialog(window);apply_values(recovered,captured)
+    assert recovered.payload()==trade.payload()
+    assert recovered.line_rows[0]['total'].text()=='100.00'
 
 
 def test_real_nested_supplier_product_amount_save_price_check_sequence(shop,monkeypatch):
@@ -116,8 +158,7 @@ def test_real_nested_supplier_product_amount_save_price_check_sequence(shop,monk
         dialog.search.setText('S01');press(dialog.search,'Return')
     def product_step(dialog):
         sequence.append('상품검색');dialog.search.setText('사과');press(dialog.search,'Down')
-        press(dialog.grid,'Space');sequence.append('상품 체크');assert not dialog.applied_batches
-        press(dialog.grid,'Return');sequence.append('상품 확인')
+        press(dialog.grid,'Space');sequence.append('상품 즉시 추가');assert dialog.applied_batches==1
     def price_step(dialog):
         sequence.append('매입상품 체크');assert dialog.selected_updates()==[]
         dialog.checks[0]['sale_price'].setChecked(True);dialog.confirm_button.click()
@@ -137,7 +178,7 @@ def test_real_nested_supplier_product_amount_save_price_check_sequence(shop,monk
     page.new_trade()
     assert not errors,errors
     assert not warnings,warnings
-    assert sequence==['공급사 선택','새 매입전표','상품검색','상품 체크','상품 확인','수량·금액 입력','저장 확인','매입상품 체크','저장 완료']
+    assert sequence==['공급사 선택','새 매입전표','상품검색','상품 즉시 추가','수량·금액 입력','저장 확인','매입상품 체크','저장 완료']
     document=store.document(store.documents()[0]['id']);assert document['total']==100 and document['status']=='posted'
     reopened=TradeDialog(window,'purchase',document)
     assert reopened.date.dateTime().toString('HH:mm')=='10:35' and reopened.line_rows[0]['line_memo'].text()=='순서 확인'

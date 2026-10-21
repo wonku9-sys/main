@@ -30,7 +30,7 @@ def verify_glyphs():
 
 def regular_font(size=10):
     font=QFont(font_family(),size)
-    # Qt 6.8 can register this variable font's named instances only as "Thin".
-    # Select its weight axis explicitly so body text remains readable offline.
-    font.setVariableAxis(QFont.Tag.fromString('wght'),400)
+    # A static Regular instance also allows Qt's Windows PDF backend to embed
+    # real text rather than convert the variable font to unsearchable outlines.
+    font.setWeight(QFont.Weight.Normal)
     return font

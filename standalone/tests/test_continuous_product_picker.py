@@ -41,8 +41,6 @@ def test_continuous_multi_search_and_single_keep_window_no_posting(desktop,kind)
     assert picker.isVisible() and picker.applied_batches==1 and not picker.checked
     assert {r['product'].currentData() for r in trade.line_rows}==set(ids[:2])
     picker.search.setText('귤');picker.grid.setFocus();QTest.keyClick(picker.grid,Qt.Key.Key_Space);app.processEvents()
-    assert picker.applied_batches==1 and len(picker.checked)==1
-    QTest.keyClick(picker.grid,Qt.Key.Key_Return);app.processEvents()
     assert picker.isVisible() and picker.applied_batches==2
     assert {r['product'].currentData() for r in trade.line_rows}==set(ids)
     assert store.documents()==[] and all(float(row['stock_qty'])==0 for row in store.products())

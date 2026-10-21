@@ -7,13 +7,13 @@ from pathlib import Path
 import secrets
 import sys
 import weakref
-from PySide6.QtCore import QObject,QTimer,QEvent,QIODevice,QSaveFile,QDate,QTime,Qt
-from PySide6.QtWidgets import (QApplication,QDialog,QWidget,QVBoxLayout,QHBoxLayout,QLabel,QTextEdit,QLineEdit,QComboBox,QCheckBox,QDateEdit,QTimeEdit,QSpinBox,QDoubleSpinBox,QTableWidget,QMessageBox)
+from PySide6.QtCore import QObject,QTimer,QEvent,QIODevice,QSaveFile,QDate,QDateTime,QTime,Qt
+from PySide6.QtWidgets import (QApplication,QDialog,QWidget,QVBoxLayout,QHBoxLayout,QLabel,QTextEdit,QLineEdit,QComboBox,QCheckBox,QDateEdit,QDateTimeEdit,QTimeEdit,QSpinBox,QDoubleSpinBox,QTableWidget,QMessageBox)
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from . import windows_secrets
 from .widgets import action,DataGrid
 
-CONTROLS=(QTimeEdit,QDateEdit,QComboBox,QCheckBox,QDoubleSpinBox,QSpinBox,QTextEdit,QLineEdit)
+CONTROLS=(QTimeEdit,QDateEdit,QDateTimeEdit,QComboBox,QCheckBox,QDoubleSpinBox,QSpinBox,QTextEdit,QLineEdit)
 EXCLUDE=('암호','비밀번호','인증','이메일 발송','로그인','복구 이메일','메일 전송','문서 이미지 이메일')
 
 
@@ -27,7 +27,7 @@ def controls(owner):
             ancestor=ancestor.parentWidget()
         if inside_table:continue
         # Skip editors internal to another typed Qt control, plus passwords.
-        if isinstance(widget,QLineEdit) and (widget.echoMode()!=QLineEdit.EchoMode.Normal or isinstance(widget.parentWidget(),(QComboBox,QDateEdit,QTimeEdit,QSpinBox,QDoubleSpinBox))):continue
+        if isinstance(widget,QLineEdit) and (widget.echoMode()!=QLineEdit.EchoMode.Normal or isinstance(widget.parentWidget(),(QComboBox,QDateTimeEdit,QSpinBox,QDoubleSpinBox))):continue
         kind=type(widget).__name__;index=counts.get(kind,0);counts[kind]=index+1
         yield f'{kind}:{index}',widget
 
@@ -37,6 +37,7 @@ def capture_values(owner):
     for path,widget in controls(owner):
         if isinstance(widget,QTimeEdit):value={'time':widget.time().toString('HH:mm')}
         elif isinstance(widget,QDateEdit):value={'date':widget.date().toString('yyyy-MM-dd')}
+        elif isinstance(widget,QDateTimeEdit):value={'datetime':widget.dateTime().toString('yyyy-MM-dd HH:mm:ss')}
         elif isinstance(widget,QComboBox):
             data=widget.currentData();value={'combo':data if isinstance(data,(str,int,type(None))) else None,'text':widget.currentText()}
         elif isinstance(widget,QCheckBox):value={'check':widget.isChecked()}
@@ -70,7 +71,13 @@ def apply_values(owner,payload):
         while owner.line_rows:owner.remove_line(owner.line_rows[-1])
         for line in data['lines']:
             source=next((r for r in (owner.source or owner.record or {}).get('lines',[]) if r.get('id')==line.get('source_line_id')),None)
-            owner.add_line(line['product_id'],line['unit_id'],line['qty'],line['unit_price'],source)
+            row=owner.add_line(line['product_id'],'grams' if line.get('gram_input') else line['unit_id'],line['qty'],line['unit_price'],source)
+            for key,field in (('factor_override','factor'),('sale_price','sale_price'),('line_memo','line_memo')):
+                if key in line:row[field].setText(str(line[key]))
+            if 'amount_override' in line:row['amount_override']=line['amount_override']
+        if data.get('entry_datetime'):owner.date.setDateTime(QDateTime.fromString(data['entry_datetime'],'yyyy-MM-dd HH:mm:ss'))
+        if data.get('entry_staff'):owner.entry_staff.setText(data['entry_staff'])
+        owner.recalculate()
     elif 'lines' in payload and hasattr(owner,'rows'):
         for row in list(owner.rows):owner.remove(row)
         for line in payload['lines']:owner.add_line(line['product_id'],line)
@@ -85,6 +92,7 @@ def apply_values(owner,payload):
             widget.setCurrentIndex(index)
         elif 'check' in value and isinstance(widget,QCheckBox):widget.setChecked(value['check'])
         elif 'date' in value and isinstance(widget,QDateEdit):widget.setDate(QDate.fromString(value['date'],'yyyy-MM-dd'))
+        elif 'datetime' in value and isinstance(widget,QDateTimeEdit):widget.setDateTime(QDateTime.fromString(value['datetime'],'yyyy-MM-dd HH:mm:ss'))
         elif 'time' in value and isinstance(widget,QTimeEdit):widget.setTime(QTime.fromString(value['time'],'HH:mm'))
         elif 'number' in value and isinstance(widget,(QSpinBox,QDoubleSpinBox)):widget.setValue(value['number'])
     for path,value in payload.get('values',{}).items():

@@ -219,7 +219,7 @@ class ProductPicker(QDialog):
         body.addWidget(_compact_scroll_row(filters,62))
         self.supplier_label = QLabel(parent.partner.currentText() if self.supplier_id else "전체 공급사 상품")
         body.addWidget(self.supplier_label)
-        body.addWidget(QLabel("Space·더블클릭: 상품 체크/해제 · Enter: 체크한 상품 확인 · F4: 검색어 · F5: 검색 · F7: 공급사"))
+        body.addWidget(QLabel("Space: 선택 상품 즉시 추가 · 더블클릭: 체크/해제 · Enter: 체크한 상품 확인 · F4: 검색어 · F5: 검색"))
         self.keep_open = QCheckBox('적용 후 검색창 유지 · 연속 검색/추가')
         self.keep_open.setChecked(False); self.keep_open.hide(); body.addWidget(self.keep_open)
         self.result_label = QLabel(); body.addWidget(self.result_label)
@@ -227,7 +227,7 @@ class ProductPicker(QDialog):
         from PySide6.QtWidgets import QAbstractItemView
         self.grid.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.grid.setStyleSheet('QTableWidget::item:selected {background:#176CB0;color:white;}')
-        self.grid.setToolTip('방향키: 상품 이동 · 드래그/Ctrl/Shift: 여러 행 선택\nSpace·더블클릭: 체크/해제 · Enter: 체크한 상품 확인 · F8: 체크 · F9: 해제')
+        self.grid.setToolTip('방향키: 상품 이동 · 드래그/Ctrl/Shift: 여러 행 선택\nSpace: 선택 상품 즉시 추가 · 더블클릭: 체크/해제 · Enter: 체크한 상품 확인 · F8: 체크 · F9: 해제')
         self.grid.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.grid.customContextMenuRequested.connect(self.context_menu)
         self.grid.installEventFilter(self)
@@ -283,7 +283,7 @@ class ProductPicker(QDialog):
             return True
         if watched is self.grid and event.type() == QEvent.Type.KeyPress and event.key() == Qt.Key.Key_Space:
             if not event.isAutoRepeat():
-                self.toggle_current()
+                self.apply_selected()
             event.accept()
             return True
         return super().eventFilter(watched, event)
@@ -343,7 +343,7 @@ class ProductPicker(QDialog):
         if item is not None and not item.isSelected():
             self.grid.selectRow(item.row())
         menu = QMenu(self)
-        for label, callback in (('선택 상품 체크/해제 (Space)', self.toggle_current),
+        for label, callback in (('선택 상품 즉시 추가 (Space)', self.apply_selected),
                 ('체크된 상품 적용 (Enter)', self.apply_checked),
                 ('선택행 체크 (F8)', lambda: self.check_current(True)),
                 ('선택행 체크해제 (F9)', lambda: self.check_current(False)),

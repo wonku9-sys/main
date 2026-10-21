@@ -93,7 +93,7 @@ def build(output, native=False):
     if not all(mouse_pcm_source(kind,default_source(kind)) is not None for kind in MOUSE_PCM):
         raise RuntimeError('The two verified low-latency mouse PCM files are missing or changed.')
     font = assets / "NotoSansKR-Regular.ttf"
-    if not font.is_file() or sha256(font.read_bytes()).hexdigest() != "194018e6b2b293a7964f037b25c0249ce1418bc9ab3c971060a03aa57861e252":
+    if not font.is_file() or sha256(font.read_bytes()).hexdigest() != "4609a7b62a6da24cae3a8b73ecde7003581b8f60662d60cc8f55a3793de07763":
         raise RuntimeError("The verified offline Korean font asset is missing or changed.")
     with tempfile.TemporaryDirectory(prefix="seoyoung-standalone-build-") as scratch:
         temporary = Path(scratch)
