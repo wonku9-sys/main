@@ -162,7 +162,7 @@ def test_distinct_arrows_and_visible_toolbar_group_boundaries(desktop):
     actions = window.toolbar.actions()
     assert [action.text() for action in actions[:2]] == ['이전', '다음']
     assert actions[2].isSeparator()
-    assert sum(action.isSeparator() for action in actions) == 2
+    assert sum(action.isSeparator() for action in actions) == 3
     assert 'QToolBar::separator' in STYLE
     assert 'border:1px solid #D9E4DE' in STYLE
     assert not window.toolbar.isMovable()

@@ -12,7 +12,7 @@ from PySide6.QtPrintSupport import QPrintDialog, QPrinter, QPrinterInfo, QPrintP
 from PySide6.QtWidgets import (
     QComboBox, QDateEdit, QDialog, QDialogButtonBox, QFileDialog, QFormLayout,
     QFrame, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMessageBox,
-    QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget, QToolButton, QMenu,
 )
 from .font_support import font_family,document_font
 
@@ -52,6 +52,37 @@ def action(text, callback, primary=False, danger=False):
     from .permissions import restrict_button
     restrict_button(result, callback)
     return result
+
+
+def action_menu(text, controls, parent):
+    """Keep secondary actions available once, preserving their original permission gate."""
+    from .menu_icons import menu_icon
+    button=QToolButton(parent);button.setText(text);button.setIcon(menu_icon('settings'))
+    button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+    button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+    menu=QMenu(button);pairs=[]
+    for control in controls:
+        if control is None:menu.addSeparator();continue
+        control.setParent(parent);control.hide()
+        entry=menu.addAction(control.icon() if not control.icon().isNull() else menu_icon(control.text()),control.text())
+        entry.setToolTip(control.toolTip());entry.triggered.connect(control.click);pairs.append((entry,control))
+    def refresh():
+        for entry,control in pairs:entry.setEnabled(control.isEnabled());entry.setText(control.text())
+    menu.aboutToShow.connect(refresh);refresh();menu.setToolTipsVisible(True);button.setMenu(menu)
+    button.setToolTip('보조 기능을 펼칩니다. 등록·수정·삭제 권한과 기존 확인 절차는 유지됩니다.')
+    button._source_controls=controls
+    return button
+
+
+def reference_grid(grid, label_columns=(1,)):
+    """Reference-style list surface without changing read-only flags or semantic colors."""
+    grid.reference_layout=True;grid.reference_label_columns=label_columns
+    grid.setShowGrid(True);grid.setAlternatingRowColors(False)
+    grid.verticalHeader().setDefaultSectionSize(32)
+    grid.setStyleSheet('''QTableWidget{background:#A4A4A4;gridline-color:#B9BBB7;border:1px solid #8E9589;border-radius:0;}
+        QTableWidget::item{padding:2px 4px;border:0;}
+        QTableWidget::item:selected{background:#DCECF9;}
+        QHeaderView::section{background:#E9EACA;color:#18231C;border:0;border-right:1px solid #A4AA99;border-bottom:1px solid #A4AA99;padding:4px 3px;}''')
 
 
 def output_icon(text,callback):
@@ -285,7 +316,8 @@ class DataGrid(HeaderSafeTable):
         for row_index, values in enumerate(rows):
             for column, value in enumerate(values):
                 item = getattr(self,'cell_type',Cell)(value)
-                item.setBackground(QColor('#E8EFF0' if row_index%2==0 else '#DDE7E9'))
+                background=('#EEEFCF' if column in self.reference_label_columns else '#FFFFFF') if getattr(self,'reference_layout',False) else ('#E8EFF0' if row_index%2==0 else '#DDE7E9')
+                item.setBackground(QColor(background))
                 item.setToolTip(str(value if value is not None else ''))
                 if isinstance(value,(int,Decimal)) and not isinstance(value,bool) and value<0:
                     item.setForeground(QColor('#B42318'))
@@ -486,6 +518,7 @@ class FormDialog(QDialog):
     def finish(self, callback):
         self.body.addStretch()
         self.buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        self._sy_pinned_footer = self.buttons
         self.buttons.button(QDialogButtonBox.StandardButton.Save).setText("저장")
         self.buttons.button(QDialogButtonBox.StandardButton.Save).setObjectName("primary")
         self.buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("취소")

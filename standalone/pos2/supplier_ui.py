@@ -2,12 +2,12 @@
 from decimal import Decimal
 
 from PySide6.QtCore import Qt, Signal, QDate
-from PySide6.QtWidgets import QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox, QFormLayout, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QScrollArea, QSpinBox, QTabWidget, QTextEdit, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox, QFormLayout, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QScrollArea, QSpinBox, QTabWidget, QTextEdit, QVBoxLayout, QWidget, QFrame
 
 from .catalog_ui import EntryDialog, ProductDialog
 from .permissions import can_action
 from .suppliers import GROUP_KINDS, PROFILE_TEXT
-from .widgets import DataGrid, Page, action, date_field, won
+from .widgets import DataGrid, Page, action, date_field, won, action_menu, reference_grid
 
 
 def confirm(parent, title, message):
@@ -22,20 +22,30 @@ class SupplierDialog(QDialog):
         self.store.require_menu("suppliers")
         self.readonly = not can_action(self.store.actor, "suppliers", "edit" if record else "create")
         self.setWindowTitle("공급사 등록정보" if record else "새 공급사 등록")
-        self.resize(970, 820)
+        self.setObjectName('supplierDialog')
+        self._sy_no_home_button=True;self._fixed_query_header=True
+        self.resize(900,760)
+        self.setStyleSheet('''QDialog#supplierDialog QLineEdit,QDialog#supplierDialog QComboBox,QDialog#supplierDialog QSpinBox,QDialog#supplierDialog QDoubleSpinBox,QDialog#supplierDialog QDateEdit{min-width:0;min-height:20px;padding:3px 5px;}
+            QDialog#supplierDialog QGroupBox{border-radius:3px;margin-top:10px;padding-top:9px;}
+            QDialog#supplierDialog QPushButton{min-height:20px;padding:4px 8px;}
+            QDialog#supplierDialog QTabBar::tab{padding:6px 8px;}''')
         self.fields = {}
         body = QVBoxLayout(self)
+        body.setContentsMargins(10,8,10,8);body.setSpacing(5)
         self.tabs = QTabWidget()
         body.addWidget(self.tabs, 1)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         contents = QWidget()
         grid = QGridLayout(contents)
+        grid.setContentsMargins(6,6,6,6);grid.setSpacing(6)
         self.tabs.addTab(scroll, "공급사 기본정보")
         scroll.setWidget(contents)
         def group(title, row, column):
             box = QGroupBox(title)
             form = QFormLayout(box)
+            form.setContentsMargins(8,5,8,7);form.setSpacing(4)
+            form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
             grid.addWidget(box, row, column)
             return form
         def fields(form, pairs):
@@ -113,6 +123,7 @@ class SupplierDialog(QDialog):
         self.error_label.setStyleSheet("color:#AD5149;")
         body.addWidget(self.error_label)
         self.buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        self._sy_pinned_footer=self.buttons
         self.buttons.button(QDialogButtonBox.StandardButton.Save).setText("저장")
         self.buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("닫기")
         self.apply_button = self.buttons.addButton('적용', QDialogButtonBox.ButtonRole.ApplyRole)
@@ -123,6 +134,7 @@ class SupplierDialog(QDialog):
         self.next_button.setEnabled(not self.readonly and can_action(self.store.actor, 'suppliers', 'create'))
         self.buttons.accepted.connect(self.save)
         self.buttons.rejected.connect(self.reject)
+        for button in self.buttons.buttons():button.setAutoDefault(False)
         body.addWidget(self.buttons)
         if self.readonly:
             for control in (self.active, self.mode, self.commission, self.method, self.settlement_group, self.settlement_day, self.opening_date, self.memo):
@@ -334,6 +346,7 @@ class SuppliersPage(Page):
 
     def __init__(self, window):
         super().__init__(window, "공급사관리", "PDF p.72~76 · 공급사 추가, 목록 더블클릭 수정, 유효/무효와 그룹별 조회")
+        self.body.setContentsMargins(8,8,8,8);self.body.setSpacing(6)
         self.actions.addWidget(action("공급사 추가", self.add, True))
         self.actions.addWidget(action("그룹관리", self.group_manager))
         self.search = QLineEdit()
@@ -350,17 +363,20 @@ class SuppliersPage(Page):
         self.settlement = QComboBox()
         self.group = QComboBox()
         self.exclude = QCheckBox("선택 그룹 제외")
-        filters = QHBoxLayout()
-        for widget in (self.search, self.status, self.method, self.mode):
-            filters.addWidget(widget, 2 if widget is self.search else 1)
-        self.body.addLayout(filters)
-        groups = QHBoxLayout()
-        groups.addWidget(self.settlement, 1)
-        groups.addWidget(self.group, 1)
-        groups.addWidget(self.exclude)
-        groups.addWidget(action("조회 (F5)", self.refresh))
-        self.body.addLayout(groups)
+        self.filter_panel=QFrame();self.filter_panel.setObjectName('compactFilters')
+        self.filter_panel.setStyleSheet('QFrame#compactFilters{border:1px solid #A7B3AC;border-radius:0;background:palette(window);} QLineEdit,QComboBox{min-width:0;min-height:20px;padding:3px 5px;}')
+        filters=QGridLayout(self.filter_panel);filters.setContentsMargins(6,6,6,6);filters.setSpacing(5)
+        for column,widget in enumerate((self.search,self.status,self.method,self.mode)):
+            filters.addWidget(widget,0,column);filters.setColumnStretch(column,2 if column==0 else 1)
+        filters.addWidget(self.settlement,1,0);filters.addWidget(self.group,1,1);filters.addWidget(self.exclude,1,2,1,2)
+        self.body.addWidget(self.filter_panel)
         self.grid = self.table(["코드", "공급사명", "구분", "사업자번호", "대표자", "담당자", "전화", "팩스", "휴대폰", "결제방법", "결제유형", "그룹", "은행명", "계좌번호", "예금주", "현재 외상잔액", "상태"])
+        reference_grid(self.grid)
+        for visual,logical in enumerate((0,1,2,3,5,6,7,8,4,9,10,11,12,13,14,15,16)):
+            self.grid.horizontalHeader().moveSection(self.grid.horizontalHeader().visualIndex(logical),visual)
+        self.grid.verticalHeader().setVisible(True)
+        for column,width in enumerate((85,210,75,130,90,90,135,120,135)):
+            self.grid.setColumnWidth(column,width)
         from PySide6.QtWidgets import QAbstractItemView
         self.grid.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.grid.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -369,12 +385,11 @@ class SuppliersPage(Page):
         self.summary = QLabel()
         self.body.addWidget(self.summary)
         tools = QHBoxLayout()
-        tools.addWidget(action("등록정보 / 수정", self.edit))
+        edit=action("등록정보 / 수정",self.edit)
         state = action("유효 / 무효 변경", self.set_active)
         state.setEnabled(can_action(self.store.actor, "suppliers", "edit"))
-        tools.addWidget(state)
-        tools.addStretch()
-        self.body.addLayout(tools)
+        self.more_actions=action_menu('추가 기능',[edit,state],self)
+        self.actions.addWidget(self.more_actions)
         self.grid.itemDoubleClicked.connect(self.edit)
         self.search.textChanged.connect(self.filter_rows)
         for combo in (self.status, self.method, self.mode, self.settlement, self.group):

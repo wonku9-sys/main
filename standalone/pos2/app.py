@@ -127,6 +127,7 @@ QToolBar#mainToolbar QToolButton:hover,QToolBar#mainToolbar QToolButton:focus {b
 QToolBar#mainToolbar QToolButton:pressed,QToolBar#mainToolbar QToolButton:checked {background:#B7C9BA;border:0;}
 QToolBar#mainToolbar QToolButton:disabled {background:transparent;border:0;color:#7E8981;}
 QToolBar#mainToolbar::separator {background:#8F9A91;width:1px;margin:5px 8px;}
+QToolBar#mainToolbar QToolButton {min-width:48px;padding:4px 6px;font-size:13px;}
 QStatusBar {font-size:12px;min-height:21px;}
 """
 
@@ -633,7 +634,7 @@ class MainWindow(QMainWindow):
         for title, callback in (("첫화면", self.go_home), ('달력',self.open_calendar), ("상품장", lambda: self.open_page("products")), ("매입전표", lambda: self.open_page("purchases")), ("판매조회", lambda: self.open_page("sales")), ("F8 스캔", self.focus_scan)):
             if title == "상품장" and not self.allowed("catalog") or title in ("매입전표", "판매조회") and not self.allowed("trade"):
                 continue
-            if title=='F8 스캔':self.toolbar.addSeparator()
+            if title in {'상품장','F8 스캔'}:self.toolbar.addSeparator()
             from .menu_icons import menu_icon
             tool = QAction(menu_icon(title), title, self)
             attach_help(tool, ACTION_HELP[title])

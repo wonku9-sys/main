@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
     QMenu, QStyle, QTreeWidget, QTreeWidgetItem, QSpinBox, QTimeEdit,QSplitter, QToolButton,
 )
 
-from .widgets import DataGrid, Page, ScanField, won, date_field, action, search_icon
+from .widgets import DataGrid, Page, ScanField, won, date_field, action, search_icon, action_menu, reference_grid
 from .permissions import can_action, restrict_button
 from .catalog import CATEGORY_FIELDS, DEFAULT_PRODUCT_CATEGORY
 from .category_tree import CategoryTree, folder_icon
@@ -1249,9 +1249,9 @@ class ProductsPage(Page):
         self.search_timer=QTimer(self);self.search_timer.setSingleShot(True);self.search_timer.setInterval(250);self.search_timer.timeout.connect(self.run_delayed_search)
         self.search = QLineEdit()
         self.search.setPlaceholderText("상품코드 · 바코드 · 상품명 · 규격")
-        self.search.setMinimumWidth(230)
+        self.search.setMinimumWidth(150)
         self.scan = ScanField()
-        self.scan.setMinimumWidth(200)
+        self.scan.setMinimumWidth(150)
         self.scan.scanned.connect(self.scan_barcode)
         self.category = QComboBox()
         self.supplier = QComboBox()
@@ -1277,41 +1277,45 @@ class ProductsPage(Page):
         self.period_filter=_combo([('기간조건 없음',''),('신규 등록일','created_at'),('상품 수정일','updated_at')])
         self.period_start,self.period_end=date_field(),date_field()
         self.period_start.setEnabled(False);self.period_end.setEnabled(False)
-        filters = QHBoxLayout()
-        for label, widget in (("검색", self.search), ("분류", self.category), ("공급사", self.supplier)):
-            filters.addWidget(QLabel(label))
-            filters.addWidget(widget)
-            if widget is self.supplier:
-                filters.addWidget(self.supplier_search_button)
-        filters.addWidget(self.status_filter)
-        filters.addWidget(self.low_only)
-        self.body.addLayout(filters)
-        details=QHBoxLayout()
-        for label,widget in (('중분류',self.middle_filter),('소분류',self.small_filter),('재고관리',self.tracked_filter),('과면세',self.tax_filter)):
-            details.addWidget(QLabel(label));details.addWidget(widget,1)
-        self.body.addLayout(details)
-        dates=QHBoxLayout();dates.addWidget(self.period_filter);dates.addWidget(self.period_start);dates.addWidget(QLabel('~'));dates.addWidget(self.period_end);dates.addStretch()
-        dates.addWidget(QLabel('등록·수정일 조건으로 새 상품/변경 상품을 찾아 라벨 출력할 수 있습니다.'));self.body.addLayout(dates)
+        self.body.setContentsMargins(8,8,8,8);self.body.setSpacing(6)
+        self.filter_panel=QFrame();self.filter_panel.setObjectName('compactFilters')
+        self.filter_panel.setStyleSheet('QFrame#compactFilters{border:1px solid #A7B3AC;border-radius:0;background:palette(window);} QLineEdit,QComboBox,QDateEdit{min-width:0;min-height:20px;padding:3px 5px;}')
+        filters=QGridLayout(self.filter_panel);filters.setContentsMargins(6,6,6,6);filters.setSpacing(5)
+        def pair(row,column,label,widget):
+            panel=QWidget();line=QHBoxLayout(panel);line.setContentsMargins(0,0,0,0);line.setSpacing(4)
+            line.addWidget(QLabel(label));line.addWidget(widget,1);filters.addWidget(panel,row,column)
+        pair(0,0,'검색',self.search);filters.addWidget(self.status_filter,0,1);filters.addWidget(self.tax_filter,0,2);filters.addWidget(self.tracked_filter,0,3);filters.addWidget(self.low_only,0,4)
+        pair(1,0,'대',self.category);pair(1,1,'중',self.middle_filter);pair(1,2,'소',self.small_filter)
+        supplier_filter=QWidget();supplier_line=QHBoxLayout(supplier_filter);supplier_line.setContentsMargins(0,0,0,0);supplier_line.setSpacing(3)
+        supplier_line.addWidget(self.supplier,1);supplier_line.addWidget(self.supplier_search_button);filters.addWidget(supplier_filter,1,3,1,2)
+        dates=QHBoxLayout();dates.setSpacing(5)
+        separator=QLabel('~');separator.setFixedWidth(12)
+        for field in (self.period_filter,self.period_start,separator,self.period_end):dates.addWidget(field)
+        filters.addLayout(dates,2,0,1,3)
+        self.scan.setPlaceholderText('USB 바코드 · F8');filters.addWidget(self.scan,2,3,1,2)
+        for column in range(5):filters.setColumnStretch(column,2 if column==0 else 1)
+        self.body.addWidget(self.filter_panel)
         tools = QHBoxLayout()
-        tools.addWidget(QLabel("USB 바코드"))
-        tools.addWidget(self.scan)
         self.scan_result = QLabel()
         self.scan_result.setObjectName("muted")
-        tools.addWidget(self.scan_result, 1)
-        _button("상세 / 수정", self.edit, tools)
-        _button("삭제", self.delete, tools)
-        _button("분류 일괄변경", self.bulk_category, tools)
-        _button("라벨 인쇄", self.print_labels, tools)
-        _button("조회", self.refresh, tools)
-        self.body.addLayout(tools)
+        self.body.addWidget(self.scan_result)
+        self.scan_result.hide()
+        secondary=[_button(label,callback,tools) for label,callback in (("상세 / 수정",self.edit),("삭제",self.delete),("분류 일괄변경",self.bulk_category),("라벨 인쇄",self.print_labels),("엑셀 상품 등록",self.import_excel))]
+        self.more_actions=action_menu('추가 기능',secondary,self)
+        self.actions.addWidget(self.more_actions)
         self.grid = self.table(["상품코드", "상품명", "대분류", "중분류", "규격", "바코드", "공급사", "매입단가", "판매단가", "현재고", "단위", "재고 원가액", "상태","소분류","과면세","재고관리","단가 기준"])
-        self.grid.verticalHeader().setVisible(True);self.grid.verticalHeader().setFixedWidth(65);self.grid.verticalHeader().setToolTip('검색 결과의 순번 · 현재 정렬 순서대로 1부터 표시합니다.')
+        reference_grid(self.grid)
+        for visual,logical in enumerate((1,4,5,6,7,8,9,10,11,12,14,0,2,3,13,15,16)):
+            self.grid.horizontalHeader().moveSection(self.grid.horizontalHeader().visualIndex(logical),visual)
+        self.grid.verticalHeader().setVisible(True);self.grid.verticalHeader().setFixedWidth(44);self.grid.verticalHeader().setToolTip('검색 결과의 순번 · 현재 정렬 순서대로 1부터 표시합니다.')
         self.body.removeWidget(self.grid);self.catalog_splitter=QSplitter(Qt.Orientation.Horizontal);self.catalog_splitter.addWidget(self.grid)
-        panel=QWidget();right=QVBoxLayout(panel);right.setContentsMargins(8,0,0,0);right.addWidget(QLabel('상품 분류 · 대 / 중 / 소'))
+        panel=self.category_panel=QWidget();right=QVBoxLayout(panel);right.setContentsMargins(8,0,0,0);right.addWidget(QLabel('상품 분류 · 대 / 중 / 소'))
         self.category_path_label=QLabel('전체 분류');self.category_path_label.setWordWrap(True);right.addWidget(self.category_path_label)
         self.category_tree=CategoryTree();self.category_tree.setMinimumWidth(230);self.category_tree.itemSelectionChanged.connect(self.tree_category_selected);right.addWidget(self.category_tree,1)
         self.selected_product_summary=QLabel('상품을 선택하면 과면세와 분류를 표시합니다.');self.selected_product_summary.setWordWrap(True);right.addWidget(self.selected_product_summary);_button('선택 상품 등록정보',self.edit,right)
         _button('전체 분류 보기',lambda:self.set_tree_path(()),right);self.catalog_splitter.addWidget(panel);self.catalog_splitter.setStretchFactor(0,4);self.catalog_splitter.setStretchFactor(1,1);self.catalog_splitter.setSizes([850,260]);self.body.addWidget(self.catalog_splitter,1)
+        panel.hide()
+        tree_toggle=self.more_actions.menu().addAction('분류 트리 보기');tree_toggle.setCheckable(True);tree_toggle.toggled.connect(panel.setVisible)
         for column, width in enumerate((85, 185, 80, 80, 80, 130, 130, 100, 100, 95, 60, 115, 65)):
             self.grid.setColumnWidth(column, width)
         self.summary = QLabel()
@@ -1320,7 +1324,6 @@ class ProductsPage(Page):
         paging=QHBoxLayout();self.previous_page=action('이전 500개',lambda:self.move_catalog_page(-1));self.next_page=action('다음 500개',lambda:self.move_catalog_page(1));paging.addWidget(self.previous_page);paging.addWidget(self.next_page)
         self.page_label=QLabel('');paging.addWidget(self.page_label,1);self.body.addLayout(paging)
         self.add_button = _button("새 상품 등록", self.add, self.actions, True)
-        _button('엑셀 상품 등록',self.import_excel,self.actions)
         self.grid.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.grid.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.grid.customContextMenuRequested.connect(self.context_menu)
@@ -1635,6 +1638,7 @@ class ProductsPage(Page):
         self.scan.selectAll()
 
     def scan_barcode(self, barcode):
+        self.scan_result.show()
         try:
             result = self.store.lookup_barcode(barcode)
             if not result:

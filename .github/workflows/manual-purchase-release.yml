@@ -30,7 +30,7 @@ jobs:
       - name: Full business and desktop regression
         run: uv run --frozen --extra dev --project standalone python -m pytest -q --tb=short standalone/tests
       - name: Shared input worksheet and lucky menu controls
-        run: uv run --frozen --extra dev --project standalone python -m pytest -q standalone/tests/test_entry_worksheet.py standalone/tests/test_lucky_sequence.py
+        run: uv run --frozen --extra dev --project standalone python -m pytest -q standalone/tests/test_entry_worksheet.py standalone/tests/test_lucky_sequence.py standalone/tests/test_compact_catalog_shell.py
       - name: Purchase popup at 125 percent
         env:
           QT_SCALE_FACTOR: '1.25'

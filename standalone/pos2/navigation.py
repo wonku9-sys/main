@@ -187,7 +187,9 @@ class NavigationGuard(QObject):
                 watched.setWindowModality(Qt.WindowModality.WindowModal)
             if kind == QEvent.Type.Show and not getattr(watched, "_sy_navigation_registered", False):
                 watched._sy_navigation_registered=True
-                if not getattr(watched,'_sy_no_home_button',False):
+                # The main toolbar already owns Home; ordinary editors need
+                # only their real actions and the native X, not another footer.
+                if getattr(watched,'_sy_show_home_button',False) and not getattr(watched,'_sy_no_home_button',False):
                     button = QPushButton("첫화면", watched)
                     button.setAutoDefault(False)
                     button.clicked.connect(self.request_home)
