@@ -1,0 +1,114 @@
+name: Native store identity and papers release
+on:
+  push:
+    tags: ['business-profile-v*']
+permissions:
+  contents: read
+  actions: read
+jobs:
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 20
+    env:
+      QT_QPA_PLATFORM: windows
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: x64
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.12.23'
+          enable-cache: true
+          cache-dependency-glob: standalone/uv.lock
+      - name: Attest unchanged persistence and business engine
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: python
+        run: |
+          import ast,json,subprocess
+          from pathlib import Path
+          tested='6fa1c929e2879b1355479f41783201fe21f248f7'
+          run=json.loads(subprocess.check_output(['gh','api','repos/wonku9-sys/main/actions/runs/39541648490'],text=True,encoding='utf-8'))
+          assert run['head_sha']==tested and run['conclusion']=='success'
+          changed=set(subprocess.check_output(['git','diff','--name-only',tested,'HEAD','--','standalone/pos2'],text=True).splitlines())
+          allowed={'standalone/pos2/'+name for name in ('__init__.py','store_profile_ui.py','catalog_ui.py','commercial_paper.py','offline_ui.py')}
+          assert changed<=allowed,changed-allowed
+          def original(name):return subprocess.check_output(['git','show',tested+':'+name],text=True,encoding='utf-8')
+          def current(name):return Path(name).read_text(encoding='utf-8')
+          for name in ('standalone/pos2/__init__.py','standalone/pyproject.toml','standalone/uv.lock'):
+              assert current(name).replace('2.4.0rc30','2.4.0rc29')==original(name),name
+          for name in ('standalone/requirements.txt','standalone/build_portable.py','standalone/launch.py'):
+              assert current(name)==original(name),name
+          def without_functions(source,targets):
+              tree=ast.parse(source);nodes=[]
+              for parent in tree.body:
+                  if isinstance(parent,ast.FunctionDef) and (None,parent.name) in targets:nodes.append((parent,(None,parent.name)))
+                  if isinstance(parent,ast.ClassDef):
+                      nodes.extend((node,(parent.name,node.name)) for node in parent.body if isinstance(node,ast.FunctionDef) and (parent.name,node.name) in targets)
+              lines=source.splitlines(keepends=True)
+              for node,key in sorted(nodes,key=lambda pair:pair[0].lineno,reverse=True):
+                  lines[node.lineno-1:node.end_lineno]=['REPLACED_FUNCTION '+str(key)+'\n']
+              return ''.join(lines)
+          catalog='standalone/pos2/catalog_ui.py';targets={('SettingsPage','__init__')}
+          assert without_functions(current(catalog),targets)==without_functions(original(catalog),targets)
+          ui='standalone/pos2/offline_ui.py';targets={('SalesFormDialog','__init__'),('SalesFormDialog','save'),('SalesFormsPage','output_data')}
+          assert without_functions(current(ui).replace('from .commercial_paper import supplier_summary\n',''),targets)==without_functions(original(ui),targets)
+          print('PASS: business ledger, settings persistence, issued-paper snapshots, permissions, schema and previous confirmation fix unchanged; changes confined to store identity UI and paper presentation')
+      - name: Install exact dependencies
+        run: uv sync --frozen --extra dev --project standalone
+      - name: Test all seven fields in actual PDF, print callback, PNG and XLSX
+        run: uv run --frozen --extra dev --project standalone python -m pytest -q standalone/tests/test_store_business_documents.py standalone/tests/test_shell_profile_defaults_cleanup.py standalone/tests/test_orders_negative_arcade_recovery.py standalone/tests/test_purchase_output.py standalone/tests/test_payment_access_layout.py standalone/tests/test_paper_migration_mail.py standalone/tests/test_personal_entry_contrast.py standalone/tests/test_v230_features.py::test_quotation_is_editable_and_has_no_stock_ledger_or_point_side_effects standalone/tests/test_v230_features.py::test_statement_snapshots_original_prices_without_posting_twice standalone/tests/test_v230_features.py::test_backup_restores_supplier_cents_forms_schedule_and_encrypted_diary standalone/tests/test_v230_features.py::test_quotation_editor_calculation_and_save
+      - name: Build and execute actual Windows EXE across all workflows
+        run: uv run --frozen --extra dev --project standalone python standalone/build_portable.py
+      - name: Package corresponding source
+        run: uv run --frozen --extra dev --project standalone python standalone/package_source.py
+      - name: Add clear versioned ASCII package names
+        shell: python
+        run: |
+          from pathlib import Path
+          from hashlib import sha256
+          import shutil
+          for kind,pattern in (('Windows-x64','*-Windows-x64-portable-*.zip'),('source','*-source-*.zip')):
+              files=list(Path('standalone/dist').glob(pattern));assert len(files)==1
+              target=Path('standalone/dist')/('SY-POS-v2.4.0rc30-'+kind+'-icons3d.zip')
+              shutil.copyfile(files[0],target)
+              target.with_suffix('.zip.sha256').write_text(sha256(target.read_bytes()).hexdigest()+'  '+target.name+'\n',encoding='utf-8')
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: business-profile-native-captures
+          if-no-files-found: warn
+          path: |
+            standalone/dist/SY-POS-Windows-smoke*.png
+            standalone/dist/SY-POS-Windows-smoke*.log
+      - uses: actions/upload-artifact@v4
+        with:
+          name: business-profile-verified-packages
+          if-no-files-found: error
+          path: |
+            standalone/dist/SY-POS-v*-icons3d.zip
+            standalone/dist/SY-POS-v*-icons3d.zip.sha256
+  release:
+    needs: windows
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: business-profile-verified-packages
+          path: release-assets
+      - name: Verify ZIP checksums
+        working-directory: release-assets
+        run: sha256sum --check *.zip.sha256
+      - name: Publish verified business identity and papers update
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: gh release create "$RELEASE_TAG" --verify-tag --prerelease --latest=false --title "SY POS v2.4.0rc30 · 매장 사업자정보와 문서 연결" --notes-file standalone/RELEASE_NOTES.md release-assets/*.zip release-assets/*.zip.sha256
