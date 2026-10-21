@@ -78,7 +78,9 @@ def test_four_toolbar_groups_are_ordered_without_extra_commands(desktop):
 @pytest.mark.parametrize('font_px',[14,18,22])
 def test_supplier_compact_rows_never_clip_native_font(desktop,font_px):
     app,_,window,_=desktop;window.open_page('suppliers');page=window.current_page
-    font=page.grid.font();font.setPixelSize(font_px);page.grid.setFont(font);app.processEvents()
+    # App-wide QSS overrides setFont(), so force the actual rendered size.
+    page.grid.setStyleSheet(page.grid.styleSheet()+f'QTableWidget{{font-size:{font_px}px;}}')
+    app.processEvents();assert page.grid.font().pixelSize()==font_px
     page.set_row_density(True);small=page.grid.verticalHeader().defaultSectionSize()
     assert small>=page.grid.fontMetrics().height()+6
     assert small>=page.grid.verticalHeader().minimumSectionSize()
