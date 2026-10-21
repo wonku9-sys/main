@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
 from .widgets import DataGrid, Cell, HeaderSafeTable, Page, ScanField, action, amount, date_field, search_icon, won
 from .common import decimal as value_decimal, qty
 from .currency import public_input as money, round_amount as rounded
+from .number_edit import GroupedNumberEdit
 
 
 KINDS = {"purchase": "매입", "sale": "매출", "purchase_return": "매입 반품", "sale_return": "매출 반품"}
@@ -255,8 +256,11 @@ class ProductPicker(QDialog):
         self.apply_checked_button = action("체크된 상품 적용", self.apply_checked, True)
         self.apply_checked_button.setToolTip('체크한 상품을 입력 목록에 한 번에 추가합니다. 전표는 최종 저장 전까지 재고·대금에 반영되지 않습니다.\n단축키: Enter')
         pages = QHBoxLayout()
-        pages.addWidget(action('이전 500개', lambda: self.move_page(-1)))
-        pages.addWidget(action('다음 500개', lambda: self.move_page(1)))
+        self.previous_page_button=action('이전 500개',lambda:self.move_page(-1))
+        self.next_page_button=action('다음 500개',lambda:self.move_page(1))
+        pages.addWidget(self.previous_page_button);pages.addWidget(self.next_page_button)
+        self.text_only_buttons=(self.previous_page_button,self.next_page_button,self.check_row_button,self.uncheck_row_button,self.check_all_button,self.uncheck_all_button,self.apply_checked_button)
+        for button in self.text_only_buttons:button.setIcon(QIcon())
         self.page_label = QLabel()
         pages.addWidget(self.page_label, 1)
         body.addLayout(pages)
@@ -586,7 +590,7 @@ class PurchaseBatchDialog(QDialog):
             index=self.table.rowCount();self.table.insertRow(index)
             for column,text in enumerate((row['product'].currentText(),row['unit'].currentText())):
                 item=QTableWidgetItem(text);item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable);self.table.setItem(index,column,item)
-            quantity=QLineEdit(row['qty'].text());price=QLineEdit(row['price'].text());price.setReadOnly(bool(row.get('source')))
+            quantity=GroupedNumberEdit(row['qty'].text());price=GroupedNumberEdit(row['price'].text());price.setReadOnly(bool(row.get('source')))
             self.table.setCellWidget(index,2,quantity);self.table.setCellWidget(index,3,price)
             self.inputs.append((row,quantity,price))
         self.initial=tuple((quantity.text(),price.text()) for _,quantity,price in self.inputs)
@@ -1278,9 +1282,9 @@ class TradeDialog(QDialog):
         from .trade_product_model import TradeProductCombo
         product = row["product"] = TradeProductCombo(self.product_model)
         unit = row["unit"] = QComboBox()
-        row["qty"], row["price"] = QLineEdit(str(quantity)), QLineEdit("0" if price is None else str(price))
+        row["qty"], row["price"] = GroupedNumberEdit(str(quantity)), GroupedNumberEdit("0" if price is None else str(price))
         row["stock"] = QLabel()
-        row['total'],row['factor'],row['sale_price'],row['line_memo']=QLineEdit(),QLineEdit('1'),QLineEdit('0'),QLineEdit()
+        row['total'],row['factor'],row['sale_price'],row['line_memo']=GroupedNumberEdit(),GroupedNumberEdit('1'),GroupedNumberEdit('0'),QLineEdit()
         row['barcode']=QLineEdit()
         row['barcode'].setReadOnly(self.readonly or self.is_return)
         row['barcode'].setToolTip('바코드를 입력한 뒤 Enter를 누르면 해당 상품·확장단위를 이 행에 적용합니다. 상품장의 바코드는 변경하지 않습니다.')
@@ -1508,7 +1512,7 @@ class TradeDialog(QDialog):
             unit_id = found["unit"]["id"] if found.get("unit") else None
             for row in self.line_rows:
                 if row["product"].currentData() == product_id and row["unit"].currentData() == unit_id:
-                    row["qty"].setText(str(Decimal(row["qty"].text()) + 1))
+                    row["qty"].setText(str(value_decimal(row["qty"].text()) + 1))
                     break
             else:
                 empty = next((row for row in self.line_rows if not row["product"].currentData()), None)
@@ -1566,7 +1570,7 @@ class TradeDialog(QDialog):
                     if 'amount_override' in row:value=money(row['amount_override'])
                 if not row.get('editing_amount'):
                     self.set_line_text(row['total'],won(value))
-                for key in ('total','price','sale_price'):
+                for key in ('qty','factor','total','price','sale_price'):
                     column=self.line_columns.index(key)
                     needed=row[key].fontMetrics().horizontalAdvance(row[key].text())+12
                     if self.table.columnWidth(column)<needed:self.table.setColumnWidth(column,needed)

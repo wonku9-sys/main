@@ -1412,11 +1412,16 @@ def main(argv=None):
                             picker.set_apply_callback(purchase.apply_picked_products)
                             # Purchase entry keeps the picker open by default.
                             assert picker.keep_open.isChecked()
+                            assert all(button.icon().isNull() for button in picker.text_only_buttons)
+                            from .number_edit import GroupedNumberEdit
+                            assert isinstance(purchase.line_rows[0]['qty'],GroupedNumberEdit)
+                            assert any(',' in row['price'].text() for row in purchase.line_rows if row['product'].currentData())
                             assert picker.supplier_only.isChecked()
                             assert 0 < picker.grid.rowCount() < len(store.products())
                             picker.check_all(True)
                             capture("-product-search", picker)
                             picker.apply_checked();assert picker.isVisible() and not picker.checked and picker.applied_batches==1
+                            print('PASS purchase picker continuity: open by default after apply, text-only footer, grouped numeric editors',flush=True)
                             capture('-product-search-continuous',picker)
                             picker.close()
                             purchase.close()

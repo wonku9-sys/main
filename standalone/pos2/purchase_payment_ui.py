@@ -13,6 +13,7 @@ from .widgets import DataGrid, FormDialog, action, date_field, won
 from .workflow_ui import _confirm, _date, _warn
 
 from .payment_finance import METHODS,DISCOUNTS
+from .number_edit import GroupedNumberEdit
 
 
 class PurchasePaymentDialog(QDialog):
@@ -55,7 +56,7 @@ class PurchasePaymentDialog(QDialog):
             self.figures[key] = field; self.figure_captions[key] = QLabel(caption, target)
             if key == 'cap': form.addRow(self.figure_captions[key], field)
             else: field.hide(); self.figure_captions[key].hide()
-        self.target_amount = QLineEdit('0'); self.target_amount.setAccessibleName('결제대상액')
+        self.target_amount = GroupedNumberEdit('0'); self.target_amount.setAccessibleName('결제대상액')
         self.target_amount.setAlignment(Qt.AlignmentFlag.AlignRight)
         self.payment_rate = QLineEdit('100'); self.payment_rate.setMaximumWidth(55)
         self.rate_button = action('적용', self.apply_payment_rate)
@@ -67,7 +68,7 @@ class PurchasePaymentDialog(QDialog):
         self.dc_button = action('적용', self.apply_dc_rate)
         self.rate_button.setIcon(QIcon());self.dc_button.setIcon(QIcon())
         for method in ('dc', 'rebate', 'coupon', 'other_discount'):
-            field = QLineEdit('0'); field.setAlignment(Qt.AlignmentFlag.AlignRight)
+            field = GroupedNumberEdit('0'); field.setAlignment(Qt.AlignmentFlag.AlignRight)
             field.setAccessibleName(METHODS[method]+' 할인액'); self.discounts[method] = field
             if method == 'dc':
                 row = QHBoxLayout(); row.addWidget(field, 1); row.addWidget(QLabel('결제DC율'))
@@ -96,7 +97,7 @@ class PurchasePaymentDialog(QDialog):
         self.account.setToolTip('매장 계좌 또는 직접 입력한 인출계좌를 결제 이력에 보관합니다. 실제 송금은 하지 않습니다.')
         self.components = {}
         for method in ('transfer', 'card', 'cash', 'bill'):
-            field = QLineEdit('0'); field.setAlignment(Qt.AlignmentFlag.AlignRight)
+            field = GroupedNumberEdit('0'); field.setAlignment(Qt.AlignmentFlag.AlignRight)
             field.setAccessibleName(METHODS[method]+' 지급액'); self.components[method] = field
             if method == 'transfer':
                 row = QHBoxLayout(); row.addWidget(field, 1); row.addWidget(self.account, 2); form.addRow('[지급] 계좌이체', row)
