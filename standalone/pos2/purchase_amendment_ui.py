@@ -20,7 +20,7 @@ def configure_revision(trade):
     trade.paid.setReadOnly(True)
     trade.method.setEnabled(False)
     trade.date.setMinimumDate(QDate.fromString(context['minimum_date'], 'yyyy-MM-dd'))
-    trade.date.setMaximumDate(QDate.currentDate())
+    trade.date.setMaximumDate(QDate.fromString(context['maximum_date'], 'yyyy-MM-dd'))
     trade.post_button.setToolTip('기존 전표번호·결제 기록을 유지하고 변경 전후와 수정 사유를 함께 저장합니다.\n단축키: Alt+S')
     trade.explanation.setText('확정 매입 수정 · 달력상 3개월 이내 · 원번호/결제/변경 전후 보존 · 수정 사유 필수'
                               + ('\n'+context['stock_reason'] if not context['stock_editable'] else ''))

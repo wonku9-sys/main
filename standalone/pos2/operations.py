@@ -121,6 +121,8 @@ class OperationsMixin:
             bucket['closing_qty']+=row['qty_delta'];bucket['stock_cost']+=row['cost_delta']
             if row['date']<start:
                 bucket['opening_qty']+=row['qty_delta'];bucket['opening_cost']+=row['cost_delta']
+            elif row['kind'] in {'purchase_edit', 'purchase_edit_reverse'}:
+                bucket['purchase_qty'] += row['qty_delta']
             else:
                 field={'purchase':'purchase_qty','purchase_return':'purchase_return_qty','sale':'sale_qty','sale_return':'sale_return_qty','waste':'waste_qty'}.get(row['kind'],'adjustment_qty')
                 bucket[field]+=abs(row['qty_delta']) if field!='adjustment_qty' else row['qty_delta']

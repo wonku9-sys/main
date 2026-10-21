@@ -62,6 +62,8 @@ def test_quantity_price_revision_retains_identity_and_full_before_after(shop):
     assert history[0]['after']['document']['total'] == Decimal('154.25')
     assert history[0]['before']['lines'][0]['input_qty'] == '10.000'
     assert s.ledger(supplier)['closing'] == Decimal('154.25')
+    movement = s.inventory_assets(TODAY, TODAY)['rows'][0]
+    assert movement['purchase_qty'] == '12.500' and movement['adjustment_qty'] == '0.000'
     _validate_database(s.db)
 
 
@@ -137,6 +139,8 @@ def test_date_shift_preserves_period_stock_totals_and_active_payment_date(shop):
     assert s.document(identifier)['date'] == yesterday and stock(s, product) == ('10.000', 100)
     assert s.db.execute('SELECT SUM(qty_delta) FROM stock_events WHERE product_id=? AND date=?', (product, TODAY)).fetchone()[0] == 0
     assert s.db.execute('SELECT SUM(qty_delta) FROM stock_events WHERE product_id=? AND date=?', (product, yesterday)).fetchone()[0] == 10000
+    assert s.inventory_assets(TODAY, TODAY)['rows'][0]['purchase_qty'] == '0.000'
+    assert s.inventory_assets(yesterday, yesterday)['rows'][0]['purchase_qty'] == '10.000'
     s.add_payment(identifier, 1, yesterday, 'transfer')
     data = payload(s, identifier); data.update(date=TODAY, entry_datetime=TODAY+' 10:00:00')
     with pytest.raises(ValueError, match='결제일보다'): save(s, identifier, data)
@@ -291,3 +295,16 @@ def test_new_item_stale_base_unit_or_price_basis_is_rejected(shop):
     data['lines'][-1].update(expected_price_basis=100, expected_base_unit='kg')
     with pytest.raises(ValueError, match='기본단위'): save(s, identifier, data)
     assert stock(s, product) == ('0.000', 0) and not s.purchase_revisions(identifier)
+
+
+def test_editor_identity_preserved_after_staff_removal(shop):
+    s, _, _, identifier = shop
+    uid = s.save_user(dict(code='editor', name='수정 담당', role='staff', password='Editor-Strong-2026!', permissions=['trade']))
+    data = payload(s, identifier); data['memo'] = '품목 유지·메모 수정'
+    other = Store(s.path)
+    try:
+        other.login('editor', 'Editor-Strong-2026!'); save(other, identifier, data)
+    finally: other.close()
+    s.delete_user(uid)
+    history = s.purchase_revisions(identifier)[0]
+    assert history['user_name'] == '수정 담당' and history['editor_code'] == 'editor'

@@ -930,7 +930,7 @@ class TradeDialog(QDialog):
             self.revision_reason = QLineEdit()
             self.revision_reason.setObjectName('purchaseRevisionReason')
             self.revision_reason.setPlaceholderText('수정 사유 (필수 · 원래 전표와 함께 이력에 보존됩니다)')
-            body.addWidget(self.revision_reason)
+            self.revision_reason.setToolTip('수정 사유를 입력한 뒤 저장하세요. 화면을 줄여도 하단에 고정됩니다.')
         footer = QHBoxLayout()
         self.print_button = action("전표 인쇄", self.print_document)
         self.excel_button = action("엑셀 저장", self.export_document)
@@ -978,7 +978,14 @@ class TradeDialog(QDialog):
         for button in (self.draft_button, self.post_button):
             button.setAutoDefault(False)
             footer.addWidget(button)
-        self._sy_pinned_footer=_compact_scroll_row(footer,56)
+        button_strip = _compact_scroll_row(footer,56)
+        if self.amending:
+            self._sy_pinned_footer = QWidget()
+            pinned = QVBoxLayout(self._sy_pinned_footer)
+            pinned.setContentsMargins(0,0,0,0); pinned.setSpacing(3)
+            pinned.addWidget(self.revision_reason); pinned.addWidget(button_strip)
+        else:
+            self._sy_pinned_footer = button_strip
         body.addWidget(self._sy_pinned_footer)
         self.shortcut_scan = QShortcut(QKeySequence(scan_key), self)
         self.shortcut_scan.activated.connect(self.focus_scan)

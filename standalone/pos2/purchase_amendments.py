@@ -70,7 +70,7 @@ class PurchaseAmendmentMixin:
         self._require('trade'); self.require_menu('purchases')
         record = self._trade_row(identifier)
         cutoff = three_month_cutoff()
-        result = dict(allowed=False, reason='', stock_editable=False, stock_reason='', minimum_date=cutoff,
+        result = dict(allowed=False, reason='', stock_editable=False, stock_reason='', minimum_date=cutoff, maximum_date=date.today().isoformat(),
                       document_token=self._edit_snapshot('documents', identifier), state=self._purchase_revision_state(identifier))
         try:
             self._require_capability('purchases', 'edit')
@@ -203,6 +203,7 @@ class PurchaseAmendmentMixin:
                 self._audit('purchase_price_check', 'product', change['product_id'], dict(document_id=identifier, **change))
             self._audit('revise_purchase', 'document', identifier,
                         dict(original_date=self._purchase_original_date(identifier, old['date']), reason=reason,
+                             editor_name=self.actor['name'], editor_code=self.actor['code'],
                              before=before, after=self._purchase_revision_snapshot(identifier)))
             return identifier
 
@@ -218,5 +219,5 @@ class PurchaseAmendmentMixin:
                     for key in ('input_qty', 'base_qty', 'factor'): line[key] = qtext(line[key])
                     for key in ('unit_price', 'total', 'cost', 'commission_amount'): line[key] = money(line[key])
                 for payment in snapshot['payments']: payment['amount'] = money(payment['amount'])
-            rows.append(dict(id=row['id'], at=row['at'], user_name=row['user_name'] or '', **detail))
+            rows.append(dict(id=row['id'], at=row['at'], user_name=detail.get('editor_name') or row['user_name'] or '', **detail))
         return rows

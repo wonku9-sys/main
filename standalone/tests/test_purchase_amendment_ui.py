@@ -11,6 +11,8 @@ from pos2.workflow_ui import TradeDialog
 @pytest.fixture
 def desktop(shop, monkeypatch):
     app = QApplication.instance() or QApplication([])
+    from pos2.popup_policy import install_popup_policy
+    install_popup_policy(app)
     window = QMainWindow(); window.store = shop[0]; window.notify = lambda *_: None
     warnings = []
     monkeypatch.setattr('pos2.workflow_ui._warn', lambda _, error: warnings.append(str(error)))
@@ -20,13 +22,22 @@ def desktop(shop, monkeypatch):
     QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete); app.processEvents()
 
 
-def test_posted_purchase_edit_save_keeps_identity_and_history(shop, desktop):
+def test_posted_purchase_edit_save_keeps_identity_and_history(shop, desktop, monkeypatch):
+    from PySide6.QtCore import QDate
+    # A connected PC's own clock must not silently clamp the host's trade date.
+    class HostCalendar:
+        fromString = staticmethod(QDate.fromString)
+    monkeypatch.setattr('pos2.purchase_amendment_ui.QDate', HostCalendar)
     s, _, _, identifier = shop; app, window, warnings = desktop
     trade = TradeDialog(window, 'purchase', identifier); trade.show(); app.processEvents()
     trade.check_catalog_prices = lambda: []
     assert trade.amending and not trade.readonly
+    assert trade.date.maximumDate().toString('yyyy-MM-dd') == trade.amend_context['maximum_date']
     assert trade.post_button.isVisible() and not trade.draft_button.isVisible()
     assert trade.revision_reason.isVisible() and trade.explanation.isVisible()
+    trade.resize(1000, 600); app.processEvents()
+    assert trade._sy_pinned_footer.isAncestorOf(trade.revision_reason)
+    assert trade.rect().contains(trade.revision_reason.mapTo(trade, trade.revision_reason.rect().bottomRight()))
     assert trade.payload()['paid'] == '0' and trade.paid.isReadOnly()
     assert trade.payload()['lines'][0]['line_id'] == s.document(identifier)['lines'][0]['id']
     trade.line_rows[0]['qty'].setText('12.5'); trade.save(True, False)
