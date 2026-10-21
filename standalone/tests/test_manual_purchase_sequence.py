@@ -165,6 +165,7 @@ def test_real_nested_supplier_product_amount_save_price_check_sequence(shop,monk
     def voucher_step(dialog):
         sequence.append('새 매입전표');assert dialog.partner.currentData()==supplier
         press(dialog,'F5');row=dialog.line_rows[0]
+        assert row['qty'].hasFocus()
         dialog.date.setDateTime(QDateTime.fromString(date.today().isoformat()+' 10:35:00','yyyy-MM-dd HH:mm:ss'))
         row['qty'].setText('3');row['total'].setFocus();row['total'].selectAll();QTest.keyClicks(row['total'],'100')
         assert row['price'].text()=='33.33' and row['amount_override']==100

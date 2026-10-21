@@ -1323,8 +1323,14 @@ class TradeDialog(QDialog):
             return
         dialog = ProductPicker(self)
         dialog.set_apply_callback(self.apply_picked_products)
-        if dialog.exec() == QDialog.DialogCode.Accepted and not dialog.applied_batches:
+        accepted=dialog.exec()==QDialog.DialogCode.Accepted
+        if accepted and not dialog.applied_batches:
             self.apply_picked_products(dialog.selections or [(dialog.record, dialog.unit_id)])
+        if accepted or dialog.applied_batches:
+            # A modal picker owns focus until exec() returns. Restore the
+            # voucher explicitly so Space can be followed by quantity typing.
+            self.activateWindow()
+            QTimer.singleShot(0,self,self.edit_selected_line)
 
     def apply_picked_products(self, selections):
         if self.readonly or self.is_return:return
@@ -1353,7 +1359,9 @@ class TradeDialog(QDialog):
         self.recalculate()
         if selections and selections[0][0]:
             first=next((r for r in self.line_rows if r['product'].currentData()==selections[0][0]['id']),None)
-            if first:first['qty'].setFocus();first['qty'].selectAll()
+            if first:
+                self.table.setCurrentCell(self.line_rows.index(first),self.line_columns.index('qty'))
+                first['qty'].setFocus();first['qty'].selectAll()
 
     def unit_changed(self, row):
         identifier = row["product"].currentData()
