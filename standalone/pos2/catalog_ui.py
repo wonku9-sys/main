@@ -1884,7 +1884,7 @@ class SettingsPage(Page):
         _button("이메일 발송 설정",self.mail_settings,self.actions)
         _button('점포 등록정보',lambda:self.window.open_page('store_profile'),self.actions)
         from .store_profile_ui import business_registration
-        self.business_registration,self.business_registration_grid=business_registration(self.fields,'매장 기본정보 · 사업자 등록 정보 (영수증 표기)')
+        self.business_registration,self.business_registration_grid=business_registration(self.fields,'매장 기본정보 · 사업자 등록정보 (영수증 표기)')
         self.body.addWidget(self.business_registration)
         appearance=QGroupBox('화면 색감 · 계절 스킨');appearance_form=QFormLayout(appearance)
         from .appearance import THEMES

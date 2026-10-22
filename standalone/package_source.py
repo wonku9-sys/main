@@ -20,6 +20,9 @@ def source_files():
     files += [ROOT/'pos2'/'assets'/name for name in ('output-icons-real3d.png','OUTPUT_ICONS_3D.md')]
     files += [ROOT/'pos2'/'assets'/name for name in ('payment-icons-real3d.png','PAYMENT_ICONS_3D.md')]
     files += [ROOT/'pos2'/'assets'/name for name in ('purchase-actions-real3d.png','PURCHASE_ACTIONS_3D.md')]
+    files += [ROOT/'pos2'/'assets'/name for name in ('done-real3d.png','DONE_ICON_3D.md')]
+    files += [ROOT/'pos2'/'assets'/name for name in ('document-writing-real3d.png','DOCUMENT_ICONS_3D.md')]
+    files += [ROOT/'pos2'/'assets'/name for name in ('connection-actions-real3d.png','CONNECTION_ICONS_3D.md')]
     files += [ROOT/'pos2'/'assets'/name for name in ('diary-real3d.png','household-real3d.png','PERSONAL_ICONS_3D.md')]
     files += [ROOT/'pos2'/'assets'/'sy-pos-wordmark-3d.png']
     files += list((ROOT / 'pos2' / 'assets').glob('step-*.svg'))

@@ -73,7 +73,7 @@ def test_same_day_payment_replace_is_atomic_keeps_history_and_rejects_stale_inpu
     assert s.supplier_settlement_detail(original)['voided']
     assert s.supplier_settlement_detail(replacement)['amount']==Decimal('40.25')
     assert s.supplier_outstanding(supplier)['balance']==Decimal('70.50')
-    with pytest.raises(ValueError,match='당일'):
+    with pytest.raises(ValueError,match='유효한'):
         s.replace_supplier_payment('settlement',original,'20','cash','','중복 입력',expected)
 
 

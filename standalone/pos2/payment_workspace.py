@@ -84,11 +84,21 @@ def setup(page):
     for title,key in (('결제방법 전체',''),('현금','cash'),('계좌이체','transfer'),('카드 수기','card')):page.method_filter.addItem(title,key)
     selection.addWidget(page.method_filter)
     page.payment_process_button=action_button('결제처리',page.pay);selection.addWidget(page.payment_process_button)
-    page.payment_edit_button=action_button('당일 결제 수정',page.edit_payment);selection.addWidget(page.payment_edit_button)
+    page.payment_edit_button=action_button('결제수정',page.edit_payment);selection.addWidget(page.payment_edit_button)
     page.payment_void_button=action_button('선택 결제 취소',page.void);selection.addWidget(page.payment_void_button)
+    def bulk_pay():
+        from .payment_bulk_ui import BulkPaymentDialog
+        from PySide6.QtWidgets import QDialog
+        dialog=BulkPaymentDialog(page.window,page)
+        if dialog.exec()==QDialog.DialogCode.Accepted:page.refresh()
+    page.bulk_payment_button=action_button('일괄결제',bulk_pay);selection.addWidget(page.bulk_payment_button)
+    page.bulk_payment_button.setToolTip('공급사별 지급·할인을 검토한 뒤 입력(F5) → 확정(F9)으로 한 번에 기록합니다. 실제 송금은 하지 않습니다.')
     page.payment_selection=QWidget();page.payment_selection.setLayout(selection);main.addWidget(page.payment_selection)
     page.payment_void_action=page.payment_void_button;page.payment_edit_action=page.payment_edit_button
     page.grid.setColumnCount(len(SUMMARY_HEADERS));page.grid.setHorizontalHeaderLabels(SUMMARY_HEADERS)
+    page.ledger_grid.setColumnCount(8);page.ledger_grid.setHorizontalHeaderLabels(['일자','구분','전표번호','거래액','지급·환급','누적잔액','메모','결제확인'])
+    page.ledger_grid.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+    page.ledger_grid.customContextMenuRequested.connect(lambda point:ledger_menu(page,point))
     page.history_grid.setColumnCount(len(HISTORY_HEADERS));page.history_grid.setHorizontalHeaderLabels(HISTORY_HEADERS)
     page.tabs.setTabText(0,'외상매입현황');page.tabs.setTabText(1,'공급사별 거래내역');page.tabs.setTabText(2,'매입결제현황')
     page.purchase_detail_grid=DataGrid(['상품명','규격','바코드','수량','입력단위','단가','단가 기준','매입금액','과면세'])
@@ -141,6 +151,11 @@ def configure_menus(page):
     reports.addSeparator();reports.addAction('영업일보',lambda:page.window.open_page('report_day_summary'))
     reports.addAction('매입현황',lambda:page.tabs.setCurrentIndex(0))
     page.payment_menu_groups[4].addAction('현금 · 월재고 마감',lambda:page.window.open_page('closings'))
+    def payment_close():
+        from .payment_closing_ui import PaymentMonthCloseDialog
+        dialog=PaymentMonthCloseDialog(page.window,page);dialog.exec()
+        if dialog.changed:page.refresh()
+    page.payment_close_action=page.payment_menu_groups[4].addAction('MIS 월마감',payment_close)
     misc=page.payment_menu_groups[5];misc.addAction('매입전표로 돌아가기',lambda:page.window.open_page('purchases'));misc.addAction('첫화면',lambda:page.window.go_home())
 
 
@@ -176,7 +191,8 @@ def view_changed(page,index,query=True):
     caption=view_caption(page,index);page.header.context.setText(caption);page.header.context.show()
     if getattr(page.window,'current_key',None)=='payments':
         from . import __version__
-        page.window.setWindowTitle(caption+' ◀ '+page.window._store_name+' ◀ SY POS '+__version__)
+        host=getattr(page.window,'popup_windows',{}).get('payments',page.window)
+        host.setWindowTitle(caption+' ◀ '+page.window._store_name+' ◀ SY POS '+__version__)
         page.window._update_history_actions()
     extra=index>=4;page.payment_side.setVisible(index in {1,2,3})
     page.payment_selection.setVisible(not extra)
@@ -187,6 +203,7 @@ def view_changed(page,index,query=True):
     for control in (page.settlement_filter,page.day_filter,page.only_purchases):control.setVisible(index==0)
     page.include_voided.setVisible(index in {2,4})
     page.payment_process_button.setVisible(index in {0,1});page.payment_edit_button.setVisible(index==2);page.payment_void_button.setVisible(index==2)
+    page.bulk_payment_button.setVisible(index==2)
     page.bank_panel.setVisible(index==1)
     if index>=4:page.summary.hide()
     else:page.summary.show()
@@ -236,15 +253,33 @@ def refresh(page):
         for c,color in ((4,'#DBEFDD'),(5,'#F7DADC'),(7,'#DFE4E7'),(8,'#E5DBED'),(9,'#F6F4C4'),(10,'#F6F4C4')):page.grid.item(r,c).setBackground(QColor(color))
     for c in range(page.grid.columnCount()):page.grid.item(len(rows),c).setForeground(QColor('#24538D'))
     page.summary.setText(f"공급사 {len(rows):,}개 · 기간말 잔액 {won(sum(r['closing'] for r in rows))}원 / 현재 잔액 {won(sum(r['balance'] for r in rows))}원 · 지급(어음 포함)과 할인은 별도 집계합니다.\n상품재고액은 현재 상품 공급사 기준의 저장 원가입니다. 수기 장부이며 은행 송금·카드 승인 통신은 하지 않습니다.")
-    ledger_data=page.store.ledger(party,first,last) if party else None
+    ledger_data=page.store.supplier_ledger(party,first,last) if party else None
     ledger=ledger_data['entries'] if ledger_data else []
     if page.ledger_mode.currentIndex()==1:
         groups=defaultdict(list)
         for r in ledger:groups[r['date']].append(r)
         ledger=[dict(date=key,kind='day',number='일자 합계',charge=sum(r['charge'] for r in values),payment=sum(r['payment'] for r in values),balance=values[-1]['balance'],memo='') for key,values in groups.items()]
     if ledger_data:ledger=[dict(date=first,kind='carry',number='전기이월',charge=0,payment=0,balance=ledger_data['opening'],memo='')]+ledger
-    fill_ordered(page.ledger_grid,[[r['date'],KINDS.get(r['kind'],{'carry':'전기이월','opening':'초기 외상','payment':'지급/할인','refund':'환급','day':'일자 합계'}.get(r['kind'],r['kind'])),r['number'],r['charge'],r['payment'],r['balance'],r['memo']] for r in ledger],ledger)
+    fill_ordered(page.ledger_grid,[[r['date'],KINDS.get(r['kind'],{'carry':'전기이월','opening':'초기 외상','payment':'지급/할인','refund':'환급','day':'일자 합계'}.get(r['kind'],r['kind'])),r['number'],r['charge'],r['payment'],r['balance'],r['memo'],'O' if r.get('checked') else ''] for r in ledger],ledger)
     history=page.store.supplier_payment_history(first,last,party,page.include_voided.isChecked())
     history=[r for r in history if term in (r['partner_code']+' '+r['partner_name']).casefold() and (not page.method_filter.currentData() or r['method']==page.method_filter.currentData())]
     from .payment_finance import DISCOUNTS
     page.history_grid.fill([[r['partner_code'],r['partner_name'],r['date'],r['amount'] if r['method']=='cash' else 0,r['amount'] if r['method']=='transfer' else 0,r['amount'] if r['method']=='card' else 0,r['amount'] if r['method']=='bill' else 0,r['amount'] if r['method'] in DISCOUNTS else 0,r['amount'],r['user_name'],'취소' if r['voided'] else '유효',r['memo'],r['number']] for r in history],history)
+
+
+def ledger_menu(page,point):
+    from PySide6.QtWidgets import QMenu
+    from .permissions import can_action
+    grid=page.ledger_grid;item=grid.indexAt(point)
+    if item.isValid():grid.selectRow(item.row())
+    row=grid.selected() or {};menu=QMenu(page)
+    def checked():
+        try:
+            page.store.set_supplier_ledger_checked(page.partner.currentData(),row['source_type'],row['source_id'],not row['checked'],row['confirmation_state'])
+            page.refresh()
+        except (ValueError,PermissionError,ConnectionError) as exc:page.fail(exc)
+    entry=menu.addAction('결제수정 · 확인 O 해제' if row.get('checked') else '결제수정 · 확인 O 표시',checked)
+    entry.setToolTip('결제확인 표시만 바꿉니다. 지급액·공급사 잔액·재고는 변경하지 않습니다.')
+    entry.setEnabled(bool(row.get('confirmation_state')) and can_action(page.store.actor,'payments','create'))
+    menu.addSeparator();menu.addAction('인쇄',lambda:grid.print_pages(page,'공급사별 거래내역'));menu.addAction('엑셀저장',lambda:grid.export(page,'공급사별 거래내역'))
+    page._ledger_menu=menu;menu.popup(grid.viewport().mapToGlobal(point))

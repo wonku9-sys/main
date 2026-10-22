@@ -1,6 +1,8 @@
 """One continuous worksheet, without nested rounded input cards in each cell."""
 from PySide6.QtCore import QEvent, Qt
-from PySide6.QtWidgets import QComboBox, QLineEdit, QTableWidgetItem
+from PySide6.QtGui import QKeySequence
+from PySide6.QtWidgets import QApplication, QComboBox, QLineEdit, QTableWidgetItem
+from shiboken6 import isValid
 from .widgets import HeaderSafeTable
 
 
@@ -21,6 +23,8 @@ class EntrySheet(HeaderSafeTable):
             QLineEdit:read-only {color:#283830; background:#F8F8F2;}
             QLineEdit:focus, QComboBox:focus {background:#E4F1FF; border:1px solid #2682C9; padding:0px 3px; selection-background-color:#1682C5; selection-color:white;}
             QComboBox::drop-down {border:0px; width:14px;}
+            QComboBox[syPickerOnly="true"]::drop-down {width:0px; border:0px;}
+            QComboBox[syPickerOnly="true"]::down-arrow {image:none; width:0px;}
             QLabel {color:#18231C; background:#F3F3E8; padding:1px 3px; border:0px;}
             QPushButton {border-radius:0px; padding:1px 3px; min-height:0px; min-width:0px;}
         ''')
@@ -43,6 +47,18 @@ class TradeSheet(EntrySheet):
         self.owner = owner
         self.setObjectName('tradeWorksheet')
         self.setSelectionMode(self.SelectionMode.SingleSelection)
+        self.purchase_layout = owner.kind.startswith('purchase')
+        self.selection_scope = 'cell'; self._setting_selection = False; self._painted_fields = []
+        self.setEditTriggers(self.EditTrigger.NoEditTriggers)
+        if self.purchase_layout:
+            self.viewport().installEventFilter(self)
+            self.verticalHeader().setStyleSheet('QHeaderView::section {background:#EEEFCF;color:#17231F;border:1px solid #B9BBB7;}')
+            self.currentCellChanged.connect(self._current_changed)
+            self.verticalHeader().sectionClicked.connect(lambda row:self.choose_row(row))
+            for header in (self.horizontalHeader(),self.verticalHeader()):
+                header.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+                header.viewport().installEventFilter(self)
+                header.customContextMenuRequested.connect(lambda point,source=header:self.header_menu(source,point))
 
     def bind(self, row, index):
         for column, key in enumerate(self.owner.line_columns):
@@ -56,16 +72,111 @@ class TradeSheet(EntrySheet):
                 field.setStyleSheet('padding:1px 4px;min-width:0px;min-height:0px;border-radius:0px;')
             if key in {'total', 'base_qty'}:
                 field.setStyleSheet('background:#E5E2F8;color:#142432;border:0px;border-radius:0px;padding:1px 4px;min-height:0px;min-width:0px;font-weight:600;')
+            if self.purchase_layout and column<2:
+                field.setStyleSheet(field.styleSheet()+';background:#EEEFCF;color:#17231F;')
+
+    def choose_row(self, row):
+        if not 0<=row<len(self.owner.line_rows):return
+        self._setting_selection=True
+        try:
+            self.selection_scope='row';self.setCurrentCell(row,0);self.selectRow(row)
+        finally:self._setting_selection=False
+        self.paint_selection()
+
+    def choose_cell(self,row,column):
+        self._setting_selection=True
+        try:
+            self.selection_scope='cell';self.clearSelection();self.setCurrentCell(row,column)
+        finally:self._setting_selection=False
+        self.paint_selection()
+
+    def _current_changed(self,row,column,*_):
+        if not self._setting_selection:
+            self.selection_scope='row' if column<2 else 'cell'
+            self.paint_selection()
+
+    def paint_selection(self):
+        if not self.purchase_layout:return
+        suffix=';background:#087FD3;color:#FFFFFF;selection-background-color:#005A9E;selection-color:#FFFFFF;'
+        for field,base in self._painted_fields:
+            if isValid(field) and field.styleSheet()==base+suffix:field.setStyleSheet(base)
+        self._painted_fields=[]
+        index=self.currentRow()
+        if not 0<=index<len(self.owner.line_rows):return
+        row=self.owner.line_rows[index]
+        columns=range(2,len(self.owner.line_columns)) if self.selection_scope=='row' else (self.currentColumn(),)
+        for column in columns:
+            if column<2:continue
+            field=row[self.owner.line_columns[column]];base=field.styleSheet()
+            field.setStyleSheet(base+suffix);self._painted_fields.append((field,base))
+
+    def header_menu(self,header,point):
+        vertical=header is self.verticalHeader()
+        row=header.logicalIndexAt(point) if vertical else self.currentRow()
+        self.show_product_menu(row,header.viewport().mapToGlobal(point),0 if vertical and row>=0 else None)
+
+    def show_product_menu(self,row,position,column=None):
+        if not self.purchase_layout:return
+        if 0<=row<len(self.owner.line_rows):
+            if column is not None:
+                if column<2:self.choose_row(row)
+                else:self.choose_cell(row,column)
+            elif row!=self.currentRow():self.choose_row(row)
+        from .purchase_context_menu import build_menu
+        previous=getattr(self,'_product_menu',None)
+        if previous is not None and isValid(previous):previous.close();previous.deleteLater()
+        self._product_menu=build_menu(self.owner)
+        self._product_menu.popup(position)
+
+    def contextMenuEvent(self,event):
+        if self.purchase_layout:
+            index=self.indexAt(event.pos())
+            self.show_product_menu(index.row() if index.isValid() else self.currentRow(),event.globalPos(),index.column() if index.isValid() else None)
+            event.accept();return
+        super().contextMenuEvent(event)
+
+    def paste_excel(self,event):
+        if self.purchase_layout and event.matches(QKeySequence.StandardKey.Paste):
+            value=QApplication.clipboard().text()
+            if '\t' in value or '\n' in value:
+                from .purchase_clipboard import paste_purchase
+                paste_purchase(self.owner);event.accept();return True
+        return False
+
+    def keyPressEvent(self,event):
+        if self.paste_excel(event):return
+        super().keyPressEvent(event)
 
     def eventFilter(self, field, event):
-        if event.type() not in (QEvent.Type.FocusIn, QEvent.Type.KeyPress):
+        if event.type() not in (QEvent.Type.FocusIn, QEvent.Type.KeyPress, QEvent.Type.MouseButtonPress, QEvent.Type.ContextMenu):
             return super().eventFilter(field,event)
+        # Open on the real mouse press as well as keyboard/native context
+        # events. This includes the gray viewport before any product is added.
+        if self.purchase_layout and event.type()==QEvent.Type.MouseButtonPress and event.button()==Qt.MouseButton.RightButton:
+            for header in (self.horizontalHeader(),self.verticalHeader()):
+                if field is header.viewport():
+                    self.header_menu(header,event.position().toPoint());return True
+            if field is self.viewport():
+                index=self.indexAt(event.position().toPoint())
+                self.show_product_menu(index.row() if index.isValid() else self.currentRow(),event.globalPosition().toPoint(),index.column() if index.isValid() else None)
+                return True
+            row=next((i for i,data in enumerate(self.owner.line_rows) if any(value is field for value in data.values())),None)
+            if row is not None:
+                self.show_product_menu(row,event.globalPosition().toPoint(),field.property('sheet_column'));return True
         # Resolve row dynamically: deleting/moving rows must not leave stale indices.
         row = next((i for i, data in enumerate(self.owner.line_rows) if any(value is field for value in data.values())), None)
         column = field.property('sheet_column')
         if row is not None and column is not None:
+            if event.type()==QEvent.Type.KeyPress and self.paste_excel(event):return True
+            if self.purchase_layout and event.type()==QEvent.Type.ContextMenu:
+                self.show_product_menu(row,event.globalPos(),column);return True
+            if self.purchase_layout and event.type()==QEvent.Type.MouseButtonPress and event.button()==Qt.MouseButton.LeftButton:
+                if column<2 and self.owner.line_rows[row]['product'].currentData():
+                    self.choose_row(row);self.setFocus();return True
+                self.choose_cell(row,column)
             if event.type() == QEvent.Type.FocusIn:
-                self.setCurrentCell(row, column)
+                if self.purchase_layout:self.choose_cell(row,column) if column>=2 else self.choose_row(row)
+                else:self.setCurrentCell(row, column)
             elif event.type() == QEvent.Type.KeyPress and not self.owner.readonly and isinstance(field, QLineEdit):
                 key = event.key()
                 if event.modifiers() == Qt.KeyboardModifier.NoModifier and key in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Up, Qt.Key.Key_Down):

@@ -216,11 +216,13 @@ def test_direct_edit_is_atomic_and_keeps_original(shop,monkeypatch):
 
 def test_grouped_payments_cannot_be_partially_voided(shop):
     _,s,window,supplier,_,_,document=shop
-    s.settle_supplier(supplier,'1600.25',date.today(),'card')
+    identifier=s.settle_supplier(supplier,'1600.25',date.today(),'card')
     dialog=PurchasePaymentDialog(window,document)
     dialog.tabs.setCurrentIndex(1);dialog.payments_grid.setCurrentCell(0,0)
-    assert not dialog.void_button.isEnabled() and not dialog.edit_button.isEnabled()
-    with pytest.raises(ValueError,match='묶음'):dialog.selected_payment()
+    assert dialog.void_button.isEnabled() and dialog.edit_button.isEnabled()
+    selected=dialog.selected_payment()
+    assert selected['source_type']=='settlement' and selected['batch_id']==identifier
+    with pytest.raises(ValueError,match='묶음'):s.void_payment(selected['id'],'부분 취소 금지')
 
 
 def test_new_apis_are_in_shared_pc_contract():

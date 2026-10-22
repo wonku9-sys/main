@@ -14,8 +14,10 @@ def cash(value):return f'{Decimal(str(value or 0)):,.2f}'
 def supplier_summary(values):
     """Use the paper's saved supplier, never a later live store profile."""
     return (f"공급자: {values.get('store_name','')} / 사업자등록번호: {values.get('business_no','')} / 대표자명: {values.get('representative','')}\n"
-            f"업태: {values.get('business_type','')} / 업종: {values.get('business_category','')} / 전화번호: {values.get('phone','')}\n"
-            f"주소: {values.get('address','')}")
+            f"업태: {values.get('business_type','')} / 종목: {values.get('business_category','')} / 연락처: {values.get('phone','')}\n"
+            f"주소: {values.get('address','')}\n"
+            f"입금하실 계좌: {' / '.join(values.get(key,'') for key in ('bank','account','account_holder') if values.get(key))}\n"
+            f"매장 메모: {values.get('store_memo','')}")
 
 
 def paper_html(record,title):
@@ -25,7 +27,7 @@ def paper_html(record,title):
             if member.get(key):customer[key]=member[key]
         customer['name']=member.get('company') or customer['name']
     def party(values,supplier=False):
-        fields=(('사업자번호',values.get('business_no','')),('상호',values.get('store_name') if supplier else values.get('name','')),('대표자명',values.get('representative','')),('주소',values.get('address','')),('전화번호',values.get('phone','')),('업태 / 업종',values.get('business_type','')+' / '+values.get('business_category','')))
+        fields=(('사업자번호',values.get('business_no','')),('상호',values.get('store_name') if supplier else values.get('name','')),('대표자명',values.get('representative','')),('주소',values.get('address','')),('연락처',values.get('phone','')),('업태 / 종목',values.get('business_type','')+' / '+values.get('business_category','')))
         return '<table width="100%">'+''.join(f'<tr><th width="25%">{key}</th><td>{plain(value)}</td></tr>' for key,value in fields)+'</table>'
     lines=record['lines'];pages=[]
     taxable=sum((Decimal(str(line['total'])) for line in lines if line['tax_mode']=='taxable'),Decimal(0))
@@ -52,7 +54,8 @@ def paper_html(record,title):
         <tr><th>면세 물품가액</th><th>과세 공급가액</th><th>부가세 (포함·참고)</th><th>총 합계</th></tr>
         <tr><td>{cash(Decimal(str(record['total']))-taxable)}</td><td>{cash(taxable-vat)}</td><td>{cash(vat)}</td><td><b>{cash(record['total'])}</b></td></tr>
         <tr><th>은행명 / 예금주</th><td colspan="3">{plain(seller.get('bank',''))} / {plain(seller.get('account_holder',''))}</td></tr>
-        <tr><th>계좌번호</th><td colspan="3">{plain(seller.get('account',''))}</td></tr>
+        <tr><th>입금하실 계좌</th><td colspan="3">{plain(seller.get('account',''))}</td></tr>
+        <tr><th>매장 메모</th><td colspan="3">{plain(seller.get('store_memo','')).replace(chr(10),'<br>')}</td></tr>
         <tr><th>확인 · 검수 · 인수</th><td colspan="3">&nbsp;<br>&nbsp;</td></tr></table>
         <p>품목 묶음 {offset//16+1} / {max(1,(len(lines)+15)//16)}　　담당: {plain(order.get('assignee',''))}<br>
         배달 설명: {plain(order.get('delivery_note',''))}<br>

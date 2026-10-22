@@ -1,11 +1,12 @@
 """Data-only purchase spreadsheets: drafts only, never stock/payment."""
 from collections import defaultdict
+from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from hashlib import sha256
 from pathlib import Path
 import re
 from .catalog_import import read_excel
-from .common import day, money
+from .common import day, money, qty, text
 from .currency import public_input, round_amount
 
 
@@ -19,6 +20,8 @@ ALIASES = {
     'unit_price': {'단가', '매입가', '매입단가'}, 'unit': {'단위'},
     'total': {'금액', '매입금액'}, 'tax': {'과면세', '과세면세'},
     'supplier': {'공급사', '공급사명'},
+    'sale_price': {'판매가', '판매단가'}, 'factor': {'입수량'},
+    'base_qty': {'총수량'}, 'memo': {'메모', '품목메모'},
 }
 
 
@@ -44,20 +47,30 @@ def classify_rows(rows):
 
 
 def plan_files(paths, catalog, default_supplier=None, default_date=None, use_current_prices=False):
+    return _plan_sources([(path, None) for path in paths], catalog, default_supplier, default_date, use_current_prices)
+
+
+def plan_table(rows, catalog, default_supplier, default_date):
+    """The same unit, price and product checks for copied Excel values."""
+    return _plan_sources([('엑셀 붙여넣기', rows)], catalog, default_supplier, default_date, False)[0]
+
+
+def _plan_sources(sources, catalog, default_supplier, default_date, use_current_prices):
     codes, names = defaultdict(list), defaultdict(list)
     for product in catalog['products']:
         for value in {product['code'], product['barcode'], *product.get('unit_barcodes', [])} - {''}:
             codes[value].append(product)
         names[product['name']].append(product)
     result = []
-    for path in paths:
+    for path, table in sources:
         entry = dict(file=Path(path).name, error='', lines=[], source_hash='')
         try:
-            rows = read_excel(path)
+            rows = read_excel(path) if table is None else table
             entry['format'] = classify_rows(rows)
             if entry['format'] in {'매입리스트 · 전표 요약 (상품 상세 없음)', '공급사 목록', '공급사 거래원장 · 결제/잔액 집계', '공급사별 매입 집계', '단품별 판매 집계', '단말 보류 내역', '달력 집계'}:
                 raise ValueError(entry['format']+' 파일입니다. 매입 품목으로 등록하지 않습니다. 품목이 있는 매입전표 파일을 선택하세요.')
-            entry['source_hash'] = sha256(Path(path).read_bytes()).hexdigest()
+            if table is None:
+                entry['source_hash'] = sha256(Path(path).read_bytes()).hexdigest()
             formatted = bool(rows and key(rows[0][0]) == '매입전표')
             if rows and '반품' in str(rows[0][0]):
                 raise ValueError('반품은 원매입 연결이 필요하므로 별도 반품등록을 이용하세요.')
@@ -74,6 +87,10 @@ def plan_files(paths, catalog, default_supplier=None, default_date=None, use_cur
             legacy = columns['qty'] is not None and columns['qty']+1 < len(rows[header_index]) and not str(rows[header_index][columns['qty']+1]).strip() and columns['unit_price'] is not None
             if legacy:
                 columns['unit'] = columns['qty']+1
+            # In the original POS worksheet this column describes the product's
+            # master supplier, not the supplier of this purchase voucher.
+            worksheet = legacy or ({'상품명', '규격', '바코드', '매입금액', '판매단가', '현재고'} <=
+                                   {key(v) for v in rows[header_index]})
             if columns['unit_price'] is None and not use_current_prices:
                 raise ValueError('파일에 단가가 없습니다. 현재 등록 매입가를 사용하려면 상단 옵션에 동의 후 다시 불러오세요. 과거 거래 단가로 간주하지 않습니다.')
             supplier_name, business_no, date = '', '', day(default_date)
@@ -92,17 +109,21 @@ def plan_files(paths, catalog, default_supplier=None, default_date=None, use_cur
                 if len(matches) != 1:
                     raise ValueError('파일의 공급사를 유일하게 찾지 못했습니다. 공급사명·사업자번호를 확인하세요.')
                 supplier_id = matches[0]['id']
-            elif legacy or entry['format'] == '바코드·수량 목록 (단가 없음)':
-                match = re.match(r'^.*?전표_(.+)_(\d{4}-\d{2}-\d{2})[ T]\d{2}[-:]\d{2}', Path(path).name)
+            else:
+                match = re.match(r'^.*?전표_(.+)_(\d{4}-\d{2}-\d{2})[ T](\d{2})[-:](\d{2})', Path(path).name)
                 if match:
-                    hint, date_hint = match.groups()
+                    hint, date_hint, hour, minute = match.groups()
                     matched = suppliers(hint.strip())
                     date = day(date_hint)
+                    entry['entry_datetime'] = f'{date} {hour}:{minute}:00'
+                    datetime.fromisoformat(entry['entry_datetime'])
+                    entry['metadata_source'] = '공급사·매입일시: 파일명에서 추출 (확인 필요)'
                     if len(matched) == 1:
                         supplier_id = matched[0]['id']
-                        entry['metadata_source'] = '공급사·날짜: 파일명에서 추출 (확인 필요)'
                     elif not default_supplier:
                         raise ValueError('파일명 공급사를 찾지 못했습니다. 기본 공급사를 선택하거나 공급사를 먼저 등록하세요.')
+                    else:
+                        entry['metadata_source'] += ' · 파일명 공급사 미일치: 선택한 기본 공급사 사용'
             for index, row in enumerate(rows[header_index+1:], header_index+2):
                 def cell(field):
                     column = columns.get(field)
@@ -127,7 +148,10 @@ def plan_files(paths, catalog, default_supplier=None, default_date=None, use_cur
                     price = public_input(cell('unit_price').replace(',', '')) if columns['unit_price'] is not None else product['purchase_price']
                     if not quantity.is_finite() or quantity <= 0 or quantity*1000 != (quantity*1000).to_integral_value():
                         raise ValueError('수량은 양수이며 소수점 셋째 자리까지 입력하세요.')
+                    qty(quantity)
                     tax = {'과': 'taxable', '과세': 'taxable', '면': 'exempt', '면세': 'exempt'}.get(cell('tax'))
+                    if cell('tax') and not tax:
+                        raise ValueError('과면세는 과세 또는 면세로 입력하세요.')
                     if tax and tax != product['tax_mode']:
                         raise ValueError('파일 과면세와 상품 등록정보가 다릅니다. 상품 정보를 먼저 확인하세요.')
                     raw_unit = cell('unit').replace(' ', '')
@@ -147,10 +171,31 @@ def plan_files(paths, catalog, default_supplier=None, default_date=None, use_cur
                             raise ValueError('단위가 등록정보와 다릅니다. 확장단위를 먼저 등록하세요.')
                         unit_id = unit_matches[0]['id']
                     basis = 100 if gram else 1 if unit_id else product.get('price_basis', 1)
+                    factor = Decimal('0.001') if gram else next((Decimal(u['factor'])/1000 for u in catalog['units'] if u['id']==unit_id), Decimal(1))
+                    override = {}
+                    if cell('factor'):
+                        source_factor = Decimal(cell('factor').replace(',', ''))
+                        factor = source_factor / 1000 if gram else source_factor
+                        if not factor.is_finite() or factor <= 0 or factor*1000 != (factor*1000).to_integral_value():
+                            raise ValueError('입수량은 양수이며 환산값은 소수점 셋째 자리까지 입력하세요.')
+                        override['factor_override'] = str(factor)
+                    converted = quantity * factor
+                    if converted*1000 != (converted*1000).to_integral_value():
+                        raise ValueError('환산 수량이 기본단위 소수점 셋째 자리를 초과합니다.')
+                    qty(converted)
+                    if cell('base_qty'):
+                        expected = converted*1000 if gram else converted
+                        if Decimal(cell('base_qty').replace(',', '')) != expected:
+                            raise ValueError('매입량×입수량과 총수량이 다릅니다.')
                     total = round_amount(quantity * price / basis, catalog['rounding_mode'])
-                    if cell('total') and public_input(cell('total').replace(',', '')) != total:
-                        raise ValueError('수량×단가와 파일 금액이 다릅니다. 단위·100g당 가격·반올림을 확인하세요.')
-                    if cell('supplier') and not legacy:
+                    if cell('total'):
+                        source_total = public_input(cell('total').replace(',', ''))
+                        if source_total != total:
+                            if round_amount(source_total*basis/quantity, 'decimal') != price or catalog['rounding_mode']=='won' and source_total%1:
+                                raise ValueError('수량×단가와 파일 금액이 다릅니다. 단위·100g당 가격·반올림을 확인하세요.')
+                            override['amount_override'] = str(source_total)
+                            total = source_total
+                    if cell('supplier') and not worksheet:
                         matched = suppliers(cell('supplier'))
                         if len(matched) != 1 or supplier_id and supplier_id != matched[0]['id']:
                             raise ValueError('공급사가 없거나 한 파일에 여러 공급사가 있습니다.')
@@ -159,7 +204,11 @@ def plan_files(paths, catalog, default_supplier=None, default_date=None, use_cur
                         gram_input=gram, qty=str(quantity), unit_price=str(price),
                         _edit_token=product['_edit_token'],
                         _unit_token=next((u['_import_token'] for u in catalog['units'] if u['id']==unit_id), None),
-                        name=product['name'], total=str(total), source_row=index))
+                        name=product['name'], total=str(total), source_row=index,
+                        barcode=cell('code') or product['barcode'] or product['code'],
+                        unit_name='g' if gram else next((u['name'] for u in catalog['units'] if u['id']==unit_id), product['base_unit']),
+                        price_basis=basis, sale_price=str(public_input(cell('sale_price').replace(',', ''))) if cell('sale_price') else str(product['sale_price']),
+                        line_memo=text(cell('memo'),'품목 메모',maximum=500), **override))
                 except (ValueError, InvalidOperation) as exc:
                     raise ValueError(f'{index}행 {name}: {exc}') from exc
             if not entry['lines']:
@@ -178,6 +227,12 @@ def plan_files(paths, catalog, default_supplier=None, default_date=None, use_cur
 
 
 class PurchaseImportMixin:
+    def purchase_clipboard_products(self, barcodes):
+        self._require('trade');self.require_menu('purchases')
+        if not isinstance(barcodes,list) or not 1<=len(barcodes)<=500 or any(not isinstance(v,str) or not v or len(v)>300 for v in barcodes):
+            raise ValueError('확인할 바코드는 1~500개까지 입력하세요.')
+        return [dict(barcode=barcode,found=self.lookup_barcode(barcode)) for barcode in dict.fromkeys(barcodes)]
+
     def purchase_import_catalog(self):
         self.require_menu('purchases')
         from .shared_protocol import fingerprint
@@ -213,6 +268,7 @@ class PurchaseImportMixin:
                         if not unit or line.get('_unit_token') != fingerprint(dict(unit)):
                             raise ValueError('검토 이후 확장단위가 변경되었습니다. 파일을 다시 불러오세요.')
                 prepared = self._prepare_trade(dict(kind='purchase', date=file['date'], partner_id=file['partner_id'],
+                    entry_datetime=file.get('entry_datetime',file['date']+' 00:00:00'),
                     paid=0, points_used=0, lines=file['lines'], memo=('엑셀 불러오기: '+file.get('file', '')[:150]+' / '+file.get('price_source', '파일 단가 사용'))[:500]))
                 if money(file.get('total', '')) != prepared['total']:
                     raise ValueError('검토 이후 계산 결과가 달라졌습니다. 파일을 다시 불러오세요.')

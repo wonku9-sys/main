@@ -30,51 +30,59 @@ def validate_instruments(db):
 
 
 class PaymentFinanceMixin:
-    def purchase_payment_batch(self,payment_id):
+    def purchase_payment_batch(self,payment_id,source_type='payment'):
         """Immutable batch membership comes from the original posting audit."""
-        self._require('trade');self.require_menu('payments');self.require_menu('purchases')
-        row=self.db.execute("SELECT p.* FROM payments p JOIN documents d ON d.id=p.document_id WHERE p.id=? AND d.kind='purchase' AND d.status='posted'",(payment_id,)).fetchone()
-        if not row or row['voided'] or row['supplier_settlement_id']:
-            raise ValueError('유효한 개별 매입 결제 이력을 선택하세요. 공급사 묶음결제는 결제관리에서 처리하세요.')
-        audit=self.db.execute("SELECT a.detail FROM audit a,json_each(a.detail,'$.records') r WHERE a.action='financial_payment_batch' AND a.entity='partner' AND a.entity_id=? AND json_extract(r.value,'$.type')='payment' AND json_extract(r.value,'$.id')=? ORDER BY a.id DESC LIMIT 1",(row['partner_id'],payment_id)).fetchone()
+        self._require('trade');self.require_menu('payments')
+        if source_type=='payment':self.require_menu('purchases')
+        if source_type not in {'payment','settlement'}:raise ValueError('매입 결제 유형을 확인하세요.')
+        table='payments' if source_type=='payment' else 'supplier_settlements'
+        row=self.db.execute("SELECT p.* FROM payments p JOIN documents d ON d.id=p.document_id WHERE p.id=? AND d.kind='purchase' AND d.status='posted'",(payment_id,)).fetchone() if source_type=='payment' else self.db.execute('SELECT * FROM supplier_settlements WHERE id=?',(payment_id,)).fetchone()
+        if not row or row['voided'] or source_type=='payment' and row['supplier_settlement_id']:
+            raise ValueError('유효한 매입 결제 이력을 선택하세요. 묶음 배분행은 공급사 결제에서 선택하세요.')
+        document_id=row['document_id'] if source_type=='payment' else None
+        audit=self.db.execute("SELECT a.detail FROM audit a,json_each(a.detail,'$.records') r WHERE a.action='financial_payment_batch' AND a.entity='partner' AND a.entity_id=? AND json_extract(r.value,'$.type')=? AND json_extract(r.value,'$.id')=? ORDER BY a.id DESC LIMIT 1",(row['partner_id'],source_type,payment_id)).fetchone()
         detail=json.loads(audit[0]) if audit else {}
-        ids=[r['id'] for r in detail.get('records',[]) if r['type']=='payment'] or [payment_id]
-        rows=[dict(self.db.execute('SELECT * FROM payments WHERE id=?',(identifier,)).fetchone()) for identifier in ids]
-        if any(r['voided'] or r['document_id']!=row['document_id'] or r['supplier_settlement_id'] or r['date']!=row['date'] for r in rows):
+        ids=[r['id'] for r in detail.get('records',[]) if r['type']==source_type] or [payment_id]
+        rows=[dict(self.db.execute(f'SELECT * FROM {table} WHERE id=?',(identifier,)).fetchone()) for identifier in ids]
+        if any(r['voided'] or r['partner_id']!=row['partner_id'] or r['date']!=row['date'] or source_type=='payment' and (r['document_id']!=document_id or r['supplier_settlement_id']) for r in rows):
             raise ValueError('일부 결제가 취소·변경된 묶음입니다. 최신 결제 이력을 확인하세요.')
         values={k:sum(r['amount'] for r in rows if r['method']==k) for k in METHODS}
-        bill=self.db.execute('SELECT number,due_date,bank,paid_date FROM payable_bills WHERE payment_id IN ('+','.join('?' for _ in ids)+')',ids).fetchone()
+        bill=self.db.execute(f"SELECT number,due_date,bank,paid_date FROM payable_bills WHERE {'payment_id' if source_type=='payment' else 'settlement_id'} IN ("+','.join('?' for _ in ids)+')',ids).fetchone()
         plan=detail.get('details') or dict(partner_id=row['partner_id'],target=str(public_amount(sum(values.values()))),components={k:str(public_amount(v)) for k,v in values.items()},datetime=row['date']+' 00:00:00',account='',memo=row['memo'],bill=dict(bill) if bill else None)
         if plan['bill']:plan['bill']={k:plan['bill'][k] for k in ('number','due_date','bank')}
-        snapshot=self.payment_context(row['partner_id'],row['date'],row['document_id'])
-        state=fingerprint(dict(rows=rows,supplier=snapshot['state'],bill=dict(bill) if bill else None))
-        return dict(plan=plan,payment_ids=ids,document_id=row['document_id'],cap=snapshot['cap']+sum(values.values()),state=state,
-                    editable=row['date']==date.today().isoformat() and not (bill and bill['paid_date']))
+        snapshot=self.payment_context(row['partner_id'],row['date'],document_id)
+        allocations=[dict(r) for r in self.db.execute('SELECT * FROM payments WHERE supplier_settlement_id IN ('+','.join('?' for _ in ids)+') ORDER BY id',ids)] if source_type=='settlement' else []
+        reason=self._payment_edit_reason(rows+allocations,dict(bill) if bill else None)
+        state=fingerprint(dict(rows=rows,supplier=snapshot['state'],bill=dict(bill) if bill else None,allocations=allocations,closing=self._payment_close_state()))
+        return dict(plan=plan,payment_ids=ids,source_type=source_type,document_id=document_id,cap=snapshot['cap']+sum(values.values()),state=state,
+                    editable=not reason,edit_reason=reason)
 
-    def replace_purchase_payment_batch(self,payment_id,plan,expected_state,reason):
+    def replace_purchase_payment_batch(self,payment_id,plan,expected_state,reason,source_type='payment'):
         with self._tx():
             self._require_capability('payments','create')
-            current=self._void_purchase_payment_batch_in_tx(payment_id,expected_state,reason)
+            current=self._void_purchase_payment_batch_in_tx(payment_id,expected_state,reason,source_type)
             from .purchase_payment_plan import normalize_plan
             plan=normalize_plan(plan)
-            if plan['partner_id']!=current['plan']['partner_id'] or plan['datetime'][:10]!=date.today().isoformat():
-                raise ValueError('당일 같은 공급사의 결제만 수정할 수 있습니다.')
+            if plan['partner_id']!=current['plan']['partner_id']:
+                raise ValueError('결제 수정에서는 공급사를 변경할 수 없습니다.')
             snapshot=self.payment_context(plan['partner_id'],plan['datetime'][:10],current['document_id'])
             result=self._register_supplier_payment_in_tx(plan['partner_id'],plan['components'],plan['datetime'][:10],plan['memo'],snapshot['state'],current['document_id'],plan['bill'],plan)
             self._audit('replace_purchase_payment_batch','payment',payment_id,dict(reason=reason,replacements=result['records']))
             return result
 
-    def void_purchase_payment_batch(self,payment_id,expected_state,reason):
+    def void_purchase_payment_batch(self,payment_id,expected_state,reason,source_type='payment'):
         with self._tx():
-            self._void_purchase_payment_batch_in_tx(payment_id,expected_state,reason)
+            self._void_purchase_payment_batch_in_tx(payment_id,expected_state,reason,source_type)
 
-    def _void_purchase_payment_batch_in_tx(self,payment_id,expected_state,reason):
+    def _void_purchase_payment_batch_in_tx(self,payment_id,expected_state,reason,source_type='payment'):
         self._require_capability('payments','delete')
-        current=self.purchase_payment_batch(payment_id)
+        current=self.purchase_payment_batch(payment_id,source_type)
         if current['state']!=expected_state:raise ValueError('결제·잔액이 바뀌었습니다. 최신 이력을 다시 조회하세요.')
-        if not current['editable']:raise ValueError('취소되지 않은 당일 결제만 수정·취소할 수 있습니다. 지급 완료 어음은 변경할 수 없습니다.')
+        if not current['editable']:raise ValueError(current['edit_reason'])
         reason=text(reason,'결제 정정 사유',True,500)
-        for identifier in current['payment_ids']:self._void_trade_payment(identifier,reason)
+        for identifier in current['payment_ids']:
+            if source_type=='payment':self._void_trade_payment(identifier,reason)
+            else:self._void_supplier_settlement_in_tx(identifier,reason)
         return current
 
     def payment_context(self,partner_id,payment_date=None,document_id=None):
@@ -87,10 +95,13 @@ class PaymentFinanceMixin:
             data=self.purchase_payment_context(document_id,when)
             if data['partner']['id']!=partner_id:raise ValueError('매입전표와 공급사가 일치하지 않습니다.')
             cap=data['cap'];document=data['document']
-        state=fingerprint(dict(supplier=outstanding['state'],document=document,date=when,cap=cap))
+        closing=self._payment_close_state()
+        closed=bool(closing and when<=closing['through_date'])
+        state=fingerprint(dict(supplier=outstanding['state'],document=document,date=when,cap=cap,closing=closing))
         return dict(partner=outstanding['partner'],document=document,cap=cap,
                     balance=outstanding['balance'],as_of=outstanding['as_of'],date=when,user_name=self.actor['name'],state=state,
-                    opening=outstanding['opening'],documents=outstanding['documents'])
+                    opening=outstanding['opening'],documents=outstanding['documents'],payment_closed=closed,
+                    closed_through=closing['through_date'] if closing else '')
 
     def register_supplier_payment(self,partner_id,components,payment_date,memo='',expected_state=None,document_id=None,bill=None,details=None):
         with self._tx():
@@ -104,6 +115,7 @@ class PaymentFinanceMixin:
         if not total:raise ValueError('결제금액을 입력해주시기 바랍니다.')
         memo=text(memo,'결제 메모',maximum=300)
         snapshot=self.payment_context(partner_id,payment_date,document_id)
+        self._assert_payment_open(snapshot['date'])
         if not expected_state or expected_state!=snapshot['state']:raise ValueError('잔액이 바뀌었습니다. 다시 조회한 뒤 결제하세요.')
         if total>snapshot['cap']:raise ValueError('현재 또는 선택일의 결제 가능 잔액을 초과합니다.')
         if details is not None:
@@ -171,6 +183,7 @@ class PaymentFinanceMixin:
             if when<row['due_date'] or when>date.today().isoformat():raise ValueError('만기일 이후이며 오늘을 넘지 않는 지급일을 선택하세요.')
             if method not in {'cash','transfer'}:raise ValueError('어음 지급은 현금·계좌이체로 기록하세요.')
             self._assert_open(when)
+            self._assert_payment_open(when)
             if method=='cash':self._assert_cash_open(when,self.actor['id'])
             memo=text(memo,'어음 지급 메모',maximum=300)
             self.db.execute('UPDATE payable_bills SET paid_date=?,paid_method=?,paid_memo=?,paid_user_id=? WHERE id=?',(when,method,memo,self.actor['id'],identifier))
@@ -191,6 +204,7 @@ class PaymentFinanceMixin:
             if when>calendar_date.today().isoformat():raise ValueError('미래 업무 수입·비용은 확정할 수 없습니다.')
             if kind not in {'income','expense'} or method not in {'cash','transfer','card'}:raise ValueError('업무 수입·비용 구분과 수단을 확인하세요.')
             self._assert_open(when)
+            self._assert_payment_open(when)
             if method=='cash':self._assert_cash_open(when,self.actor['id'])
             identifier=self.db.execute('INSERT INTO business_entries(date,kind,account,amount,method,memo,user_id,created_at) VALUES(?,?,?,?,?,?,?,?)',
                 (when,kind,text(account,'계정과목',True,80),money(amount,positive=True),method,text(memo,'메모',maximum=300),self.actor['id'],now())).lastrowid
@@ -201,8 +215,9 @@ class PaymentFinanceMixin:
         with self._tx():
             self._require('reports');self.require_menu('reports');self._require_capability('payments','delete')
             row=self.db.execute('SELECT * FROM business_entries WHERE id=?',(identifier,)).fetchone()
-            if not row or row['voided'] or row['date']!=date.today().isoformat():raise ValueError('유효한 당일 업무기록만 취소할 수 있습니다.')
+            if not row or row['voided']:raise ValueError('유효한 업무기록만 취소할 수 있습니다.')
             self._assert_open(row['date'])
+            self._assert_payment_open(row['date'])
             if row['method']=='cash':self._assert_cash_open(row['date'],row['user_id'])
             reason=text(reason,'취소 사유',True)
             self.db.execute('UPDATE business_entries SET voided=1 WHERE id=?',(identifier,))

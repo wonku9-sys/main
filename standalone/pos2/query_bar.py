@@ -1,6 +1,6 @@
 """One conspicuous, non-scrolling query position for every business view."""
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QPainter,QPalette,QColor,QLinearGradient,QPen
+from PySide6.QtGui import QPainter,QPalette,QColor,QLinearGradient,QPen,QShortcut,QKeySequence
 from PySide6.QtWidgets import QFrame,QHBoxLayout,QVBoxLayout,QGridLayout,QLabel,QWidget,QSizePolicy,QScrollArea,QPushButton
 from .widgets import action
 
@@ -83,6 +83,13 @@ class QueryBar(QFrame):
         self.output_actions.setContentsMargins(0,0,0,0);self.output_actions.setSpacing(4)
         right_layout.addWidget(self.output_panel);self.output_panel.hide()
         self.query_button=action('조회 (F5)',callback);self.query_button.setObjectName('queryButton')
+        # Bind to this visible header, not the desktop's last-active page.
+        # Window scope covers input/table/sidebar focus without leaking into
+        # separate product-search/payment dialogs that own their own F5.
+        self.query_shortcut=QShortcut(QKeySequence('F5'),self)
+        self.query_shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
+        self.query_shortcut.setAutoRepeat(False)
+        self.query_shortcut.activated.connect(self._query_from_keyboard)
         self.query_button.setMinimumWidth(110)
         self.query_button.setToolTip('현재 화면의 검색어·분류·공급사·기간 조건으로 조회합니다. 저장하지 않은 편집은 먼저 확인합니다.\n단축키: F5')
         self.query_button.setStatusTip(self.query_button.toolTip())
@@ -96,6 +103,10 @@ class QueryBar(QFrame):
     def set_query(self,callback):
         self.query_button.clicked.disconnect()
         self.query_button.clicked.connect(callback)
+
+    def _query_from_keyboard(self):
+        if self.query_button.isVisible() and self.query_button.isEnabled():
+            self.query_button.click()
 
 
 class NavigationBar(QFrame):

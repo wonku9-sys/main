@@ -2,6 +2,8 @@
 
 Function keys belong to the desktop/page window, never to the application:
 editing dialogs keep their own F3/F5/F6/F7/F9 bindings.
+F5 is owned by each visible QueryBar and clicks that bar's query button;
+the common action remains callable without a competing keyboard binding.
 """
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QKeySequence
@@ -70,9 +72,14 @@ def help_text(description, sequences=()):
 
 def bind_action(window, text, sequences, callback):
     shortcut = QAction(text, window)
-    shortcut.setShortcuts([QKeySequence(sequence) for sequence in sequences])
+    # Each visible QueryBar owns F5 and calls its actual button. A second
+    # desktop/page-window F5 would be ambiguous and can target a background page.
+    shortcut.setShortcuts([QKeySequence(sequence) for sequence in sequences] if text!='조회' else [])
     shortcut.setShortcutContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
     shortcut.setAutoRepeat(False)
+    from .menu_help import ACTION_HELP
+    shortcut.setToolTip(help_text(ACTION_HELP.get(text,text+' 기능을 실행합니다.'),sequences))
+    shortcut.setStatusTip(shortcut.toolTip())
     shortcut.triggered.connect(callback)
     window.addAction(shortcut)
     return shortcut
@@ -109,7 +116,7 @@ class ShortcutGuide(QDialog):
         layout = QVBoxLayout(self)
         note = QLabel('메뉴 위에 약 0.7초 머무르면 설명·단축키가 표시됩니다.\n'
                       '→ 표시는 앞 조합을 누르고 손을 뗀 뒤 다음 키를 누릅니다. '
-                      '입력 팝업에서는 해당 화면의 단축키가 우선하며 F11은 전체화면입니다.')
+                      '입력 팝업에서는 해당 화면의 단축키가 우선합니다. 매입전표 F11은 부가정보, 전체화면은 Ctrl+F11입니다. 다른 창은 F11로 전체화면을 전환합니다.')
         note.setWordWrap(True)
         layout.addWidget(note)
         self.search = QLineEdit()

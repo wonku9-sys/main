@@ -10,6 +10,7 @@ import hashlib
 import io
 import json
 from pathlib import Path
+import re
 import shutil
 import struct
 from zipfile import ZipFile, ZIP_DEFLATED
@@ -22,7 +23,12 @@ import tempfile
 import traceback
 try:
     from pos2.app import main
-    raise SystemExit(main() or 0)
+    arguments = sys.argv[1:]
+    # A working test bundle must not silently open the installed application's
+    # existing LOCALAPPDATA database. Its own new folder is the safe default.
+    if '--data-dir' not in arguments and not any(a.startswith('--data-dir=') for a in arguments):
+        arguments = ['--data-dir', str(Path(sys.executable).resolve().parent.parent / 'trial-data-v2'), *arguments]
+    raise SystemExit(main(arguments) or 0)
 except Exception:
     detail = traceback.format_exc()
     log = Path(tempfile.gettempdir()) / 'SY-POS-startup-error.log'
@@ -58,9 +64,11 @@ def verified_wheel(path):
                 raise ValueError('Wheel integrity failed: '+name)
 
 
-def assemble(runtime, wheels, output):
+def assemble(runtime, wheels, output, build_label='purchase-payment', source_zip=None):
     from package_source import source_files
     from pos2 import __version__
+    if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,79}',build_label):
+        raise ValueError('Use a short ASCII build label without path separators.')
     if output.exists():
         raise ValueError('Choose a new output directory; existing files are preserved.')
     bundle = output/'SY-POS'
@@ -105,7 +113,7 @@ def assemble(runtime, wheels, output):
             shutil.copy2(source, target)
     for source in (ROOT/'third-party-licenses').glob('*.txt'):
         shutil.copy2(source, bundle/'licenses'/source.name)
-    for name in ('README.md', 'OPTIMIZATION_REVIEW.md', 'PURCHASE_PAYMENT_REVIEW.md'):
+    for name in ('README.md', 'OPTIMIZATION_REVIEW.md', 'PURCHASE_PAYMENT_REVIEW.md','PRIVATE_TRIAL.md','PDF_COMPLETION.md'):
         shutil.copy2(ROOT/name, bundle/name)
     (bundle/'runtime'/'python312._pth').write_text('.\nDLLs\nLib\nLib/site-packages\n../app\nimport site\n', encoding='ascii')
     (bundle/'실행 안내.txt').write_text(
@@ -114,6 +122,8 @@ def assemble(runtime, wheels, output):
         'Python을 따로 설치하지 않아도 됩니다. EXE만 분리하지 마세요.\n'
         '기존 프로그램 폴더를 덮어쓰거나 업무자료를 삭제하지 마세요.\n'
         '이 패키지는 Linux에서 공식 Windows 런타임으로 구성했습니다.\n'
+        '완성본이 아닌 시험용 작업본입니다. 새 trial-data-v2 폴더로 시작합니다.\n'
+        '기존 업무자료를 자동으로 열지 않습니다. 실제 매장 DB를 덮어쓰지 마세요.\n'
         '실제 Windows 기동/프린터/장비 테스트는 미검증입니다.\n'
         '인증서로 서명되지 않아 Windows 게시자 경고가 표시될 수 있습니다.\n'
         '보안 설정을 끄지 마세요. 기존 자료는 사용 전 별도 백업하세요.\n', encoding='utf-8-sig')
@@ -140,9 +150,12 @@ def assemble(runtime, wheels, output):
                 raise ValueError('Private/business data must not be packaged: '+str(relative))
             files[relative.as_posix()] = digest(path)
     manifest = dict(version=__version__, variant='purchase-payment', type='relocatable-Windows-x64-runtime',
-                    native_windows_tested=False, pe_x64_count=pe_count, wheels=wheel_rows, files=files)
+                    build_label=build_label,native_windows_tested=False,test_data_directory='trial-data-v2',
+                    pe_x64_count=pe_count, wheels=wheel_rows, files=files)
+    if source_zip is not None:
+        manifest['matching_source']=dict(name=Path(source_zip).name,sha256=digest(Path(source_zip)))
     (bundle/'BUNDLE-MANIFEST.json').write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding='utf-8')
-    archive_path = output/f'SY-POS-v{__version__}-20261021-purchase-payment-Windows-x64.zip'
+    archive_path = output/f'SY-POS-v{__version__}-{build_label}-Windows-x64-TEST.zip'
     with ZipFile(archive_path, 'w', ZIP_DEFLATED, compresslevel=6) as archive:
         for path in sorted(bundle.rglob('*')):
             if path.is_file():
@@ -160,5 +173,7 @@ if __name__ == '__main__':
     parser.add_argument('--runtime', type=Path, required=True)
     parser.add_argument('--wheels', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--build-label',default='purchase-payment')
+    parser.add_argument('--source-zip',type=Path)
     args = parser.parse_args()
-    assemble(args.runtime, args.wheels, args.output)
+    assemble(args.runtime, args.wheels, args.output,args.build_label,args.source_zip)

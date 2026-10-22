@@ -37,6 +37,8 @@ from .factory_reset import FactoryResetMixin
 from .member_registration import MemberRegistrationMixin
 from .payment_finance import PaymentFinanceMixin
 from .purchase_amendments import PurchaseAmendmentMixin
+from .purchase_price_history import PurchasePriceHistoryMixin
+from .payment_bulk import BulkPaymentMixin
 
 APPLICATION_ID = 1398362162
 DEFAULT_SETTINGS = {
@@ -47,7 +49,7 @@ DEFAULT_SETTINGS = {
     "backup_schedule": DEFAULT_BACKUP_SCHEDULE,
     "store_name": "SY POS", "business_no": "", "phone": "", "address": "",
     "representative":"", "business_type":"", "business_category":"", "fax":"", "store_email":"",
-    "bank":"", "account":"", "account_holder":"", "allow_negative_stock":True,
+    "bank":"", "account":"", "account_holder":"", "store_memo":"", "allow_negative_stock":True,
     "earn_bps": 100, "point_min": 1000, "point_step": 100, "point_enabled": True,
 }
 
@@ -79,7 +81,7 @@ def password_matches(password, encoded):
 
 
 @currency_boundary
-class Store(PurchaseAmendmentMixin, PaymentFinanceMixin, MemberRegistrationMixin, FactoryResetMixin, PurchaseImportMixin, InventoryReportingMixin, CatalogMixin, CommerceMixin, OperationsMixin, LoyaltyMixin, RecoveryMixin, BackupPolicyMixin, SettlementMixin, BackupScheduleMixin, SupplierMixin, PurchaseReportingMixin, OfflineFeaturesMixin, DiaryMixin,HouseholdMixin,EmailRecoveryMixin,HealthMixin,AttachmentMixin,InspirationMixin):
+class Store(BulkPaymentMixin, PurchasePriceHistoryMixin, PurchaseAmendmentMixin, PaymentFinanceMixin, MemberRegistrationMixin, FactoryResetMixin, PurchaseImportMixin, InventoryReportingMixin, CatalogMixin, CommerceMixin, OperationsMixin, LoyaltyMixin, RecoveryMixin, BackupPolicyMixin, SettlementMixin, BackupScheduleMixin, SupplierMixin, PurchaseReportingMixin, OfflineFeaturesMixin, DiaryMixin,HouseholdMixin,EmailRecoveryMixin,HealthMixin,AttachmentMixin,InspirationMixin):
     def __init__(self, path):
         self.path = Path(path).expanduser().resolve() if str(path) != ":memory:" else None
         if self.path:
@@ -101,7 +103,7 @@ class Store(PurchaseAmendmentMixin, PaymentFinanceMixin, MemberRegistrationMixin
                 raise ValueError("더 최신 버전의 장부입니다. 같은 버전 이상의 프로그램으로 실행하세요.")
             self.db.execute("PRAGMA journal_mode=WAL")
             self.db.execute("PRAGMA synchronous=FULL")
-            if tables and self._opening_version<217:
+            if tables and self._opening_version<SCHEMA_VERSION:
                 from datetime import datetime
                 target=self._backup_directory()/f'업데이트전-자동백업_{datetime.now():%Y%m%d_%H%M%S}_{secrets.token_hex(4)}.db'
                 self._backup_file(target);self.migration_backup_path=str(target)
@@ -383,7 +385,7 @@ class Store(PurchaseAmendmentMixin, PaymentFinanceMixin, MemberRegistrationMixin
 
     def store_profile(self):
         self._require()
-        keys=('store_name','business_no','representative','business_type','business_category','phone','fax','address','store_email','bank','account','account_holder')
+        keys=('store_name','business_no','representative','business_type','business_category','phone','fax','address','store_email','bank','account','account_holder','store_memo')
         values=self._settings_values()
         return {key:values[key] for key in keys}
 

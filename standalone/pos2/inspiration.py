@@ -1,7 +1,8 @@
 """Sourced wisdom and original reflections, with private random reading history."""
 import secrets
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QDialog,QLabel,QVBoxLayout,QHBoxLayout,QMessageBox
+from PySide6.QtGui import QKeySequence,QShortcut
+from PySide6.QtWidgets import QApplication,QDialog,QLabel,QVBoxLayout,QHBoxLayout,QMessageBox,QScrollArea,QWidget,QFrame
 from .widgets import action
 
 INSPIRATION_SCHEMA='''
@@ -44,9 +45,17 @@ WORDS=(
 )
 
 from .inspiration_cards import CARDS as SOURCED_CARDS,as_card,render
-CARDS=tuple(dict(category='오늘의 응원',text=text,source='SY POS 자체 작성',english='',explanation='나에게 필요한 만큼만 가볍게 마음에 담아 보세요.',reflection='오늘 나에게 건네고 싶은 말은 무엇인가요?') for text in WORDS)+tuple(as_card(row) for row in SOURCED_CARDS)
+from .inspiration_life import CARDS as LIFE_CARDS
+CARDS=tuple(dict(category='오늘의 응원',text=text,source='SY POS 자체 작성',english='',explanation='나에게 필요한 만큼만 가볍게 마음에 담아 보세요.',reflection='오늘 나에게 건네고 싶은 말은 무엇인가요?',reading='',character_glosses=()) for text in WORDS)+tuple(as_card(row) for row in (*SOURCED_CARDS,*LIFE_CARDS))
 WORDS=tuple(render(card) for card in CARDS)
 CARD_BY_TEXT=dict(zip(WORDS,CARDS))
+
+
+def category_pool(previous=None):
+    # Give original life wisdom more space without crowding out the classics;
+    # the immediately previous category remains excluded, as before.
+    return tuple(category for category in sorted({c['category'] for c in CARDS}) if category!=previous
+                 for _ in range(2 if category.startswith('인생의 지혜 · ') else 1))
 
 
 class InspirationMixin:
@@ -56,7 +65,7 @@ class InspirationMixin:
             previous=row[0] if row else -1
             if new or previous not in range(len(WORDS)):
                 prior=CARDS[previous]['category'] if previous in range(len(WORDS)) else None
-                category=secrets.choice(sorted({card['category'] for card in CARDS if card['category']!=prior}))
+                category=secrets.choice(category_pool(prior))
                 selected=secrets.choice([i for i,card in enumerate(CARDS) if card['category']==category and i!=previous])
             else:selected=previous
             self.db.execute('INSERT INTO inspiration_history VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET last_id=excluded.last_id',(uid,selected))
@@ -70,7 +79,7 @@ class InspirationDialog(QDialog):
         self.setStyleSheet('''
             QDialog{background:#F6F4E9;}
             QLabel{color:#385D50;}
-            QPushButton{padding:11px 20px;min-height:24px;font-size:14px;font-weight:600;color:#24483C;background:#E4EEE5;border:2px solid #B8CDBB;border-radius:9px;}
+            QPushButton{padding:8px 12px;min-height:24px;font-size:14px;font-weight:600;color:#24483C;background:#E4EEE5;border:2px solid #B8CDBB;border-radius:9px;}
             QPushButton:hover{color:#24483C;background:#D4E4D6;}
             QPushButton:pressed{color:#24483C;background:#C2D8C5;}
             QPushButton#primary{color:#FFFFFF;background:#215D49;border-color:#215D49;font-size:15px;font-weight:700;}
@@ -79,19 +88,32 @@ class InspirationDialog(QDialog):
             QPushButton:focus{border-color:#A47516;}
             QPushButton:disabled,QPushButton#primary:disabled{color:#58645C;background:#E0E4DF;border-color:#BBC6BD;}
         ''')
-        body=QVBoxLayout(self);body.setContentsMargins(36,28,36,28)
+        outer=QVBoxLayout(self);outer.setContentsMargins(24,20,24,20)
+        self.reading_area=QScrollArea();self.reading_area.setWidgetResizable(True);self.reading_area.setFrameShape(QFrame.Shape.NoFrame)
+        self.reading_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        content=QWidget();content.setStyleSheet('background:transparent;');body=QVBoxLayout(content);body.setContentsMargins(4,4,4,4)
+        self.reading_area.setWidget(content);outer.addWidget(self.reading_area,1)
         self.category=QLabel();self.category.setStyleSheet('font-size:18px;font-weight:600;');body.addWidget(self.category)
         self.phrase=QLabel();self.phrase.setAlignment(Qt.AlignmentFlag.AlignCenter);self.phrase.setStyleSheet('font-size:24px;font-weight:600;padding:12px;');body.addWidget(self.phrase)
+        self.reading=QLabel();self.reading.setAlignment(Qt.AlignmentFlag.AlignCenter);self.reading.setStyleSheet('font-size:18px;color:#385D50;padding:4px;');body.addWidget(self.reading)
         self.english=QLabel();self.english.setAlignment(Qt.AlignmentFlag.AlignCenter);self.english.setStyleSheet('font-size:21px;color:#53686A;padding:6px;');body.addWidget(self.english)
         self.explanation=QLabel();self.explanation.setStyleSheet('font-size:15px;padding:8px;');body.addWidget(self.explanation)
         self.reflection=QLabel();self.reflection.setStyleSheet('font-size:15px;color:#6B603E;background:#E9E5D3;padding:10px;');body.addWidget(self.reflection)
         self.source=QLabel();self.source.setStyleSheet('font-size:12px;color:#616D60;');body.addWidget(self.source)
-        for label in (self.category,self.phrase,self.english,self.explanation,self.reflection,self.source):label.setWordWrap(True);label.setTextFormat(Qt.TextFormat.PlainText)
+        for label in (self.category,self.phrase,self.reading,self.english,self.explanation,self.reflection,self.source):
+            label.setWordWrap(True);label.setTextFormat(Qt.TextFormat.PlainText)
+            label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse|Qt.TextInteractionFlag.TextSelectableByKeyboard)
         body.addStretch();controls=QHBoxLayout()
         self.previous_button=action('이전 글귀',self.previous);controls.addWidget(self.previous_button)
         self.next_button=action('다음 글귀',self.next,primary=True);controls.addWidget(self.next_button)
+        self.copy_button=action('글귀 복사',self.copy_current);controls.addWidget(self.copy_button)
         self.explanation_button=action('뜻풀이 · 해설',self.toggle_explanation);self.explanation_button.setCheckable(True);controls.addWidget(self.explanation_button)
-        self.close_button=action('닫기',self.accept);controls.addWidget(self.close_button);body.addLayout(controls)
+        self.close_button=action('닫기',self.accept);controls.addWidget(self.close_button);outer.addLayout(controls)
+        self.copy_status=QLabel('');self.copy_status.setWordWrap(True);self.copy_status.setMinimumHeight(22);outer.addWidget(self.copy_status)
+        self.copy_button.setAccessibleName('현재 글귀와 한글 독음 및 출처 복사')
+        self.copy_button.setToolTip('현재 글귀·한글 독음·영어 원문·출처를 복사합니다. 붙여넣기는 Ctrl+V, 복사 단축키는 Ctrl+Shift+C입니다. 해설은 드래그 선택 후 Ctrl+C로 복사할 수 있습니다.')
+        self.copy_shortcut=QShortcut(QKeySequence('Ctrl+Shift+C'),self);self.copy_shortcut.activated.connect(self.copy_current)
+        for button in (self.previous_button,self.next_button,self.copy_button,self.explanation_button,self.close_button):button.setAutoDefault(False)
         self._sy_close_button=self.close_button
         self.start_button=self.next_button  # Internal compatibility; no duplicate button.
         self.next_button.setAccessibleName('창을 닫지 않고 다음 글귀 보기')
@@ -104,6 +126,9 @@ class InspirationDialog(QDialog):
             label=self.phrase if name=='text' else getattr(self,name)
             label.setText(('생각해 보기 · ' if name=='reflection' and card[name] else '출처 · ' if name=='source' and card[name] else '')+card[name])
             label.setVisible(bool(card[name]))
+        reading=card.get('reading','');self.reading.setText('한글 독음 · '+reading if reading else '');self.reading.setVisible(bool(reading))
+        self.copy_button.setEnabled(bool(card['text']));self.copy_status.clear()
+        self.reading_area.verticalScrollBar().setValue(0)
         self.previous_button.setEnabled(self.history_index>0)
         self.explanation_button.setEnabled(bool(card['explanation']));self.explanation_button.setChecked(False)
         self.explanation_button.setText('뜻풀이 · 해설');self.explanation.hide()
@@ -111,6 +136,16 @@ class InspirationDialog(QDialog):
     def toggle_explanation(self,*_):
         opened=self.explanation_button.isChecked();self.explanation.setVisible(opened)
         self.explanation_button.setText('해설 접기' if opened else '뜻풀이 · 해설')
+
+    def copy_current(self):
+        if not self.phrase.text():return
+        card=CARD_BY_TEXT.get(self.history[self.history_index],{})
+        parts=[self.phrase.text()]
+        if card.get('reading'):parts.append('한글 독음: '+card['reading'])
+        if self.english.text():parts.append(self.english.text())
+        if self.source.text():parts.append(self.source.text())
+        QApplication.clipboard().setText('\n\n'.join(parts))
+        self.copy_status.setText('글귀를 복사했습니다. 원하는 곳에 Ctrl+V로 붙여넣으세요.')
 
     def previous(self):
         if self.history_index>0:self.history_index-=1;self.show_current()

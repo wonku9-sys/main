@@ -39,6 +39,7 @@ WRITES=WRITES|{'seed_catalog_categories'}
 WRITES=WRITES|{'set_suppliers_active'}
 WRITES=WRITES|{'set_supplier_payment_method'}
 READS=READS|{'purchase_import_catalog'}
+READS=READS|{'purchase_clipboard_products'}
 READS=READS|{'catalog_product','catalog_suppliers','catalog_revision'}
 READS=READS|{'purchase_payment_context'}
 WRITES=WRITES|{'add_purchase_payments'}
@@ -58,7 +59,14 @@ WRITES=WRITES|{'register_supplier_payment','pay_bill','add_business_entry','void
 READS=READS|{'purchase_payment_batch'}
 WRITES=WRITES|{'replace_purchase_payment_batch','void_purchase_payment_batch'}
 READS=READS|{'purchase_edit_context','purchase_revisions'}
+READS=READS|{'purchase_price_history'}
 WRITES=WRITES|{'revise_purchase'}
+READS=READS|{'preview_supplier_payments'}
+WRITES=WRITES|{'confirm_supplier_payments'}
+READS=READS|{'supplier_ledger'}
+WRITES=WRITES|{'set_supplier_ledger_checked'}
+READS=READS|{'payment_close_context','payment_close_detail'}
+WRITES=WRITES|{'close_payment_month'}
 
 def encode(value):
     def default(item):

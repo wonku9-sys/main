@@ -19,7 +19,7 @@ from .number_edit import GroupedNumberEdit
 from .trade_sheet import EntrySheet
 
 
-KINDS = {"purchase": "매입", "sale": "매출", "purchase_return": "매입 반품", "sale_return": "매출 반품"}
+KINDS = {"purchase": "매입", "sale": "매출", "purchase_return": "반품", "sale_return": "매출 반품"}
 STATUSES = {"draft": "초안", "posted": "확정", "cancelled": "취소"}
 
 
@@ -693,7 +693,8 @@ class TradeDialog(QDialog):
         from .trade_product_model import TradeProductModel
         self.product_model = TradeProductModel([p for p in self.products if p['active'] or self.readonly or self.is_return or self.amending], self)
         self._batch_lines = False
-        self.line_columns = ("product", "spec", "barcode", "qty", "unit", "factor", "base_qty", "total", "price", "sale_price", "margin", "category", "supplier", "stock", "line_memo")
+        from .purchase_worksheet_view import BASIC_COLUMNS,DETAIL_KEYS
+        self.line_columns = BASIC_COLUMNS + (DETAIL_KEYS if kind.startswith('purchase') else ())
         self.setWindowTitle(("새 반품전표" if self.is_return else "새 매입전표") if kind.startswith("purchase") and not self.record else f"{KINDS[kind]} 전표 · " + (self.record["number"] if self.record else "새 전표"))
         self.resize(1180, 820)
         self.setMinimumSize(850, 620)
@@ -833,11 +834,19 @@ class TradeDialog(QDialog):
         if kind.startswith('purchase'):self.scanner_strip.hide()
         from .trade_sheet import TradeSheet
         self.table = TradeSheet(self, self.line_columns)
-        self.table.setHorizontalHeaderLabels(["상품명", "규격", "바코드", "매입량" if kind.startswith("purchase") else "수량", "단위", "입수량", "총수량", "매입금액" if kind.startswith("purchase") else "거래금액", "매입단가" if kind.startswith("purchase") else "거래단가", "판매단가", "이익률(%)", "분류", "공급사", "현재고", "메모"])
+        from .purchase_worksheet_view import DETAIL_COLUMNS,PurchaseWorksheetView
+        headers=["상품명", "규격", "바코드", "매입량" if kind.startswith("purchase") else "수량", "단위", "입수량", "총수량", "매입금액" if kind.startswith("purchase") else "거래금액", "매입단가" if kind.startswith("purchase") else "거래단가", "판매단가", "이익률(%)", "분류", "공급사", "현재고", "메모"]
+        if kind.startswith('purchase'):headers += [label for _,label in DETAIL_COLUMNS]
+        self.table.setHorizontalHeaderLabels(headers)
         self.table.setSortingEnabled(False)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         for column, width in enumerate((170, 60, 115, 65, 65, 65, 80, 120, 110, 110, 85, 90, 150, 130, 160)):
             self.table.setColumnWidth(column, width)
+        if kind.startswith('purchase'):
+            for column in range(len(BASIC_COLUMNS),len(self.line_columns)):self.table.setColumnWidth(column,110)
+            self.purchase_view=PurchaseWorksheetView(self)
+            line_tools.insertWidget(line_tools.count()-1,self.purchase_view.dc_amount)
+            line_tools.insertWidget(line_tools.count()-1,self.purchase_view.dc_rate)
         self.table.setMinimumHeight(220)
         self.detail_tabs = QTabWidget()
         self.detail_tabs.addTab(self.table, "거래 품목")
@@ -919,6 +928,9 @@ class TradeDialog(QDialog):
             menu.addAction('빈 품목행 추가',self.add_line)
             menu.addAction('상품장',self.open_catalog)
             menu.addAction('선택 날짜·회원 제안가 적용',self.apply_quotes)
+            menu.addAction('과면세 정보',self.show_tax_info)
+            from .purchase_clipboard import paste_purchase
+            menu.addAction('엑셀 붙여넣기 (Ctrl+V)',lambda:paste_purchase(self))
             self.function_button.setMenu(menu)
             function_row=QHBoxLayout();function_row.addWidget(self.function_button);function_row.addStretch();body.addLayout(function_row)
         self.paid.textChanged.connect(self.recalculate)
@@ -962,6 +974,8 @@ class TradeDialog(QDialog):
             footer.addWidget(self.new_product_button)
             self.tax_info_button=action('부가정보 (F11)',self.tax_info)
             footer.addWidget(self.tax_info_button)
+            from .purchase_price_panel import install_price_panel
+            install_price_panel(self, body)
             self.payment_button=action('결제 (P)',self.payment_input)
             self.payment_button.setEnabled(not self.readonly or bool(self.record and self.record['status']=='posted' and self.kind=='purchase'))
             self.payment_button.setToolTip('저장 전에는 결제 입력값을 적용하고, 확정된 매입전표에서는 지급 등록·이력·당일 수정·취소를 엽니다.\n단축키: Alt+P')
@@ -1067,6 +1081,11 @@ class TradeDialog(QDialog):
         if self.amend_context:
             from .purchase_amendment_ui import configure_revision
             configure_revision(self)
+        elif kind=='purchase' and not self.readonly:
+            from .purchase_amendments import three_month_cutoff
+            self.date.setMinimumDate(QDate.fromString(three_month_cutoff(),'yyyy-MM-dd'))
+            self.date.setMaximumDate(QDate.currentDate())
+            self.date.setToolTip('매입일은 달력상 최근 3개월 이내에서 선택합니다. 저장된 전표는 매입 월을 변경할 수 없습니다.\n단축키: Alt+D')
 
     def switch_purchase_mode(self, checked):
         if self.record or self.readonly:
@@ -1139,7 +1158,8 @@ class TradeDialog(QDialog):
         def snapshot(row):
             return dict(product=row['product'].currentData(),unit=row['unit'].currentData(),quantity=row['qty'].text(),
                 price=row['price'].text(),source=row.get('source'),saved_line=row.get('saved_line'),
-                factor=row['factor'].text(),sale_price=row['sale_price'].text(),line_memo=row['line_memo'].text(),amount_override=row.get('amount_override'))
+                factor=row['factor'].text(),sale_price=row['sale_price'].text(),line_memo=row['line_memo'].text(),
+                amount_override=row.get('amount_override'),sale_price_reentered=row.get('sale_price_reentered',False))
         before=[snapshot(self.line_rows[position]) for position in (index,target)]
         self._batch_lines=True
         try:
@@ -1153,6 +1173,7 @@ class TradeDialog(QDialog):
                 row['unit'].setCurrentIndex(max(0,row['unit'].findData(data['unit'])))
                 row['qty'].setText(data['quantity']);row['price'].setText(data['price'])
                 for key in ('factor','sale_price','line_memo'):row[key].setText(data[key])
+                row['sale_price_reentered']=data['sale_price_reentered']
                 if data['amount_override'] is None:row.pop('amount_override',None)
                 else:row['amount_override']=data['amount_override']
                 row['product'].setEnabled(not bool(data['source']));row['unit'].setEnabled(not bool(data['source']))
@@ -1179,6 +1200,11 @@ class TradeDialog(QDialog):
         except (ValueError,PermissionError) as exc:_warn(self,exc)
 
     def tax_info(self):
+        if hasattr(self,'price_panel'):
+            self.price_panel.toggle()
+        else:self.show_tax_info()
+
+    def show_tax_info(self):
         self.recalculate();rows=[]
         for row in self.line_rows:
             identifier=row['product'].currentData()
@@ -1307,7 +1333,7 @@ class TradeDialog(QDialog):
             self.product_model.ensure(self.product_map[product_id])
         row = {"source": source_line}
         from .trade_product_model import TradeProductCombo
-        product = row["product"] = TradeProductCombo(self.product_model)
+        product = row["product"] = TradeProductCombo(self.product_model,picker_only=self.kind.startswith('purchase'))
         unit = row["unit"] = QComboBox()
         row["qty"], row["price"] = GroupedNumberEdit(str(quantity)), GroupedNumberEdit("0" if price is None else str(price))
         row["stock"] = QLabel()
@@ -1319,6 +1345,11 @@ class TradeDialog(QDialog):
         for key in ("spec", "base_qty", "margin", "category", "supplier"):
             row[key] = QLabel()
             row[key].setMargin(5)
+        if hasattr(self,'purchase_view'):
+            from .purchase_worksheet_view import DETAIL_KEYS
+            for key in DETAIL_KEYS:
+                row[key]=QLabel('—');row[key].setAlignment(Qt.AlignmentFlag.AlignRight|Qt.AlignmentFlag.AlignVCenter)
+                row[key].setTextFormat(Qt.TextFormat.PlainText)
         for key in ("qty", "price",'total','factor','sale_price'):
             row[key].setAlignment(Qt.AlignmentFlag.AlignRight)
             row[key].setStyleSheet('padding:2px 4px;min-width:0px;')
@@ -1352,6 +1383,7 @@ class TradeDialog(QDialog):
         row['total'].textEdited.connect(lambda *_:self.line_amount_changed(row))
         row['factor'].textChanged.connect(self.recalculate)
         row['sale_price'].textChanged.connect(self.recalculate)
+        row['sale_price'].textEdited.connect(lambda *_:self.line_sale_price_edited(row))
         product.setCurrentIndex(max(0, product.findData(product_id)))
         if product_id:
             if unit_id and unit.findData(unit_id) < 0:
@@ -1367,6 +1399,8 @@ class TradeDialog(QDialog):
         if source_line:
             row["price"].setReadOnly(True)
             row["stock"].setText(f"최대 {amount(source_line.get('remaining_qty', source_line['input_qty']))}")
+            if 'sale_price' in source_line.get('entry',{}):
+                self.set_line_text(row['sale_price'],source_line['entry']['sale_price'])
         self.recalculate()
         return row
 
@@ -1390,6 +1424,10 @@ class TradeDialog(QDialog):
         row.pop('amount_override',None)
         self.recalculate()
 
+    def line_sale_price_edited(self,row):
+        row['sale_price_reentered']=True
+        self.recalculate()
+
     def line_amount_changed(self,row):
         if self.readonly or self.kind!='purchase':return
         row['editing_amount']=True
@@ -1405,6 +1443,7 @@ class TradeDialog(QDialog):
         finally:row['editing_amount']=False
 
     def product_changed(self, row):
+        row.pop('sale_price_reentered',None)
         identifier = row["product"].currentData()
         row["unit"].blockSignals(True)
         row["unit"].clear()
@@ -1434,6 +1473,8 @@ class TradeDialog(QDialog):
             self.unit_changed(row)
         else:
             self.recalculate()
+
+        if hasattr(self,'price_panel'):self.price_panel.schedule()
 
     def pick_product(self):
         if self.readonly or self.is_return:
@@ -1510,6 +1551,8 @@ class TradeDialog(QDialog):
             row["price"].setText(str(quote["purchase_price"] if self.kind.startswith("purchase") else quote["price"]))
         self.recalculate()
 
+        if hasattr(self,'price_panel'):self.price_panel.schedule()
+
     def remove_selected_line(self):
         index = self.table.currentRow()
         if not self.readonly and 0 <= index < len(self.line_rows):
@@ -1522,6 +1565,7 @@ class TradeDialog(QDialog):
         self.line_rows.pop(index)
         self.table.removeRow(index)
         self.recalculate()
+        if hasattr(self,'price_panel'):self.price_panel.schedule()
 
     def scan_barcode(self, barcode):
         if self.readonly or self.is_return:
@@ -1573,6 +1617,7 @@ class TradeDialog(QDialog):
             identifier = row["product"].currentData()
             if not identifier:
                 row["total"].setText("—")
+                if hasattr(self,'purchase_view'):self.purchase_view.clear_row(row)
                 continue
             try:
                 product = self.product_map[identifier]
@@ -1602,6 +1647,7 @@ class TradeDialog(QDialog):
                     needed=row[key].fontMetrics().horizontalAdvance(row[key].text())+14  # include the grid line as well as editor padding
                     if self.table.columnWidth(column)<needed:self.table.setColumnWidth(column,needed)
                 sale = rounded(quantity * money(row['sale_price'].text() or '0') / row.get("price_basis", 1), self.rounding_mode)
+                if hasattr(self,'purchase_view'):self.purchase_view.update_row(row,quantity,factor,value,sale,product)
                 row["margin"].setText(f"{(Decimal(sale - value) * 100 / sale):.2f}%" if sale else "—")
                 row["margin"].setToolTip("현재 판매가 기준 참고 이익률입니다. 확정 매출의 실제 이익이 아닙니다.")
                 total += value
@@ -1615,6 +1661,7 @@ class TradeDialog(QDialog):
             except (InvalidOperation, ValueError, OverflowError):
                 invalid = True
                 row['total'].setToolTip('입력값을 확인하세요. 수량·입수량은 양수, 금액은 0 이상이어야 합니다.')
+                if hasattr(self,'purchase_view'):self.purchase_view.clear_row(row,'입력 확인')
         if hasattr(self, "total_label"):
             self.total_label.setText(f"{'매입합계' if self.kind.startswith('purchase') else '합계'} {won(total)}원")
             vat = rounded(Decimal(taxable) / 11)
@@ -1881,6 +1928,9 @@ class PurchaseJournalGrid(DataGrid):
             if not summary:
                 from .menu_icons import menu_icon
                 self.item(index,1).setIcon(menu_icon('purchases'))
+                record = self.item(index,0).data(Qt.ItemDataRole.UserRole)
+                if record.get('kind') == 'purchase_return':
+                    self.item(index,1).setForeground(QColor('#B42318'))
         self.setSortingEnabled(True)
 
 
@@ -2000,6 +2050,9 @@ class TradesPage(Page):
             dialog = PurchaseImportDialog(self.store, self.window)
             dialog.imported.connect(self.refresh)
             dialog.exec()
+            if dialog.open_document_id:
+                TradeDialog(self.window,'purchase',self.store.document(dialog.open_document_id)).exec()
+                self.refresh()
         except (ValueError, PermissionError) as exc:
             self.fail(exc)
 

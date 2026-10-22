@@ -24,6 +24,7 @@ class PurchasePaymentDialog(QDialog):
         super().__init__(parent or window)
         self.window, self.store, self.document_id = window, window.store, document_id
         self.partner_id, self.pending, self.plan, self.editing = partner_id, pending, plan, editing
+        if editing:self.partner_id=editing['plan']['partner_id']
         self.snapshot = None
         self.saved_id = None
         self.changed = self._saving = self._target_explicit = False
@@ -150,7 +151,10 @@ class PurchasePaymentDialog(QDialog):
         self._loading = False
         self.refresh(True)
         if plan: self.load_plan(plan)
-        if editing: self.load_plan(editing['plan'])
+        if editing:
+            self.load_plan(editing['plan']);self.refresh()
+            if not editing['editable']:
+                for field in (self.date,self.hour,self.minute,self.target_amount,self.payment_rate,self.dc_rate,self.account,self.memo,self.bill_number,self.bill_due,self.bill_bank,*self.components.values(),*self.discounts.values(),self.rate_button,self.dc_button):field.setEnabled(False)
 
     def toggle_history(self):
         self.tabs.setVisible(not self.tabs.isVisible())
@@ -226,7 +230,7 @@ class PurchasePaymentDialog(QDialog):
             else:self.snapshot=self.store.payment_context(self.partner_id,_date(self.date))
             if self.pending is None:self.finance_snapshot=self.store.payment_context(self.partner_id,_date(self.date),self.document_id)
             if self.editing:
-                fresh=self.store.purchase_payment_batch(self.editing['payment_ids'][0])
+                fresh=self.store.purchase_payment_batch(self.editing['payment_ids'][0],self.editing.get('source_type','payment'))
                 if fresh['state']!=self.editing['state']:raise ValueError('결제 이력이 바뀌었습니다. 창을 닫고 다시 선택하세요.')
                 self.snapshot['cap']=fresh['cap']
             data, document = self.snapshot, self.snapshot['document']
@@ -294,23 +298,32 @@ class PurchasePaymentDialog(QDialog):
             self.payable_total.setText(won(target-discount)+' 원')
             self.paid_total.setText(won(paid)+' 원');self.discount_total.setText(won(discount)+' 원');self.settlement_total.setText(won(total)+' 원')
             self.remaining.setText(won((self.snapshot['cap'] if self.editing else (self.snapshot.get('document') or {'balance':self.snapshot['cap']})['balance'])-total)+' 원')
-            valid = 0 < total <= self.snapshot['cap'] and total==target
+            closed=bool(self.pending is None and self.finance_snapshot.get('payment_closed'))
+            valid = 0 < total <= self.snapshot['cap'] and total==target and not closed and (not self.editing or self.editing['editable'])
             self.error.setText('수기 장부 기록입니다. 할인은 현금 지급이 아니며, 어음 지급은 별도 만기 장부에서 기록합니다.' if valid else
                 '실지급금액 + 할인소계가 결제대상액과 같아야 하며, 조회잔액을 초과할 수 없습니다.' if self.snapshot['cap'] else '추가 결제 가능한 잔액이 없습니다. 기존 결제 이력을 확인하세요.')
             self.save_button.setEnabled(valid and not self._saving and can_action(self.store.actor, 'payments', 'create'))
+            if closed:self.error.setText(self.finance_snapshot['closed_through']+'까지 MIS 결제 월마감되어 수정·등록할 수 없습니다. 이력은 보존됩니다.')
+            elif self.editing and not self.editing['editable']:self.error.setText(self.editing['edit_reason'])
         except ValueError as exc:
             self.error.setText(str(exc))
             self.save_button.setEnabled(False)
 
     def update_controls(self, *_):
+        if self._loading:return
         row = self.payments_grid.selected() if self.tabs.currentIndex() == 1 else None
-        eligible = bool(self.document_id is not None and self.snapshot and row and not row['voided'] and not row.get('supplier_settlement_id')
-            and row['date'] == date.today().isoformat())
+        eligible=False
+        if self.snapshot and row and not row['voided']:
+            try:
+                source_type=row.get('type','payment');identifier=row['id']
+                if row.get('supplier_settlement_id'):source_type='settlement';identifier=row['supplier_settlement_id']
+                eligible=self.store.purchase_payment_batch(identifier,source_type)['editable']
+            except (ValueError,PermissionError,ConnectionError):pass
         can_delete = can_action(self.store.actor, 'payments', 'delete')
-        self.void_button.setEnabled((eligible or bool(self.editing)) and can_delete or self.pending is not None and bool(self.plan))
+        self.void_button.setEnabled((eligible or bool(self.editing and self.editing['editable'])) and can_delete or self.pending is not None and bool(self.plan))
         if self.pending is not None:self.void_button.setToolTip('아직 저장하지 않은 상세 결제 입력만 지웁니다. 장부·매입품목은 변경하지 않습니다.')
         self.edit_button.setEnabled(eligible and can_delete and can_action(self.store.actor, 'payments', 'create'))
-        note = '여러 전표에 배분한 공급사 묶음결제는 매입결제에서 전체 배분을 확인한 뒤 수정·취소하세요.' if row and (self.document_id is None or row.get('supplier_settlement_id')) else '선택한 결제 묶음을 수정·취소합니다. 매입전표는 삭제하지 않습니다. 당일만 가능하며 지급 완료 어음은 변경할 수 없습니다.'
+        note = '선택한 결제 묶음을 수정·취소합니다. 매입전표는 삭제하지 않습니다. 마감 기간·지급 완료 어음은 변경할 수 없습니다.'
         self.edit_button.setToolTip(note)
         self.void_button.setToolTip(note)
 
@@ -343,7 +356,7 @@ class PurchasePaymentDialog(QDialog):
                 reason,ok=QInputDialog.getText(self,'결제수정','수정 사유 (원래 결제 이력은 보존됩니다.)')
                 if not ok:
                     attempted=False;self._saving=False;self.recalculate();return
-                result=self.store.replace_purchase_payment_batch(self.editing['payment_ids'][0],plan,self.editing['state'],reason)
+                result=self.store.replace_purchase_payment_batch(self.editing['payment_ids'][0],plan,self.editing['state'],reason,self.editing.get('source_type','payment'))
             else:
                 result=self.store.register_supplier_payment(self.partner_id,values,_date(self.date),self.memo.text(),self.finance_snapshot['state'],self.document_id,bill,plan)
             self.saved_id=result['records'][0]['id']
@@ -364,18 +377,16 @@ class PurchasePaymentDialog(QDialog):
 
     def selected_payment(self):
         row = self.payments_grid.selected() if self.tabs.currentIndex() == 1 else None
-        if not row or row['voided'] or row['date'] != date.today().isoformat():
-            raise ValueError('결제 이력에서 취소되지 않은 당일 결제를 선택하세요.')
-        if row['supplier_settlement_id']:
-            raise ValueError('공급사 묶음결제는 기존 결제관리에서 전체 배분을 확인하세요.')
-        return row
+        if not row or row['voided']:
+            raise ValueError('결제 이력에서 취소되지 않은 결제를 선택하세요.')
+        if row.get('supplier_settlement_id'):return dict(row,source_type='settlement',batch_id=row['supplier_settlement_id'])
+        return dict(row,source_type=row.get('type','payment'),batch_id=row['id'])
 
     def edit_payment(self, *_):
         try:
             row = self.selected_payment()
-            batch = self.store.purchase_payment_batch(row['id'])
-            if not batch['editable']: raise ValueError('당일 결제만 수정할 수 있습니다. 지급 완료 어음은 수정할 수 없습니다.')
-            dialog = PurchasePaymentDialog(self.window, self.document_id, self, editing=batch)
+            batch = self.store.purchase_payment_batch(row['batch_id'],row['source_type'])
+            dialog = PurchasePaymentDialog(self.window, batch['document_id'], self, editing=batch)
             if dialog.exec() and dialog.changed:
                 self.changed = True; self.refresh(True)
         except (ValueError, PermissionError) as exc: _warn(self, exc)
@@ -388,10 +399,11 @@ class PurchasePaymentDialog(QDialog):
                     from .navigation import mark_saved
                     mark_saved(self);self.accept()
                 return
-            batch = self.editing or self.store.purchase_payment_batch(self.selected_payment()['id'])
+            row=None if self.editing else self.selected_payment()
+            batch = self.editing or self.store.purchase_payment_batch(row['batch_id'],row['source_type'])
             reason, accepted = QInputDialog.getText(self, '결제전표 삭제 · 이력 보존', '취소 사유 (매입전표는 삭제하지 않습니다.)')
             if accepted and _confirm(self, '결제전표 취소', f"{won(money(batch['plan']['target']))}원 결제 묶음을 취소하고 잔액을 복원할까요?\\n매입전표·품목은 보존되며 실제 송금·카드 승인은 취소하지 않습니다."):
-                self.store.void_purchase_payment_batch(batch['payment_ids'][0], batch['state'], reason)
+                self.store.void_purchase_payment_batch(batch['payment_ids'][0], batch['state'], reason,batch.get('source_type','payment'))
                 self.changed = True
                 if self.editing:
                     from .navigation import mark_saved

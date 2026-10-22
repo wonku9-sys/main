@@ -119,6 +119,7 @@ class SettlementMixin:
         value = money(amount, positive=True)
         memo = text(memo, "결제 메모")
         self._assert_open(when)
+        self._assert_payment_open(when)
         if method == "cash":
             self._assert_cash_open(when, self.actor["id"])
         snapshot = self.supplier_outstanding(partner_id, when)
@@ -183,9 +184,8 @@ class SettlementMixin:
         reason = text(reason, "취소 사유", True)
         if group["voided"]:
             raise ValueError("이미 취소한 결제입니다.")
-        if group["date"] != calendar_date.today().isoformat():
-            raise ValueError("당일 결제만 취소할 수 있습니다. 지난 날짜의 결제는 보존합니다.")
         self._assert_open(group["date"])
+        self._assert_payment_open(group["date"])
         if group["method"] == "cash":
             self._assert_cash_open(group["date"], group["user_id"])
         for payment in group["allocations"]:
@@ -198,12 +198,12 @@ class SettlementMixin:
             self._require("trade")
             self._require_capability("payments", "delete")
             row = self.db.execute("SELECT p.* FROM payments p JOIN partners s ON s.id=p.partner_id WHERE p.id=? AND s.kind='supplier'", (identifier,)).fetchone()
-            if not row or row["date"] != calendar_date.today().isoformat():
-                raise ValueError("당일 공급사 결제만 취소할 수 있습니다.")
+            if not row:
+                raise ValueError("유효한 공급사 결제를 선택하세요.")
             self._void_trade_payment(identifier, reason)
 
     def replace_supplier_payment(self, kind, identifier, amount, method, memo, reason, expected):
-        """Preserve the original and replace it atomically, for today only."""
+        """Preserve the original and replace it atomically in an open period."""
         with self._tx():
             self._require('trade')
             self._require_capability('payments', 'create')
@@ -213,8 +213,9 @@ class SettlementMixin:
                 raise ValueError('정정할 공급사 결제를 선택하세요.')
             table = 'supplier_settlements' if kind == 'settlement' else 'payments'
             row = self.db.execute(f"SELECT p.* FROM {table} p JOIN partners s ON s.id=p.partner_id WHERE p.id=? AND s.kind='supplier'", (identifier,)).fetchone()
-            if not row or row['voided'] or row['date'] != calendar_date.today().isoformat():
-                raise ValueError('취소되지 않은 당일 공급사 결제만 정정할 수 있습니다.')
+            if not row or row['voided']:
+                raise ValueError('취소되지 않은 유효한 공급사 결제만 정정할 수 있습니다.')
+            self._assert_payment_open(row['date'])
             if row['method'] not in {'cash','transfer','card'} or method not in {'cash','transfer','card'}:
                 raise ValueError('어음·할인은 당일 원기록을 취소한 뒤 결제처리에서 다시 등록하세요. 이력은 보존됩니다.')
             if not isinstance(expected, dict) or any(expected.get(key) != row[key] for key in ('date', 'method', 'memo')) or money_input(expected.get('amount'), signed=True) != row['amount']:

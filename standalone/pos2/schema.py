@@ -9,8 +9,9 @@ from .inspiration import INSPIRATION_SCHEMA
 from .health import HEALTH_SCHEMA
 from .shared_protocol import SHARED_SCHEMA
 from .email_recovery import EMAIL_SCHEMA
+from .payment_closing import PAYMENT_CLOSE_SCHEMA
 
-SCHEMA = """
+SCHEMA = PAYMENT_CLOSE_SCHEMA + """
 CREATE TABLE IF NOT EXISTS users (
  id INTEGER PRIMARY KEY, code TEXT NOT NULL UNIQUE, name TEXT NOT NULL,
  password_hash TEXT NOT NULL, role TEXT NOT NULL CHECK(role IN ('admin','staff')),

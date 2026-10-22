@@ -219,7 +219,8 @@ def test_schema215_upgrade_keeps_protection_backup_and_validates_current_backup(
     with sqlite3.connect(path) as old:old.execute('DROP TABLE document_entry');old.execute('PRAGMA user_version=215')
     upgraded=Store(path)
     try:
-        assert upgraded.migration_backup_path and upgraded.db.execute('PRAGMA user_version').fetchone()[0]==217
+        from pos2.recovery import SCHEMA_VERSION
+        assert upgraded.migration_backup_path and upgraded.db.execute('PRAGMA user_version').fetchone()[0]==SCHEMA_VERSION
         _validate_database(upgraded.db)
         with sqlite3.connect(upgraded.migration_backup_path) as before:
             assert before.execute('PRAGMA user_version').fetchone()[0]==215

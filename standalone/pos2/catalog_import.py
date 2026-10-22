@@ -2,11 +2,45 @@
 from pathlib import Path
 import struct
 import math
+import csv
+import io
 from decimal import Decimal,InvalidOperation
 from zipfile import ZipFile
 
 MAX_ROWS=65536
 MAX_COLS=96
+BINARY_EXCEL={'.xls','.xlt'}
+XML_EXCEL={'.xlsx','.xlsm','.xltx','.xltm'}
+TEXT_TABLES={'.csv','.tsv','.txt'}
+PURCHASE_FILE_FILTER=('매입 자료 (*.xls *.xlsx *.xlsm *.xlt *.xltx *.xltm *.csv *.tsv *.txt);;'
+    'Excel (*.xls *.xlsx *.xlsm *.xlt *.xltx *.xltm);;쉼표·탭 구분 표 (*.csv *.tsv *.txt)')
+
+
+def read_text_table(source):
+    """Bounded delimited values, not Excel automation or formula evaluation."""
+    raw=Path(source).read_bytes()
+    encodings=('utf-16',) if raw.startswith((b'\xff\xfe',b'\xfe\xff')) else ('utf-8-sig','cp949')
+    text=None
+    for encoding in encodings:
+        try:text=raw.decode(encoding);break
+        except UnicodeError:pass
+    if text is None or '\x00' in text:raise ValueError('표 파일의 한글 인코딩을 확인하세요. UTF-8·UTF-16·CP949를 지원합니다.')
+    sample=text[:65536]
+    delimiter='\t' if Path(source).suffix.lower()=='.tsv' else ','
+    try:delimiter=csv.Sniffer().sniff(sample,delimiters=',\t;').delimiter
+    except csv.Error:
+        if '\t' in sample:delimiter='\t'
+    rows=[];cells=0
+    try:
+        for row in csv.reader(io.StringIO(text,newline=''),delimiter=delimiter,strict=True):
+            if len(rows)>=MAX_ROWS or len(row)>MAX_COLS:raise ValueError('표 파일의 행·열 허용 범위를 초과했습니다.')
+            cells+=len(row)
+            if cells>2_000_000:raise ValueError('표 파일의 셀 수가 너무 많습니다.')
+            rows.append(row)
+    except csv.Error as exc:raise ValueError('쉼표·탭 구분 또는 따옴표가 잘못된 표 파일입니다.') from exc
+    width=max((len(row) for row in rows),default=0)
+    if not width or width*len(rows)>2_000_000:raise ValueError('불러올 표가 없거나 펼친 셀 수가 너무 많습니다.')
+    return [row+['']*(width-len(row)) for row in rows]
 
 
 def read_biff2(source):
@@ -50,7 +84,9 @@ def read_excel(source):
     source=Path(source)
     if not source.is_file() or source.is_symlink() or not 8<=source.stat().st_size<=32*1024*1024:raise ValueError('32MB 이하의 Excel 파일을 선택하세요.')
     with source.open('rb') as stream:header=stream.read(8)
-    if source.suffix.lower()=='.xls':
+    suffix=source.suffix.lower()
+    if suffix in TEXT_TABLES:return read_text_table(source)
+    if suffix in BINARY_EXCEL:
         if header==b'\x09\x00\x04\x00\x02\x00\x10\x00':return read_biff2(source)
         import xlrd
         try:
@@ -61,7 +97,7 @@ def read_excel(source):
                 return [[str(int(v)) if type(v) is float and v.is_integer() else str(v) for v in sheet.row_values(r)] for r in range(sheet.nrows)]
             finally:book.release_resources()
         except (xlrd.XLRDError,AssertionError,IndexError,UnicodeError) as exc:raise ValueError('XLS 파일을 읽지 못했습니다. 값만 저장한 파일을 사용하세요.') from exc
-    if source.suffix.lower()!='.xlsx':raise ValueError('XLS 또는 XLSX 파일을 선택하세요.')
+    if suffix not in XML_EXCEL:raise ValueError('XLS·XLSX·XLSM·XLT·XLTX·XLTM·CSV·TSV·TXT 표 파일을 선택하세요. XLSB는 Excel에서 XLSX로 저장하세요.')
     from openpyxl import load_workbook
     with ZipFile(source) as archive:
         if len(archive.infolist())>2000 or sum(i.file_size for i in archive.infolist())>128*1024*1024:raise ValueError('압축 해제 크기가 너무 큰 XLSX입니다.')

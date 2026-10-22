@@ -39,14 +39,28 @@ class TradeProductModel(QAbstractListModel):
 
 
 class TradeProductCombo(QComboBox):
-    def __init__(self, model):
+    def __init__(self, model, picker_only=False):
         super().__init__()
+        self.picker_only=picker_only
+        self.setProperty('syPickerOnly',picker_only)
         self.setModel(model)
         self.setMinimumContentsLength(18)
         self.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
         self.view().setUniformItemSizes(True)
         self.currentIndexChanged.connect(lambda _index: self.setToolTip(self.currentText()))
         self.setToolTip(self.currentText())
+
+    def showPopup(self):
+        if not self.picker_only:super().showPopup()
+
+    def keyPressEvent(self,event):
+        if self.picker_only and not event.modifiers() & Qt.KeyboardModifier.ControlModifier and event.key() not in (Qt.Key.Key_Tab,Qt.Key.Key_Backtab):
+            event.ignore();return
+        super().keyPressEvent(event)
+
+    def wheelEvent(self,event):
+        if self.picker_only:event.ignore()
+        else:super().wheelEvent(event)
 
     def findData(self, value, role=Qt.ItemDataRole.UserRole, flags=Qt.MatchFlag.MatchExactly | Qt.MatchFlag.MatchCaseSensitive):
         if role == Qt.ItemDataRole.UserRole:

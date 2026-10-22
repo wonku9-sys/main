@@ -13,7 +13,8 @@ class PageWindow(QDialog):
         layout=QVBoxLayout(self);layout.setContentsMargins(0,0,0,0);layout.setSpacing(0)
         from .query_bar import NavigationBar
         self._fixed_query_header=True
-        self.navigation_bar=NavigationBar(page.title,self,home=desktop.go_home,close=self.close)
+        # Native top-right X is the single close control for this workspace.
+        self.navigation_bar=NavigationBar(page.title,self,home=desktop.go_home)
         self.query_bar=page.header;self.query_bar.set_query(self.refresh)
         layout.addWidget(self.navigation_bar)
         layout.addWidget(surface,1)

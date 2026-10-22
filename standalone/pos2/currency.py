@@ -90,6 +90,11 @@ def currency_boundary(cls):
             depth = getattr(self, "_currency_depth", 0)
             self._currency_depth = depth + 1
             own_read=name in {'purchase_edit_context','purchase_revisions','purchase_payment_batch','payment_context','payment_summary','finance_profit','finance_member_ledger','purchase_payment_context','inventory_status','products','members','trade_products','lookup_barcode','document','household_financial_overview','household_cash_forecast','household_annual_report','household_custom_report','work_log_report','sales_period_comparison'} and not self.db.in_transaction
+            if name == 'purchase_price_history' and not self.db.in_transaction:own_read = True
+            if name == 'preview_supplier_payments' and not self.db.in_transaction:own_read = True
+            if name == 'supplier_ledger' and not self.db.in_transaction:own_read = True
+            if name == 'purchase_clipboard_products' and not self.db.in_transaction:own_read = True
+            if name == 'payment_close_context' and not self.db.in_transaction:own_read = True
             if own_read:self.db.execute('BEGIN')
             try:
                 result = function(self, *args, **kwargs)

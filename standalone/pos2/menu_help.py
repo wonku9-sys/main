@@ -49,8 +49,13 @@ MENU_HELP.update({key: f"{value[0]} 기준으로 확정 전표·반품을 집계
 MENU_HELP.update({key: f"{title} 자료를 검색·인쇄·엑셀 저장합니다. 이력은 기록된 당시 내용을 보존합니다." for key,title in BASIC_VIEWS.items()})
 MENU_HELP.update({key: f"{title}를 기간·회원으로 조회하고 인쇄·엑셀 저장합니다." for key,title in MEMBER_VIEWS.items()})
 MENU_HELP.update({key: f"{value[0]}를 저장하고 인쇄·PDF·엑셀로 출력합니다. 재고와 결제를 변경하지 않으며 전자세금계산서를 발급하지 않습니다." for key,value in FORM_VIEWS.items()})
-MENU_HELP['store_profile']='상호·사업자번호·대표자명·업태·업종·연락처·계좌를 등록합니다. 새 문서의 공급자 정보에 자동 적용됩니다.'
+MENU_HELP['store_profile']='상호·사업자등록번호·대표자명·주소·업태·종목·입금 계좌·연락처·메모를 등록합니다. 새 문서의 공급자 정보에 자동 적용됩니다.'
 ACTION_HELP = {
+    '이 PC 주소 선택':'현재 PC의 내부 네트워크 주소를 선택합니다. 기준 PC로 사용할 주소를 확인하세요.',
+    '기준 PC 인증키 생성':'기준 PC의 인증서와 연결 코드를 생성합니다. 기존 인증키 교체 전에는 확인을 받습니다.',
+    '연결 파일 불러오기':'기준 PC에서 받은 연결 설정 파일을 불러옵니다. 연결 코드는 별도로 입력합니다.',
+    '연결 파일 내보내기':'다른 PC에서 사용할 연결 설정 파일을 저장합니다. 비밀번호·개인키·업무 자료는 포함하지 않습니다.',
+    '연결 코드 새로 발급 · 기존 연결 해제':'확인 후 연결 코드를 새로 만듭니다. 기존 PC는 새 코드로 다시 연결해야 합니다.',
     '달력':'첫화면의 매장 달력으로 이동해 날짜별 매입·판매와 일정을 확인합니다.',
     '판매조회':'판매내역을 본화면 작업영역에 표시합니다. 등록은 판매내역의 매출등록에서 시작합니다.',
     '이전': '이번 로그인에서 열었던 직전 메뉴로 돌아갑니다. 저장하지 않은 입력은 먼저 확인합니다.',
@@ -103,11 +108,31 @@ class MenuHelpStyle(QProxyStyle):
         super().__init__("Fusion")
 
     def polish(self,widget):
-        from PySide6.QtWidgets import QSpinBox,QDoubleSpinBox
+        from PySide6.QtWidgets import QSpinBox,QDoubleSpinBox,QToolButton
+        if isinstance(widget,QToolButton) and widget.objectName() in {'qt_calendar_prevmonth','qt_calendar_nextmonth'}:
+            from PySide6.QtCore import Qt,QSize
+            from .menu_icons import menu_icon
+            previous=widget.objectName()=='qt_calendar_prevmonth'
+            widget.setArrowType(Qt.ArrowType.NoArrow);widget.setIcon(menu_icon('back' if previous else 'forward'));widget.setIconSize(QSize(20,20))
+            widget.setAccessibleName('이전 달' if previous else '다음 달')
+            widget.setToolTip('이전 달로 이동합니다.' if previous else '다음 달로 이동합니다.')
         if isinstance(widget,(QSpinBox,QDoubleSpinBox)):
             hint='▲ 값을 늘립니다 · ▼ 값을 줄입니다. 숫자를 직접 입력할 수도 있습니다.'
             if hint not in widget.toolTip():widget.setToolTip((widget.toolTip()+'\n'+hint).strip())
         return super().polish(widget)
+
+    def standardIcon(self,standardIcon,option=None,widget=None):
+        # Qt can refresh calendar arrows after changing a page or skin. Keep
+        # those later requests on the same explicit directional artwork.
+        if standardIcon in {QStyle.StandardPixmap.SP_ArrowLeft,QStyle.StandardPixmap.SP_ArrowRight}:
+            from PySide6.QtWidgets import QCalendarWidget
+            parent=widget
+            while parent is not None:
+                if isinstance(parent,QCalendarWidget):
+                    from .menu_icons import menu_icon
+                    return menu_icon('back' if standardIcon==QStyle.StandardPixmap.SP_ArrowLeft else 'forward')
+                parent=parent.parentWidget()
+        return super().standardIcon(standardIcon,option,widget)
 
     def styleHint(self, hint, option=None, widget=None, returnData=None):
         if hint == QStyle.StyleHint.SH_ToolTip_WakeUpDelay:

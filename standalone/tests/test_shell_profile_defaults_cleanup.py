@@ -69,11 +69,11 @@ def test_profile_name_is_unchanged_and_certificate_fields_save_exactly(desktop):
     assert page.title=='점포 등록정보' and window.items['store_profile'].text(0)=='점포 등록정보'
     grid=page.registration_grid
     assert grid.indexOf(page.fields['store_name'])>=0
-    assert page.fields['business_type'].mapTo(page,QPoint()).y()==page.fields['store_name'].mapTo(page,QPoint()).y()
-    assert page.fields['business_no'].mapTo(page,QPoint()).y()==page.fields['business_category'].mapTo(page,QPoint()).y()
-    assert page.fields['phone'].mapTo(page,QPoint()).y()==page.fields['representative'].mapTo(page,QPoint()).y()
-    assert page.fields['address'].width()>page.fields['store_name'].width()
-    assert len(page.fields)==12
+    assert page.fields['business_type'].mapTo(page,QPoint()).y()==page.fields['business_category'].mapTo(page,QPoint()).y()
+    assert page.fields['business_no'].mapTo(page,QPoint()).y()==page.fields['representative'].mapTo(page,QPoint()).y()
+    assert page.fields['phone'].mapTo(page,QPoint()).y()==page.fields['account'].mapTo(page,QPoint()).y()
+    assert page.fields['address'].width()==page.fields['store_name'].width()>page.fields['business_no'].width()
+    assert len(page.fields)==13
     page.fields['store_name'].setText('수정 점포');page.fields['bank'].setText('예시 은행');assert page.save()
     assert store.store_profile()['store_name']=='수정 점포' and store.store_profile()['bank']=='예시 은행'
     assert '수정 점포' in window.windowTitle()

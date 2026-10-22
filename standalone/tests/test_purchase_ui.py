@@ -98,7 +98,9 @@ def test_enter_applies_checked_items_without_saving_or_posting(shop):
 
 def test_purchase_grid_reference_fields_pack_conversion_and_partial_payment(shop):
     dialog = make_dialog(shop)
-    assert dialog.table.columnCount() == 15
+    from pos2.purchase_worksheet_view import BASIC_COLUMNS,DETAIL_KEYS
+    assert dialog.table.columnCount() == len(BASIC_COLUMNS)+len(DETAIL_KEYS)
+    assert sum(not dialog.table.isColumnHidden(i) for i in range(dialog.table.columnCount()))==15
     assert "123-45-67890" in dialog.partner_info.text()
     dialog.scan_barcode("000098765")
     row = dialog.line_rows[0]

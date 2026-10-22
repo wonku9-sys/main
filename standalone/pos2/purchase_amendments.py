@@ -82,6 +82,11 @@ class PurchaseAmendmentMixin:
             if max(original, record['date']) > date.today().isoformat():
                 raise ValueError('미래 날짜의 확정 전표는 수정할 수 없습니다.')
             self._assert_open(record['date'])
+            month_start=record['date'][:7]+'-01'
+            year,month=map(int,record['date'][:7].split('-'))
+            month_end=record['date'][:7]+f'-{calendar.monthrange(year,month)[1]:02d}'
+            result['minimum_date']=max(cutoff,month_start)
+            result['maximum_date']=min(date.today().isoformat(),month_end)
             result['allowed'] = True
         except (ValueError, PermissionError) as exc:
             result['reason'] = str(exc)
@@ -113,6 +118,8 @@ class PurchaseAmendmentMixin:
             before = self._purchase_revision_snapshot(identifier)
             old = before['document']
             prepared = self._prepare_trade(data, posting=False)
+            if prepared['date'][:7] != old['date'][:7]:
+                raise ValueError('저장된 매입전표의 매입 월은 변경할 수 없습니다. 같은 월의 날짜만 선택하세요.')
             if not three_month_cutoff() <= prepared['date'] <= date.today().isoformat():
                 raise ValueError('변경할 매입일은 달력상 3개월 이내이며 미래일이 아니어야 합니다.')
             self._assert_open(prepared['date'])

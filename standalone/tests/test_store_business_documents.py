@@ -15,9 +15,11 @@ from pos2.paper_output_ui import output_paper
 from pos2.store import Store
 
 IDENTITY=dict(store_name='검증 상점',business_no='123-45-67890',representative='테스트 대표',
-              business_type='도매,소매',business_category='식료품 판매',phone='041-555-0123',address='가상시 검증로 123 상가 201호')
+              business_type='도매,소매',business_category='식료품 판매',phone='041-555-0123',address='가상시 검증로 123 상가 201호',
+              account='999-000-123',store_memo='방문해 주셔서 감사합니다.')
 CHANGED=dict(store_name='새로운 매장',business_no='987-65-43210',representative='변경 담당',
-             business_type='서비스',business_category='생활용품',phone='02-777-5678',address='별도시 변경길 456')
+             business_type='서비스',business_category='생활용품',phone='02-777-5678',address='별도시 변경길 456',
+             account='111-222-333',store_memo='변경된 매장 안내')
 
 
 @pytest.fixture
@@ -56,14 +58,14 @@ def assert_identity(text,values=IDENTITY):
 def test_settings_certificate_fields_share_profile_and_keep_optional_accounts(shop):
     app,store,window,_,_,_=shop;window.open_page('settings');page=window.current_page;app.processEvents()
     for key,value in IDENTITY.items():assert page.fields[key].text()==value
-    for left,right in [('store_name','business_type'),('business_no','business_category'),('representative','phone')]:
+    for left,right in [('business_no','representative'),('business_type','business_category'),('account','phone')]:
         assert page.fields[left].mapTo(page,QPoint()).y()==page.fields[right].mapTo(page,QPoint()).y()
-    assert page.fields['address'].width()>page.fields['store_name'].width()
-    assert page.business_registration.findChild(QLabel,'businessLabel_business_category').text()=='업종'
+    assert page.fields['address'].width()==page.fields['store_name'].width()>page.fields['business_no'].width()
+    assert page.business_registration.findChild(QLabel,'businessLabel_business_category').text()=='종목'
     for key,value in CHANGED.items():page.fields[key].setText(value)
     page.save()
     assert {key:store.store_profile()[key] for key in CHANGED}==CHANGED
-    assert store.store_profile()['bank']=='검증 은행' and store.store_profile()['account']=='999-000-123'
+    assert store.store_profile()['bank']=='검증 은행' and store.store_profile()['account']==CHANGED['account']
     assert store.store_profile()['fax']=='041-555-9999' and store.store_profile()['store_email']=='shop@example.invalid'
     window.open_page('store_profile');profile=window.current_page
     assert profile.title=='점포 등록정보'
@@ -96,7 +98,7 @@ def test_all_seven_fields_in_dialog_real_pdf_png_print_and_excel_keep_issued_sna
     record=store.sales_form(identifier);assert {field:record['seller'][field] for field in IDENTITY}==IDENTITY
     store.save_settings(CHANGED)
     assert_identity(paper_document(record,title).toPlainText())
-    assert '업태 / 업종' in paper_html(record,title)
+    assert '업태 / 종목' in paper_html(record,title)
     editor=SalesFormDialog(window,key,record);assert_identity(editor.supplier_info.text())
     assert editor.supplier_info.textFormat()==Qt.TextFormat.PlainText
     editor.close();editor.deleteLater();app.processEvents()
@@ -157,7 +159,7 @@ def test_missing_optional_identity_stays_compatible_and_html_is_escaped(shop):
     editor=SalesFormDialog(window,'quotations',record)
     assert editor.supplier_info.textFormat()==Qt.TextFormat.PlainText
     assert '<b>검증 & 상점</b>' in editor.supplier_info.text()
-    assert '대표자명:' in supplier_summary(record['seller']) and '업종:' in supplier_summary(record['seller'])
+    assert '대표자명:' in supplier_summary(record['seller']) and '종목:' in supplier_summary(record['seller'])
     editor.close();editor.deleteLater()
 
 
@@ -171,3 +173,55 @@ def test_new_editor_refreshes_supplier_from_the_snapshot_actually_saved(shop):
     assert_identity(editor.supplier_info.text(),CHANGED)
     assert {field:editor.record['seller'][field] for field in CHANGED}==CHANGED
     editor.close();editor.deleteLater()
+
+
+@pytest.mark.parametrize('key',['settings','store_profile'])
+def test_requested_registration_rows_labels_and_tab_order(shop,key):
+    app,store,window,_,_,_=shop;window.open_page(key);page=window.current_page;app.processEvents()
+    panel=page.business_registration if key=='settings' else page.registration
+    grid=panel.layout()
+    expected=(('store_name','상호',0,0,3),('business_no','사업자등록번호',1,0,1),
+              ('representative','대표자명',1,2,1),('address','주소',2,0,3),
+              ('business_type','업태',3,0,1),('business_category','종목',3,2,1),
+              ('account','입금하실 계좌',4,0,1),('phone','연락처',4,2,1),('store_memo','메모',5,0,3))
+    for field,label,row,column,span in expected:
+        entry=page.fields[field]
+        caption=panel.findChild(QLabel,'businessLabel_'+field)
+        assert caption.text()==label and caption.buddy() is entry
+        assert grid.getItemPosition(grid.indexOf(entry))==(row,column+1,1,span)
+        assert entry.accessibleName()==label
+    order=[item[0] for item in expected]
+    for first,second in zip(order,order[1:]):
+        page.fields[first].setFocus()
+        QTest.keyClick(page.fields[first],Qt.Key.Key_Tab)
+        assert app.focusWidget() is page.fields[second]
+    # The requested account input occurs once, not again in a duplicate bank section.
+    assert len(panel.findChildren(type(page.fields['account']),'',Qt.FindChildOption.FindDirectChildrenOnly))>=9
+    assert sum(1 for entry in page.findChildren(type(page.fields['account'])) if entry.accessibleName()=='입금하실 계좌')==1
+    import os
+    from pathlib import Path
+    if os.environ.get('SY_TEST_CAPTURE_DIR'):
+        captures=Path(os.environ['SY_TEST_CAPTURE_DIR']);captures.mkdir(parents=True,exist_ok=True)
+        panel.grab().save(str(captures/(key+'-registration.png')))
+
+
+def test_store_memo_roundtrip_backup_and_legacy_paper_fallback(shop):
+    _,store,_,_,_,tmp=shop
+    memo='<안내> & 문의 "환영"'
+    store.save_settings({'store_memo':memo})
+    record=store.sales_form(store.save_sales_form('quotation',form_data(shop,'quotation')))
+    assert record['seller']['store_memo']==memo
+    assert '&lt;안내&gt; &amp; 문의 &quot;환영&quot;' in paper_html(record,'견적서')
+    before=store.audit_revision()
+    with pytest.raises(ValueError):store.save_settings({'store_memo':'가'*501})
+    assert store.store_profile()['store_memo']==memo and store.audit_revision()==before
+    backup=store.backup(tmp/'profile-backup.db')
+    copy=Store(backup)
+    try:
+        copy.login('owner','Business-Papers-2026!')
+        assert copy.store_profile()['store_memo']==memo
+    finally:copy.close()
+    # Existing issued records have no new memo key and must remain printable.
+    record['seller'].pop('store_memo')
+    assert '매장 메모' in paper_html(record,'견적서')
+    assert memo not in paper_document(record,'견적서').toPlainText()

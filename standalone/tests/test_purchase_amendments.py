@@ -263,15 +263,32 @@ def test_original_revision_date_window_survives_date_change(shop, monkeypatch):
     product = s.save_product(dict(name='기간 경계 상품', base_unit='개'))
     identifier = s.post_document(dict(kind='purchase', date=three_month_cutoff(), partner_id=supplier,
                                       lines=[dict(product_id=product, qty=1, unit_price=1)]))
-    data = payload(s, identifier); data.update(date=TODAY, entry_datetime=TODAY+' 09:00:00')
+    boundary=date.fromisoformat(three_month_cutoff())
+    changed=boundary+timedelta(days=1)
+    if changed.month!=boundary.month:changed=boundary
+    changed=changed.isoformat()
+    data = payload(s, identifier); data.update(date=changed, entry_datetime=changed+' 09:00:00')
     save(s, identifier, data)
-    assert s.document(identifier)['date'] == TODAY
+    assert s.document(identifier)['date'] == changed
     actual = date.today()
     class NextDay(date):
         @classmethod
         def today(cls): return actual+timedelta(days=1)
     monkeypatch.setattr('pos2.purchase_amendments.date', NextDay)
     assert not s.purchase_edit_context(identifier)['allowed']
+
+
+def test_saved_purchase_month_is_fixed_in_domain_and_edit_calendar(shop):
+    s,supplier,product,_=shop
+    boundary=three_month_cutoff()
+    identifier=s.post_document(dict(kind='purchase',date=boundary,partner_id=supplier,
+                                    lines=[dict(product_id=product,qty=1,unit_price=1)]))
+    context=s.purchase_edit_context(identifier)
+    assert context['minimum_date'][:7]==context['maximum_date'][:7]==boundary[:7]
+    data=payload(s,identifier);data.update(date=TODAY,entry_datetime=TODAY+' 10:00:00')
+    before=s.audit_revision();record=s.document(identifier)
+    with pytest.raises(ValueError,match='매입 월'):save(s,identifier,data)
+    assert s.audit_revision()==before and s.document(identifier)==record
 
 
 def test_switching_kg_gram_input_preserves_the_new_explicit_basis(shop):

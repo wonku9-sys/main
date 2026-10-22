@@ -114,11 +114,11 @@ def test_group_cannot_be_partially_voided_and_whole_same_day_void_restores_all_d
         store.void_supplier_settlement(group, "또 취소")
 
 
-def test_past_payment_cannot_be_changed_and_closed_cash_blocks_registration(shop):
+def test_open_past_payment_can_be_voided_and_closed_cash_blocks_registration(shop):
     store = shop[1]
     group = store.settle_supplier(shop[3], 100, date.today() - timedelta(days=1), "transfer")
-    with pytest.raises(ValueError, match="당일"):
-        store.void_supplier_settlement(group, "지난 날짜")
+    store.void_supplier_settlement(group, "미마감 지난 날짜의 결제 정정")
+    assert store.supplier_settlement_detail(group)['voided']
     store.cash_close({"date": date.today(), "opening_cash": 0, "counted_cash": 0})
     with pytest.raises(ValueError, match="마감"):
         store.settle_supplier(shop[3], 100, date.today(), "cash")

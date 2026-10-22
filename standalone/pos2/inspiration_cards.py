@@ -38,7 +38,9 @@ CARDS=(
 )
 
 
-def as_card(row):return dict(zip(('category','text','source','english','explanation','reflection'),row))
+def as_card(row):
+    from .inspiration_hanja import annotate
+    return annotate(dict(zip(('category','text','source','english','explanation','reflection'),row)))
 
 
 def render(card):

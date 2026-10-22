@@ -25,10 +25,10 @@ CREATE TABLE IF NOT EXISTS restore_state (
  id INTEGER PRIMARY KEY CHECK(id=1), token TEXT NOT NULL
 );
 INSERT OR IGNORE INTO restore_state(id,token) VALUES(1,'');
-PRAGMA user_version=217;
+PRAGMA user_version=218;
 """
-SUPPORTED_VERSIONS = {200, 201, 202, 203, 204, 205, 206, 207, 208,209,210,211,212,213,214,215,216,217}
-SCHEMA_VERSION = 217
+SUPPORTED_VERSIONS = {200, 201, 202, 203, 204, 205, 206, 207, 208,209,210,211,212,213,214,215,216,217,218}
+SCHEMA_VERSION = 218
 APPLICATION_ID = 1398362162
 
 
@@ -58,6 +58,8 @@ def _validate_database(db):
         raise ValueError("지원하지 않는 백업 버전입니다. 같은 독립판 버전의 백업을 선택하세요.")
     expected = dict(_expected_objects())
     actual = _objects(db)
+    if version<218 and ('table','payment_month_closes') not in actual:
+        expected={key:value for key,value in expected.items() if not key[1].startswith('payment_month_close')}
     if version<216 and ('table','document_entry') not in actual:
         expected.pop(('table','document_entry'),None)
     if version<215:
@@ -133,6 +135,11 @@ def _validate_database(db):
             expected[("table", "payments")] = actual[("table", "payments")]
     if actual != expected:
         raise ValueError("백업의 데이터 구조가 현재 독립판과 다르거나 변경되었습니다. 안전을 위해 복원하지 않습니다.")
+    if ('table','payment_month_closes') in actual:
+        from .payment_closing import validate_payment_closes
+        validate_payment_closes(db)
+        if version<218 and db.execute('SELECT 1 FROM payment_month_closes').fetchone():
+            raise ValueError('MIS 결제 월마감 장부는 형식 218 이상으로 복원해야 합니다.')
     if [row[0] for row in db.execute("PRAGMA integrity_check")] != ["ok"]:
         raise ValueError("백업 파일이 손상되어 복원할 수 없습니다.")
     if db.execute("PRAGMA foreign_key_check").fetchone():
@@ -203,7 +210,8 @@ def _validate_database(db):
                 raise ValueError("invalid points policy")
         if type(settings.get("point_enabled", True)) is not bool or not all(isinstance(settings.get(key, ""), str) for key in ("store_name", "business_no", "phone", "address")):
             raise ValueError("invalid settings")
-        if type(settings.get('allow_negative_stock',True)) is not bool or not all(isinstance(settings.get(key,''),str) for key in ('representative','business_type','business_category','fax','store_email','bank','account','account_holder')):raise ValueError('invalid store profile')
+        if type(settings.get('allow_negative_stock',True)) is not bool or not all(isinstance(settings.get(key,''),str) for key in ('representative','business_type','business_category','fax','store_email','bank','account','account_holder','store_memo')):raise ValueError('invalid store profile')
+        if len(settings.get('store_memo',''))>500:raise ValueError('invalid store memo')
         if "backup_schedule" in settings:
             validate_schedule(settings["backup_schedule"])
         if "online_info" in settings:

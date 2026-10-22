@@ -71,7 +71,7 @@ class SupplierPaymentDialog(QDialog):
             self.balance.setText(f"{party['code']} · {party['name']}\n현재 미지급 {won(data['balance'])}원 · 선택일 결제 가능 {won(data['cap'])}원")
             if not self.amount.text() or previous and self.amount.text().replace(",", "") == str(previous["cap"]):
                 self.amount.setText(str(data["cap"]))
-            self.error.setText("정정은 당일 취소 후 재등록합니다. 취소 이력은 보존합니다.")
+            self.error.setText("마감 전 결제는 수정·취소할 수 있습니다. 취소 이력은 보존합니다.")
             self.save_button.setEnabled(data["cap"] > 0)
             self.refresh_allocations()
         except (ValueError, PermissionError) as exc:
@@ -232,6 +232,8 @@ class SupplierPaymentsPage(Page):
         if not row:
             return
         try:
+            if self.tabs.currentIndex()==2 and not row.get('voided') and row.get('amount',0)>0:
+                return self.open_payment_history(row)
             if getattr(self,'_payment_workspace',False) and self.tabs.currentIndex()==1 and row.get('document_id'):
                 document=self.store.document(row['document_id'])
                 self.purchase_detail_grid.fill([[r['product_name'],r.get('specification',''),r.get('barcode',''),r['qty'],r['unit_name'],r['unit_price'],r.get('price_basis',1),r['total'],'과세' if r['tax_mode']=='taxable' else '면세'] for r in document['lines']],document['lines'])
@@ -268,14 +270,16 @@ class SupplierPaymentsPage(Page):
         row = self.history_grid.selected() if self.tabs.currentIndex() == 2 else None
         if not row:
             return self.notify("결제 내역 탭에서 취소할 결제를 선택하세요.")
-        reason, accepted = QInputDialog.getText(self, "결제 취소", "취소 사유 (당일 결제만 가능)")
-        if accepted and _confirm(self, "결제 취소", "선택한 결제를 취소하고 미지급잔액을 되돌릴까요? 이력은 남습니다."):
-            try:
-                api = self.store.void_supplier_settlement if row["type"] == "settlement" else self.store.void_supplier_payment
-                api(row["id"], reason)
+        try:
+            batch=self.store.purchase_payment_batch(row['id'],row['type']) if row['amount']>0 else None
+            if batch and not batch['editable']:raise ValueError(batch['edit_reason'])
+            reason, accepted = QInputDialog.getText(self, "결제 취소", "취소 사유 (마감된 기간은 변경할 수 없습니다.)")
+            description=f"같이 저장한 지급·할인 {len(batch['payment_ids'])}건, 총 {won(money(batch['plan']['target']))}원" if batch else f"선택한 환급 {won(abs(row['amount']))}원"
+            if accepted and _confirm(self, "결제 취소", description+"을 취소하고 잔액을 복원할까요? 원기록은 보존합니다."):
+                if batch:self.store.void_purchase_payment_batch(row['id'],batch['state'],reason,row['type'])
+                else:self.store.void_supplier_payment(row['id'],reason)
                 self.refresh()
-            except (ValueError, PermissionError) as exc:
-                self.fail(exc)
+        except (ValueError, PermissionError,ConnectionError) as exc:self.fail(exc)
 
     def active_grid(self):
         return self.tabs.currentWidget().grid if hasattr(self.tabs.currentWidget(),'grid') else self.tabs.currentWidget()
@@ -283,22 +287,17 @@ class SupplierPaymentsPage(Page):
     def edit_payment(self):
         row=self.history_grid.selected() if self.tabs.currentIndex()==2 else None
         if not row:return self.notify('매입결제현황에서 정정할 결제를 선택하세요.')
-        if row['voided'] or row['date']!=date.today().isoformat():return self.notify('취소되지 않은 당일 결제만 정정할 수 있습니다.')
-        if row['method'] not in {'cash','transfer','card'}:return self.notify('어음·할인은 당일 원기록을 취소한 뒤 결제처리에서 다시 등록하세요. 원래 이력은 보존됩니다.')
-        dialog=FormDialog('당일 결제 정정 · 원래 이력 보존',self)
-        dialog.body.addWidget(QLabel('실제 결제 기록만 수정합니다. 송금·카드 승인·승인 취소는 하지 않습니다.'))
-        amount=dialog.field('amount','결제금액 (원)',str(abs(row['amount'])))
-        method=dialog.combo('method','결제방법',[('현금','cash'),('계좌이체','transfer'),('카드 수기','card')])
-        method.setCurrentIndex(method.findData(row['method']))
-        memo=dialog.field('memo','결제 메모',row['memo'])
-        reason=dialog.field('reason','정정 사유 *')
-        def save():
-            try:
-                self.store.replace_supplier_payment(row['type'],row['id'],amount.text(),method.currentData(),memo.text(),reason.text(),{key:row[key] for key in ('date','amount','method','memo')})
-                dialog.accept()
-            except (ValueError,PermissionError) as exc:dialog.error(exc)
-        dialog.finish(save)
-        if dialog.exec():self.refresh()
+        if row['voided'] or row['amount']<=0:return self.notify('유효한 지급·할인 결제를 선택하세요. 환급은 원전표에서 확인하세요.')
+        self.open_payment_history(row)
+
+    def open_payment_history(self,row):
+        from .purchase_payment_ui import PurchasePaymentDialog
+        try:
+            batch=self.store.purchase_payment_batch(row['id'],row['type'])
+            dialog=PurchasePaymentDialog(self.window,batch['document_id'],self,editing=batch)
+            dialog.exec()
+            if dialog.changed:self.refresh()
+        except (ValueError,PermissionError,ConnectionError) as exc:self.fail(exc)
 
     def export(self):
         if not authorize_output(self):return

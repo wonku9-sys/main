@@ -12,6 +12,45 @@ PAYMENT_KEYS=('back','forward','payables','supplier','purchase_payment','bill','
 PURCHASE_ACTION_ATLAS=ATLAS.with_name('purchase-actions-real3d.png')
 PURCHASE_ACTION_KEYS=('move_up','move_down','batch_input')
 PURCHASE_ACTION_SHA256='3004231aaabcb665b9eae3a7fbd5260ed62ea7ba188df129ed2d0b08ef863ced'
+DONE_ASSET=ATLAS.with_name('done-real3d.png')
+DONE_SHA256='220971e75a7b484b4d1fca4cf348c4d23abb04ad200b5d35603d0210c9c13e0f'
+DOCUMENT_ASSET=ATLAS.with_name('document-writing-real3d.png')
+DOCUMENT_KEYS=('quotations','statements','orders')
+DOCUMENT_SHA256='c3b121ae2409d1f0a8773c41148ed5c2a876dc090a64b60b751c4caa9452e63f'
+CONNECTION_ASSET=ATLAS.with_name('connection-actions-real3d.png')
+CONNECTION_SHA256='6e6274c47ef6843d4619b2ed80fbb9b9dc971f1e7b73b897b44676757954c77a'
+CONNECTION_CAPTIONS={
+    '이 PC 주소 선택':'pc_address',
+    '기준 PC 인증키 생성':'pc_key','기존 PC 인증키 생성':'pc_key',
+    '연결 파일 불러오기':'connection_import',
+    '연결 파일 내보내기':'connection_export',
+    '연결 코드 새로 발급 · 기존 연결 해제':'connection_reset',
+}
+CONNECTION_KEYS=('pc_address','pc_key','connection_import','connection_export','connection_reset')
+# Generated objects have differing widths: explicit source regions preserve
+# each complete object rather than cutting the strip into equal squares.
+CONNECTION_RECTS=((10,130,450,445),(475,130,430,445),(935,90,360,510),(1310,90,355,510),(1700,115,456,485))
+
+
+@lru_cache(maxsize=1)
+def _connection_image():
+    image=QImage(str(CONNECTION_ASSET))
+    if image.isNull() or not image.hasAlphaChannel() or image.width()!=2172 or image.height()!=724:return None
+    return image.convertToFormat(QImage.Format.Format_ARGB32_Premultiplied)
+
+
+@lru_cache(maxsize=1)
+def _document_image():
+    image=QImage(str(DOCUMENT_ASSET))
+    if image.isNull() or not image.hasAlphaChannel() or image.width()!=image.height()*3:return None
+    return image.convertToFormat(QImage.Format.Format_ARGB32_Premultiplied)
+
+
+@lru_cache(maxsize=1)
+def _done_image():
+    image=QImage(str(DONE_ASSET))
+    if image.isNull() or not image.hasAlphaChannel() or image.width()!=image.height():return None
+    return image.convertToFormat(QImage.Format.Format_ARGB32_Premultiplied)
 
 
 @lru_cache(maxsize=1)
@@ -92,6 +131,17 @@ def _fitted_icon(image,source):
 
 
 def family(key):
+    if key in CONNECTION_KEYS:return key
+    if key in CONNECTION_CAPTIONS:return CONNECTION_CAPTIONS[key]
+    for kind,caption in zip(DOCUMENT_KEYS,('견적서','거래명세서','주문서')):
+        if key==kind or caption in key:return kind
+    # Match the navigation word before generic words such as 달력/글귀/상품.
+    # Otherwise '다음 500개' and '이전 글귀' incorrectly look like reports.
+    if key in {'back','left','이전','왼쪽','좌측','←','◀','◁','‹','«','<'} or key.startswith(('이전 ','이전달','이전월','이전주','이전년','이전글귀','지난달','전월','왼쪽 ','좌측 ')) or key.endswith(' 이전'):return 'back'
+    if key in {'forward','right','다음','오른쪽','우측','→','▶','▷','›','»','>'} or key.startswith(('다음 ','다음달','다음월','다음주','다음년','다음글귀','오른쪽 ','우측 ')) or key.endswith(' 이후'):return 'forward'
+    if '완료 취소' in key or '완료취소' in key:return 'waste'
+    if key=='done' or key in {'완료','확인'} or key.startswith(('완료 (','완료(','확인 (','확인(')) or key.endswith((' 완료','완료 표시')):return 'done'
+    if key=='copy' or '복사' in key:return 'copy'
     if key=='move_up' or key.startswith('위로'):return 'move_up'
     if key=='move_down' or key.startswith('아래로'):return 'move_down'
     if key=='batch_input' or key.startswith('일괄입력'):return 'batch_input'
@@ -140,6 +190,17 @@ def menu_icon(key):
 
 @lru_cache(maxsize=64)
 def _family_icon(kind):
+    if kind in CONNECTION_KEYS:
+        image=_connection_image()
+        if image is not None:return _fitted_icon(image,QRectF(*CONNECTION_RECTS[CONNECTION_KEYS.index(kind)]))
+    if kind in DOCUMENT_KEYS:
+        image=_document_image()
+        if image is not None:
+            edge=image.height()
+            return _fitted_icon(image,QRectF(DOCUMENT_KEYS.index(kind)*edge,0,edge,edge))
+    if kind=='done':
+        image=_done_image()
+        if image is not None:return _fitted_icon(image,QRectF(image.rect()))
     if kind in PURCHASE_ACTION_KEYS:
         image=_purchase_action_image()
         if image is not None:
@@ -170,6 +231,14 @@ def _family_icon(kind):
         points=[QPointF(8,16),QPointF(17,8),QPointF(17,13),QPointF(24,13),QPointF(24,19),QPointF(17,19),QPointF(17,24)]
         if kind=='forward':points=[QPointF(32-point.x(),point.y()) for point in points]
         p.setBrush(QColor('#FFFFFF'));p.drawPolygon(QPolygonF(points))
+    elif kind=='done':
+        p.setPen(Qt.PenStyle.NoPen);p.setBrush(QColor('#4B96DF'));p.drawEllipse(QRectF(3,3,26,26))
+        p.setPen(QPen(QColor('#FFFFFF'),3.5,Qt.PenStyle.SolidLine,Qt.PenCapStyle.RoundCap,Qt.PenJoinStyle.RoundJoin))
+        p.drawPolyline(QPolygonF([QPointF(9,16),QPointF(14,21),QPointF(23,10)]))
+    elif kind=='copy':
+        p.setBrush(QColor('#CBD9E7'));p.drawRoundedRect(QRectF(7,5,16,21),2,2)
+        p.setBrush(QColor('#FFFFFF'));p.drawRoundedRect(QRectF(11,10,15,20),2,2)
+        for y in (16,21,25):p.drawLine(15,y,22,y)
     elif kind=='lucky':
         p.drawEllipse(QRectF(6,4,20,20));p.drawRoundedRect(QRectF(9,24,14,4),1,1)
         for x,y in ((12,11),(21,12),(16,19)):p.setBrush(QColor('#B7A16A'));p.drawEllipse(QRectF(x-2,y-2,4,4))

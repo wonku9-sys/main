@@ -177,6 +177,9 @@ class CatalogMixin:
             values["active"] = int(bool(data.get("active", old["active"] if old else True)))
             values["opening_balance"] = money_input(data["opening_balance"], signed=True) if "opening_balance" in data else old["opening_balance"] if old else 0
             values["opening_date"] = day(data.get("opening_date", old["opening_date"] if old else date.today().isoformat()))
+            if not old or (values['opening_balance'],values['opening_date'])!=(old['opening_balance'],old['opening_date']):
+                if old and old['opening_balance']:self._assert_payment_open(old['opening_date'])
+                if values['opening_balance']:self._assert_payment_open(values['opening_date'])
             values["supplier_mode"] = data.get("supplier_mode", old["supplier_mode"] if old else "direct")
             if values["supplier_mode"] not in {"direct", "commission"}:
                 raise ValueError("공급사 거래 유형을 확인하세요.")

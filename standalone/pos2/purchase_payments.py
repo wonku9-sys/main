@@ -39,6 +39,7 @@ def add(store, document_id, components, payment_date, memo, expected_state):
             raise ValueError('지급 합계는 0원보다 커야 합니다.')
         memo = text(memo, '결제 메모')
         snapshot = context(store, document_id, payment_date)
+        store._assert_payment_open(snapshot['date'])
         if not expected_state or expected_state != snapshot['state']:
             raise ValueError('다른 결제·반품·수정으로 잔액이 바뀌었습니다. 다시 조회한 뒤 결제하세요.')
         if total > snapshot['cap']:

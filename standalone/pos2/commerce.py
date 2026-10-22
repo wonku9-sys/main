@@ -454,6 +454,7 @@ class CommerceMixin:
         catalog_updates=self._purchase_catalog_updates(data,prepared)
         if prepared['date']>calendar_date.today().isoformat():raise ValueError('미래 거래는 확정할 수 없습니다. 예정 거래는 초안으로 보관하세요.')
         self._assert_open(prepared['date'])
+        self._assert_payment_open(prepared['date'])
         if prepared['kind']=='sale':self._assign_sale_costs(prepared)
         identifier=self._write_trade(prepared,'posted',draft_id)
         points_used,earned=prepared['points_used'],0
@@ -560,6 +561,7 @@ class CommerceMixin:
         if payment_date < record["date"]:
             raise ValueError("정산일은 거래일보다 빠를 수 없습니다.")
         self._assert_open(payment_date)
+        self._assert_payment_open(payment_date)
         from .payment_finance import METHODS
         supported=set(METHODS) if record['kind']=='purchase' and getattr(self,'_finance_batch_active',False) else {"cash","transfer","card"} if record['kind'].startswith('purchase') else {"cash","transfer"}
         if method not in supported:
@@ -603,8 +605,6 @@ class CommerceMixin:
         payment = self.db.execute("SELECT * FROM payments WHERE id=?", (identifier,)).fetchone()
         if not payment or payment["voided"]:
             raise ValueError("취소할 수 있는 정산 이력이 아닙니다.")
-        if payment['method'] not in {'cash','transfer','card'} and payment['date']!=calendar_date.today().isoformat():
-            raise ValueError('당일 어음·할인만 취소할 수 있습니다. 지난 날짜의 기록은 보존합니다.')
         bill=self.db.execute('SELECT paid_date FROM payable_bills WHERE payment_id=?',(identifier,)).fetchone()
         if bill and bill['paid_date']:raise ValueError('이미 지급한 어음은 발행 기록을 취소할 수 없습니다.')
         if payment["supplier_settlement_id"] and payment["supplier_settlement_id"] != settlement_id:
@@ -615,6 +615,7 @@ class CommerceMixin:
             from .member_registration import assert_credit
             assert_credit(self,record["member_id"],payment["amount"])
         self._assert_open(payment["date"])
+        self._assert_payment_open(payment["date"])
         if payment["method"] == "cash":
             self._assert_cash_open(payment["date"], payment["user_id"])
         self.db.execute("UPDATE payments SET voided=1 WHERE id=?", (identifier,))
@@ -644,6 +645,7 @@ class CommerceMixin:
             if record["status"] != "posted":
                 raise ValueError("확정 상태의 전표만 취소할 수 있습니다.")
             self._assert_open(record["date"])
+            self._assert_payment_open(record["date"])
             if self.db.execute("SELECT 1 FROM payments WHERE document_id=? AND voided=0", (identifier,)).fetchone():
                 raise ValueError("정산 이력을 먼저 취소하세요. 환불이 필요한 거래는 원전표 반품을 이용하세요.")
             if self.db.execute("SELECT 1 FROM documents WHERE source_id=? AND status='posted'", (identifier,)).fetchone():

@@ -8,7 +8,7 @@ from pathlib import Path
 import sys
 import tempfile
 
-from PySide6.QtCore import QDate, QLockFile, QSize, Qt, QTimer,QLocale
+from PySide6.QtCore import QDate, QLockFile, QSize, Qt, QTimer
 from PySide6.QtGui import QAction, QFont, QIcon, QKeySequence
 from PySide6.QtWidgets import (
     QApplication, QDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QMainWindow, QMessageBox, QMenu, QPushButton,
@@ -861,7 +861,7 @@ class MainWindow(QMainWindow):
             except (ValueError,PermissionError) as exc:QMessageBox.warning(self,'행운의 숫자',str(exc));return False
             from .lucky_numbers import open_lucky_numbers
             open_lucky_numbers(self);self._record_menu_visit(key);return True
-        if not (self.popup_menus and key!='home') and getattr(self, "navigation", None) and not self.navigation.allow_leave(self.current_page):
+        if not (key=='payments' or self.popup_menus and key!='home') and getattr(self, "navigation", None) and not self.navigation.allow_leave(self.current_page):
             return False
         from .catalog_ui import ProductsPage, CategoriesPage, PartnersPage, UsersPage, SettingsPage
         from .workflow_ui import TradesPage, LedgerPage, CountsPage, ReportPage, ClosingsPage
@@ -941,7 +941,7 @@ class MainWindow(QMainWindow):
             # Keep the settings/landing page cached, but do not open a second
             # shell window behind the actual private editor.
             (page.open_diary if key=='diary' else page.open_book)()
-        elif self.popup_menus and key!='home' or key in self.popup_windows:
+        elif key=='payments' or self.popup_menus and key!='home' or key in self.popup_windows:
             from .independent_windows import PageWindow
             if key not in self.popup_windows:
                 self.stack.removeWidget(self.page_surfaces[key])
@@ -965,6 +965,15 @@ class MainWindow(QMainWindow):
 
     def _sync_menu_context(self,key,page,record=True):
         self.current_key,self.current_page=key,page
+        if key=='payments' and key in self.popup_windows:
+            # Independent workspaces own their title and query bar. Do not
+            # hide/relabel the original desktop while referring to its data.
+            from .payment_workspace import view_caption
+            page.header.context.setText(view_caption(page) if key=='payments' else menu_caption(key))
+            page.header.context.show()
+            if record:self._record_menu_visit(key)
+            else:self._update_history_actions()
+            return
         payment_mode=key=='payments'
         self.toolbar.setVisible(not payment_mode);self.menuBar().setVisible(not payment_mode)
         self.tree.parentWidget().setVisible(not payment_mode)
@@ -1021,6 +1030,7 @@ class MainWindow(QMainWindow):
             update_history(page)
 
     def previous_menu(self):
+        self._sync_active_workspace()
         page=self.pages.get('payments')
         if self.current_key=='payments' and page is not None and page.payment_history_index>0:
             from .payment_workspace import travel
@@ -1028,6 +1038,7 @@ class MainWindow(QMainWindow):
         return self._travel_menu_history(-1)
 
     def next_menu(self):
+        self._sync_active_workspace()
         page=self.pages.get('payments')
         if self.current_key=='payments' and page is not None and page.payment_history_index<len(page.payment_history)-1:
             from .payment_workspace import travel
@@ -1093,12 +1104,14 @@ class MainWindow(QMainWindow):
             self.current_page.new_trade()
 
     def new_current(self):
+        self._sync_active_workspace()
         if self.current_key in ("purchases", "sales"):
             self.new_trade("purchase" if self.current_key == "purchases" else "sale")
         elif self.current_page and hasattr(self.current_page, "add"):
             self.current_page.add()
 
     def focus_scan(self):
+        self._sync_active_workspace()
         modal = QApplication.activeModalWidget()
         target = modal or self.current_page
         if target and hasattr(target, "focus_scan"):
@@ -1110,12 +1123,28 @@ class MainWindow(QMainWindow):
                 field.selectAll()
 
     def export(self):
+        self._sync_active_workspace()
         if self.current_page:
             self.current_page.export()
 
     def print(self):
+        self._sync_active_workspace()
         if self.current_page:
             self.current_page.print()
+
+    def _sync_active_workspace(self):
+        """Resolve the actual focused top-level, not the last opened menu."""
+        active=QApplication.activeWindow()
+        for key,popup in self.popup_windows.items():
+            if active is popup:
+                self.current_key,self.current_page=key,popup.page
+                return
+        if active is self:
+            surface=self.stack.currentWidget()
+            for key,candidate in self.page_surfaces.items():
+                if candidate is surface:
+                    self.current_key,self.current_page=key,self.pages[key]
+                    return
 
     def password(self):
         dialog = FormDialog("내 비밀번호 변경", self)
@@ -1169,9 +1198,16 @@ def main(argv=None):
     parser.add_argument("--screenshot", type=Path)
     args = parser.parse_args(argv)
     app = QApplication.instance() or QApplication(sys.argv[:1])
+    from .localization import install_korean_ui
+    try:
+        install_korean_ui(app)
+    except RuntimeError as exc:
+        if args.smoke_test:
+            raise
+        QMessageBox.critical(None, '한국어 메뉴 파일 오류', str(exc))
+        return 1
     from .popup_policy import install_popup_policy
     install_popup_policy(app)
-    QLocale.setDefault(QLocale('ko_KR'))
     from .branding import app_icon
     app.setApplicationName("SY POS 독립판")
     app.setWindowIcon(app_icon())
@@ -1267,6 +1303,8 @@ def main(argv=None):
                 try:
                     if args.smoke_test:
                         verify_glyphs()
+                        from .korean_ui_smoke import verify as verify_korean_ui
+                        verify_korean_ui(app, window, directory, args.screenshot)
                         from .menu_icons import ATLAS,ATLAS_SHA256,_atlas_image
                         from hashlib import sha256
                         assert sha256(ATLAS.read_bytes()).hexdigest()==ATLAS_SHA256 and _atlas_image() is not None
@@ -1353,7 +1391,7 @@ def main(argv=None):
                             assert window.next_menu() and window.current_key=='purchases'
                             assert window.menu_history.entries==visits and store.audit_revision()==history_revision
                             capture('-menu-history',window)
-                            assert not window.popup_menus and not window.popup_windows
+                            assert not window.popup_menus and set(window.popup_windows)<={'payments'}
                             window.sidebar_clicked(window.items['purchases'].parent())
                             capture('-purchase-workspace',window)
                             supplier_picker=PartnerPicker(window,'supplier')
@@ -1665,7 +1703,7 @@ def main(argv=None):
                             assert store.supplier_outstanding(payment_supplier)['balance']==debt
                             store.add_business_entry(date.today().isoformat(),'expense','가상 업무 비용','0.25','transfer','검사 전용')
                             for index,suffix in ((0,'payables'),(1,'supplier-ledger'),(2,'payment-history'),(4,'bills'),(5,'receivables'),(6,'member-ledger'),(7,'sales-payments'),(8,'business-journal'),(9,'profit')):
-                                finance_page.tabs.setCurrentIndex(index);finance_page.refresh();capture('-finance-'+suffix,window)
+                                finance_page.tabs.setCurrentIndex(index);finance_page.refresh();capture('-finance-'+suffix,window.popup_windows.get('payments',window))
                             print('PASS finance workspace: 6 numbered menus, grouped 3D artwork, 9 real views, discount/bill batch and maturity payout without duplicate debt deduction',flush=True)
                             for page_key in ('purchase_suppliers','purchase_categories','purchase_products','purchase_documents','purchase_statement'):
                                 assert window.open_page(page_key)

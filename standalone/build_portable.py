@@ -93,6 +93,10 @@ def build(output, native=False):
     if not all(mouse_pcm_source(kind,default_source(kind)) is not None for kind in MOUSE_PCM):
         raise RuntimeError('The two verified low-latency mouse PCM files are missing or changed.')
     font = assets / "NotoSansKR-Regular.ttf"
+    from pos2.localization import korean_catalog_path
+    korean_catalog = korean_catalog_path()
+    if not korean_catalog.is_file():
+        raise RuntimeError('The official Qt Korean catalog must accompany the Windows executable.')
     if not font.is_file() or sha256(font.read_bytes()).hexdigest() != "4609a7b62a6da24cae3a8b73ecde7003581b8f60662d60cc8f55a3793de07763":
         raise RuntimeError("The verified offline Korean font asset is missing or changed.")
     with tempfile.TemporaryDirectory(prefix="seoyoung-standalone-build-") as scratch:
@@ -114,6 +118,7 @@ def build(output, native=False):
         command = [sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--onedir", "--windowed", "--name", APP,
                    "--paths", str(ROOT), "--distpath", str(output), "--workpath", str(temporary / "work"), "--specpath", str(temporary),
                    "--icon",str(icon),"--add-data", f"{assets}{os.pathsep}pos2/assets", "--hidden-import", "PySide6.QtPrintSupport", "--hidden-import", "PySide6.QtSvg", "--hidden-import","PySide6.QtMultimedia", "--collect-all", "barcode", "--exclude-module", "seoyoung_pos", str(ROOT / "launch.py")]
+        command[-1:-1] = ['--add-data', f'{korean_catalog}{os.pathsep}pos2/translations']
         # No browser, QML/Quick UI or game runtime is used by this widget-only
         # desktop. Exclude their bindings during analysis, never delete runtime
         # DLLs afterwards: native smoke still validates audio, SVG, PDF/printing.
@@ -148,6 +153,12 @@ def build(output, native=False):
         if not capture.is_file() or capture.stat().st_size<1000:
             raise RuntimeError(f"The frozen executable did not validate visible single-window content: {suffix}")
     if label == "Windows":
+        if not (bundle / '_internal' / 'pos2' / 'translations' / 'qtbase_ko.qm').is_file():
+            raise RuntimeError('The portable package is missing the Korean context-menu catalog.')
+        for suffix in ('-korean-context-menu', '-purchase-return-label', '-purchase-price-history', '-purchase-row-selection', '-purchase-cell-selection', '-purchase-product-menu'):
+            capture=screenshot.with_name(screenshot.stem+suffix+screenshot.suffix)
+            if not capture.is_file() or capture.stat().st_size<1000:
+                raise RuntimeError('The frozen Korean UI was not exercised: '+suffix)
         for suffix in ('-purchase-revision','-purchase-revision-history','-purchase-zero-voucher'):
             capture=screenshot.with_name(screenshot.stem+suffix+screenshot.suffix)
             if not capture.is_file() or capture.stat().st_size<1000:raise RuntimeError('The frozen purchase revision was not exercised: '+suffix)

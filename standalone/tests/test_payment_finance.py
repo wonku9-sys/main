@@ -114,7 +114,8 @@ def test_top_menus_grouping_real_icons_navigation_and_no_duplicated_toolbar(shop
     app,s,window,supplier,_,doc=shop
     assert window.open_page('payments');page=window.current_page;app.processEvents()
     assert [a.text() for a in page.payment_menubar.actions()]==['1.외상매입','2.외상매출','3.간편장부','4.레포트출력','5.마감관리','6.기타']
-    assert not window.toolbar.isVisible() and not window.menuBar().isVisible()
+    assert window.toolbar.isVisible() and window.menuBar().isVisible()
+    assert window.popup_windows['payments'].isVisible() and not window.popup_windows['payments'].isModal()
     assert page.payment_toolbar.isVisible() and page.payment_toolbar.toolButtonStyle()==Qt.ToolButtonStyle.ToolButtonTextUnderIcon
     assert page.header.context.text().startswith('1-01.') and page.payment_back.isEnabled()
     assert page.payment_toolbar.iconSize()==QSize(38,38)
@@ -185,7 +186,8 @@ def test_real_214_schema_upgrade_retains_data_and_protection_backup(shop,tmp_pat
         backup=migrated.migration_backup_path
         migrated.restore_backup(backup,PASSWORD);migrated.login('owner',PASSWORD)
         assert migrated.document(doc)['cash_paid']==Decimal('1.25')
-        assert migrated.db.execute('PRAGMA user_version').fetchone()[0]==217
+        from pos2.recovery import SCHEMA_VERSION
+        assert migrated.db.execute('PRAGMA user_version').fetchone()[0]==SCHEMA_VERSION
     finally:migrated.close()
 
 

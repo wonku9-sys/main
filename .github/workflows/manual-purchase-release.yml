@@ -27,8 +27,14 @@ jobs:
         run: uv sync --frozen --extra dev --project standalone
       - name: Real purchase keyboard and business papers on Windows
         run: uv run --frozen --extra dev --project standalone python -m pytest -x -q --tb=short standalone/tests/test_manual_purchase_sequence.py standalone/tests/test_store_business_documents.py standalone/tests/test_purchase_payment_sheet.py standalone/tests/test_purchase_payment_shared.py standalone/tests/test_continuous_product_picker.py standalone/tests/test_numeric_grouping.py standalone/tests/test_product_portrait.py standalone/tests/test_catalog_apply_continue.py standalone/tests/test_supplier_bulk.py standalone/tests/test_compact_catalog_shell.py standalone/tests/test_payment_access_completion.py standalone/tests/test_payment_reference_skins.py
+      - name: Korean context menus and purchase return presentation
+        run: uv run --frozen --extra dev --project standalone python -m pytest -x -v --tb=long standalone/tests/test_korean_ui.py standalone/tests/test_purchase_price_history.py standalone/tests/test_purchase_price_shared.py standalone/tests/test_purchase_context_selection.py standalone/tests/test_purchase_worksheet_view.py standalone/tests/test_query_f5_focus.py
       - name: Audited purchase revisions and zero vouchers
         run: uv run --frozen --extra dev --project standalone python -m pytest -x -q --tb=short standalone/tests/test_purchase_amendments.py standalone/tests/test_purchase_amendment_ui.py standalone/tests/test_purchase_amendment_shared.py standalone/tests/test_workflow_ui.py
+      - name: MGR purchase paste and atomic supplier bulk payments
+        run: uv run --frozen --extra dev --project standalone python -m pytest -x -v --tb=long standalone/tests/test_purchase_clipboard.py standalone/tests/test_payment_bulk.py standalone/tests/test_payment_bulk_shared.py standalone/tests/test_payment_confirmation.py standalone/tests/test_payment_closing.py
+      - name: Purchase table paste, nine file formats and shared draft import
+        run: uv run --frozen --extra dev --project standalone python -m pytest -x -v --tb=long standalone/tests/test_purchase_table_input.py standalone/tests/test_purchase_table_shared.py standalone/tests/test_purchase_import.py standalone/tests/test_purchase_context_workflow.py
       - name: Full business and desktop regression
         run: uv run --frozen --extra dev --project standalone python -m pytest -x -v --tb=short -o faulthandler_timeout=120 standalone/tests
       - name: Shared input worksheet and lucky menu controls
@@ -36,11 +42,11 @@ jobs:
       - name: Purchase popup at 125 percent
         env:
           QT_SCALE_FACTOR: '1.25'
-        run: uv run --frozen --extra dev --project standalone python -m pytest -q standalone/tests/test_manual_purchase_sequence.py standalone/tests/test_payment_access_layout.py standalone/tests/test_purchase_payment_sheet.py standalone/tests/test_product_portrait.py standalone/tests/test_purchase_amendment_ui.py
+        run: uv run --frozen --extra dev --project standalone python -m pytest -q standalone/tests/test_manual_purchase_sequence.py standalone/tests/test_payment_access_layout.py standalone/tests/test_purchase_payment_sheet.py standalone/tests/test_product_portrait.py standalone/tests/test_purchase_amendment_ui.py standalone/tests/test_purchase_clipboard.py standalone/tests/test_payment_bulk.py standalone/tests/test_payment_confirmation.py standalone/tests/test_purchase_worksheet_view.py standalone/tests/test_store_business_documents.py
       - name: Purchase popup at 150 percent
         env:
           QT_SCALE_FACTOR: '1.5'
-        run: uv run --frozen --extra dev --project standalone python -m pytest -q standalone/tests/test_manual_purchase_sequence.py standalone/tests/test_payment_access_layout.py standalone/tests/test_purchase_payment_sheet.py standalone/tests/test_product_portrait.py standalone/tests/test_purchase_amendment_ui.py
+        run: uv run --frozen --extra dev --project standalone python -m pytest -q standalone/tests/test_manual_purchase_sequence.py standalone/tests/test_payment_access_layout.py standalone/tests/test_purchase_payment_sheet.py standalone/tests/test_product_portrait.py standalone/tests/test_purchase_amendment_ui.py standalone/tests/test_purchase_clipboard.py standalone/tests/test_payment_bulk.py standalone/tests/test_payment_confirmation.py standalone/tests/test_purchase_worksheet_view.py standalone/tests/test_store_business_documents.py
       - name: Build and run actual portable Windows executable
         run: uv run --frozen --extra dev --project standalone python standalone/build_portable.py
       - name: Package corresponding source
